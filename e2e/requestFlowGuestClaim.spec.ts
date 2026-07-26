@@ -23,6 +23,7 @@
 
 import { test, expect } from '@playwright/test';
 import { getBackend } from './helpers/backend';
+import { driveGuestClaimFlow } from './helpers/driveGuestClaimFlow';
 
 const backend = getBackend();
 let refs: { guestUid: string; requestId: string; inviteDocId: string } | undefined;
@@ -107,31 +108,9 @@ test('guest provider claims their account via the record-request fulfill flow', 
   await page.getByRole('button', { name: 'Create a free account & upload' }).click();
 
   // ── GuestClaimAccountModal opens directly (FulfillRequestPage hardcodes guestContext) ──
-  await expect(page.getByRole('heading', { name: 'Create Your Account' })).toBeVisible({
-    timeout: 60_000,
-  });
-
-  await page.locator('input[placeholder="Jane"]').fill('E2E');
-  await page.locator('input[placeholder="Smith"]').fill('Provider');
-  await page.locator('input[placeholder="At least 8 characters"]').fill(claimPassword);
-  await page.locator('input[placeholder="Repeat your password"]').fill(claimPassword);
-  await page.getByRole('button', { name: 'Continue →' }).click();
-
-  // ── Real wallet generation + on-chain registration (Base Sepolia) + guestPasswordUpdate CF ──
-  await expect(page.getByRole('heading', { name: 'Save Your Recovery Key' })).toBeVisible({
-    timeout: 60_000,
-  });
-  await page.locator('input[type="checkbox"]').check();
-  await page.getByRole('button', { name: 'Complete Registration' }).click();
-
-  // Longer than the 60s used elsewhere in this file — this step alone chains several sequential
-  // real round trips (key rewrap writes, a recordRequests query, on-chain wallet registration,
-  // then a separate guestPasswordUpdate CF call + custom-token sign-in), so it's the slowest
-  // single wait in the flow against real infra.
-  await expect(page.getByRole('heading', { name: 'Welcome to Belrose!' })).toBeVisible({
-    timeout: 90_000,
-  });
-  await page.getByRole('button', { name: 'Get Started' }).click();
+  // guestContext="record_request" skips Step 1a's wrappedKeys rewrap (see file header), so the
+  // guestPasswordUpdate CF + on-chain registration are the only real round trips this exercises.
+  await driveGuestClaimFlow(page, { firstName: 'E2E', lastName: 'Provider', password: claimPassword });
 
   // ── Claimed: FulfillRequestPage's onComplete navigates to /app/record-requests, and the
   // guest banner is gone since isGuest flipped to false and AuthContext refreshed ──

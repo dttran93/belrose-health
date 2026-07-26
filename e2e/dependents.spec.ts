@@ -22,7 +22,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { FIXTURE_GUARDIAN } from './helpers/fixtures/guardian';
-import { seedFixtureUser } from './helpers/fixtures/seedFixtureUser';
+import { loginAsFixtureUser } from './helpers/loginAsFixtureUser';
 import { getBackend } from './helpers/backend';
 
 const backend = getBackend();
@@ -37,14 +37,7 @@ test.afterEach(async () => {
 });
 
 async function loginAsFixtureGuardian(page: Page): Promise<void> {
-  await seedFixtureUser(backend, FIXTURE_GUARDIAN);
-
-  await page.goto('/auth');
-  await page.locator('input[name="email"]').fill(FIXTURE_GUARDIAN.email);
-  await page.locator('input[name="password"]').fill(FIXTURE_GUARDIAN.password);
-  await page.getByRole('button', { name: 'Sign In' }).click();
-
-  await expect(page).toHaveURL(/\/app/);
+  await loginAsFixtureUser(page, backend, FIXTURE_GUARDIAN);
 }
 
 /** Opens the bottom-left account menu and clicks "Switch Account". */

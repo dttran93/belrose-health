@@ -118,6 +118,26 @@ async function createUser(params: CreateAuthUserParams): Promise<void> {
   }
 }
 
+// Staging-only, not part of TestBackend — createGuestInvite's response includes guestUid and
+// guestPrivateKeyBase64 but not inviteCode (that only ever goes out in the real invite email,
+// per functions/src/handlers/createGuestInvite.ts), and the guestInvites doc ID is server-
+// generated (db.collection('guestInvites').add(...)), so it can only be found by querying. This
+// is a real query (not a known-path get), and recordShareGuestClaim.spec.ts — the only caller —
+// is inherently staging-only anyway (its fixture record only exists on belrose-757fe), so there's
+// no emulator-side equivalent worth building.
+export async function findGuestInviteCode(guestUid: string): Promise<string> {
+  const snap = await db()
+    .collection('guestInvites')
+    .where('guestUserId', '==', guestUid)
+    .limit(1)
+    .get();
+  const inviteCode = snap.docs[0]?.data()?.inviteCode;
+  if (!inviteCode) {
+    throw new Error(`No guestInvites doc found for guestUserId=${guestUid}`);
+  }
+  return inviteCode;
+}
+
 export const stagingBackend: TestBackend = {
   async seedInvite(email) {
     await db()
