@@ -59,6 +59,11 @@ test('guest claims their account after a record is shared with them', async ({ p
   await page.getByRole('button', { name: 'More options' }).click();
   await page.getByRole('button', { name: 'Manage Access' }).click();
 
+  // Regression guard for the wrappedKeys `list` rule fix (firestore.rules) — this used to fail
+  // with "Failed to load access data..." because the rule only covered grantedBy/userId, not a
+  // query filtered by recordId.
+  await expect(page.getByText('Failed to load access data')).not.toBeVisible();
+
   await page.getByRole('button', { name: 'Share via Email' }).click();
   await page.getByPlaceholder('doctor@clinic.com').fill(guestEmail);
 

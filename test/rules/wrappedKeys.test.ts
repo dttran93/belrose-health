@@ -488,4 +488,50 @@ describe('firestore.rules — wrappedKeys — read via list query (list ≠ get)
     const snap = await getDocs(q);
     expect(snap.docs).toHaveLength(1);
   });
+
+  // Regression: EncryptionAccessView.fetchEncryptionAccess() queries
+  //   where('recordId', '==', record.id)
+  // to show a record's full access list. Unlike the two grantedBy/userId regressions above,
+  // recordId IS one of this query's own filters, so Firestore CAN prove
+  // hasRoleOnRecord(resource.data.recordId) holds for the whole result set without running the
+  // query first — recordId is pinned by the filter, so the get() path it builds is fixed too.
+  // Caught via e2e (recordShareGuestClaim.spec.ts): "Manage Access" is reachable by anyone with
+  // any role on a record — RecordFull/RecordMenu never gate it to owners/administrators, since
+  // readOnly is never passed by any caller — but every non-owner/administrator (viewers,
+  // subjects) saw "Failed to load access data" because the old rule only covered grantedBy/userId
+  // on the CALLER's own entries, not "can this caller see the whole list for a record they have
+  // any role on." hasRoleOnRecord (not the narrower isSharerOrAboveOnRecord, which would still
+  // deny viewers/subjects) matches who the UI actually lets reach this query.
+  it('lets a viewer list all wrappedKeys for a record they have a role on, filtered by recordId', async () => {
+    const recordId = 'wk-list-recordid-viewer-allowed';
+    await seedRecord(recordId);
+    await seedWrappedKey(recordId, 'key-1', { userId: RECEIVER, grantedBy: OWNER, isActive: true });
+
+    const db = testEnv.authenticatedContext(VIEWER).firestore();
+    const q = query(collection(db, 'wrappedKeys'), where('recordId', '==', recordId));
+
+    await assertSucceeds(getDocs(q));
+  });
+
+  it('lets an admin/owner list all wrappedKeys for a record they manage, filtered by recordId', async () => {
+    const recordId = 'wk-list-recordid-admin-allowed';
+    await seedRecord(recordId);
+    await seedWrappedKey(recordId, 'key-1', { userId: RECEIVER, grantedBy: OWNER, isActive: true });
+
+    const db = testEnv.authenticatedContext(ADMIN).firestore();
+    const q = query(collection(db, 'wrappedKeys'), where('recordId', '==', recordId));
+
+    await assertSucceeds(getDocs(q));
+  });
+
+  it('still denies listing by recordId for a stranger with no role on the record', async () => {
+    const recordId = 'wk-list-recordid-stranger-denied';
+    await seedRecord(recordId);
+    await seedWrappedKey(recordId, 'key-1', { userId: RECEIVER, grantedBy: OWNER, isActive: true });
+
+    const db = testEnv.authenticatedContext(STRANGER).firestore();
+    const q = query(collection(db, 'wrappedKeys'), where('recordId', '==', recordId));
+
+    await assertFails(getDocs(q));
+  });
 });

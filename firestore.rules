@@ -841,8 +841,8 @@ service cloud.firestore {
         (resource.data.userId == request.auth.uid && hasRoleOnRecord(resource.data.recordId))
       );
 
-      // list: both branches are bare field checks the query's own equality filters can prove
-      // outright, no get() needed — grantedBy for the trustor's side (e.g.
+      // list: the first two branches are bare field checks the query's own equality filters can
+      // prove outright, no get() needed — grantedBy for the trustor's side (e.g.
       // TrusteePermissionService.revokeTrusteeAccess querying every key it granted a trustee)
       // and userId for the trustee's own side (activateTrusteeAccess/updateTrusteeAccess's
       // self-downgrade, both querying their own granted keys after accepting/adjusting a
@@ -850,8 +850,22 @@ service cloud.firestore {
       // pending/active for a LIST result — that's a real limitation, not an oversight — so any
       // caller consuming these results that cares about revoked state (there currently are none)
       // must filter revokedAt itself client-side after the read.
+      //
+      // The third branch is what EncryptionAccessView.fetchEncryptionAccess() needs: it queries
+      // `where('recordId', '==', record.id)` to show a record's full access list, and
+      // RecordFull/RecordMenu don't gate "Manage Access" to owners/administrators — readOnly is
+      // never passed by any caller, so the whole menu (and this view) is reachable by anyone with
+      // ANY role on the record. hasRoleOnRecord (not the narrower isSharerOrAboveOnRecord, which
+      // would still leave viewers/subjects seeing "Failed to load access data") matches that —
+      // uploadedBy/owners/administrators/sharers/viewers/subjects. None of these are provable as
+      // grantedBy or userId on someone ELSE's wrappedKeys entry, so unlike the two branches above
+      // this isn't provable from the query's own filters — Firestore evaluates it per matched
+      // document via get() — one extra records/{recordId} read per result (all the same doc,
+      // since the query's own filter already fixes recordId), not free but bounded and correct.
       allow list: if request.auth != null && (
-        resource.data.grantedBy == request.auth.uid || resource.data.userId == request.auth.uid
+        resource.data.grantedBy == request.auth.uid ||
+        resource.data.userId == request.auth.uid ||
+        hasRoleOnRecord(resource.data.recordId)
       );
 
       // Bootstrap branch: the creator's own wrappedKeys entry is written in the same
