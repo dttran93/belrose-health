@@ -26,6 +26,15 @@ import { seedFixtureUser } from './helpers/fixtures/seedFixtureUser';
 import { getBackend } from './helpers/backend';
 
 const backend = getBackend();
+// Dependent uids created by whichever test just ran — read by afterEach for cleanup. The guardian
+// fixture itself is never in here; it's meant to persist permanently (see fixtures/guardian.ts).
+let createdDependentUids: string[] = [];
+
+test.afterEach(async () => {
+  if (createdDependentUids.length === 0) return;
+  await backend.cleanup({ authUids: createdDependentUids });
+  createdDependentUids = [];
+});
 
 async function loginAsFixtureGuardian(page: Page): Promise<void> {
   await seedFixtureUser(backend, FIXTURE_GUARDIAN);
@@ -54,14 +63,21 @@ async function openAccountSwitcher(page: Page): Promise<void> {
  * guardian and Firestore state within a single emulator session, so two tests both creating a
  * "Little Dependent" would collide (the second test's own dependent-list assertions would match
  * two cards instead of one, failing for an unrelated reason before ever reaching what it's
- * actually testing).
+ * actually testing). Keeping it timestamped is also cheap insurance under the staging backend:
+ * if a prior run's afterEach never got to run (process killed mid-test), a leftover dependent
+ * from that run won't collide with this one's assertions either.
+ *
+ * Returns the dependent's uid — captured directly from createDependentAccount's real response
+ * ({ uid, walletAddress, smartAccountAddress }, see functions/src/handlers/createDependentAccount.ts)
+ * rather than guessed, since the dependent has no email the test ever learns any other way — so
+ * callers can pass it to backend.cleanup({ authUids: [...] }) same as signup.spec.ts does by email.
  */
 async function createDependent(
   page: Page,
   firstName: string,
   lastName: string,
   dependentPassword: string
-): Promise<void> {
+): Promise<string> {
   await page.goto('/app/dependents/create');
 
   await page.locator('input[placeholder="Jane"]').fill(firstName);
@@ -70,7 +86,18 @@ async function createDependent(
 
   await page.locator('input[placeholder="At least 8 characters"]').fill(dependentPassword);
   await page.locator('input[placeholder="Repeat the password"]').fill(dependentPassword);
+
+  const createDependentResponse = page.waitForResponse(
+    res => res.request().method() === 'POST' && res.url().includes('createDependentAccount')
+  );
   await page.getByRole('button', { name: 'Create Account' }).click();
+  const responseBody = await (await createDependentResponse).json();
+  const dependentUid: string | undefined = responseBody.result?.uid;
+  if (!dependentUid) {
+    throw new Error(
+      `createDependentAccount response had no result.uid — got ${JSON.stringify(responseBody)}`
+    );
+  }
 
   await expect(page.getByText(new RegExp(`Save ${firstName}'s recovery key`))).toBeVisible({
     timeout: 60_000,
@@ -88,16 +115,16 @@ async function createDependent(
   await expect(
     page.locator('span:visible', { hasText: `${firstName} ${lastName}` })
   ).toBeVisible();
+
+  return dependentUid;
 }
 
 test('guardian creates a dependent', async ({ page }) => {
   test.setTimeout(90_000);
 
-  // lastName carries a timestamp so the created-dependent assertion below still matches exactly
-  // one card under the staging backend, where (unlike the emulator) dependents created by prior
-  // runs are never cleaned up and persist under the same fixture guardian.
   await loginAsFixtureGuardian(page);
-  await createDependent(page, 'Little', `Dependent${Date.now()}`, 'DepSecure!2026Pw');
+  const uid = await createDependent(page, 'Little', `Dependent${Date.now()}`, 'DepSecure!2026Pw');
+  createdDependentUids.push(uid);
 });
 
 test('guardian switches into a dependent account and back', async ({ page }) => {
@@ -135,7 +162,8 @@ test('guardian switches into a dependent account and back', async ({ page }) => 
   const lastName = `Testerson${Date.now()}`;
 
   await loginAsFixtureGuardian(page);
-  await createDependent(page, 'Switchy', lastName, dependentPassword);
+  const uid = await createDependent(page, 'Switchy', lastName, dependentPassword);
+  createdDependentUids.push(uid);
 
   // ── Switch into the dependent's account ───────────────────────────────────
   await openAccountSwitcher(page);
