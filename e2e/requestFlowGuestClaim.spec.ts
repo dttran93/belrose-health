@@ -10,11 +10,11 @@
 // key to any test-reachable API — it's only ever emailed). Neither is what this spec is
 // actually testing. Instead, this seeds the two Firestore docs createRecordRequest.ts would
 // have written (recordRequests + guestInvites) plus the guest Firebase Auth user
-// createOrRetrieveGuestAccount.ts would have created, directly via the emulators' admin REST
-// APIs — the same `Authorization: Bearer owner` bypass seedInvite.ts already uses. From that
-// point on, every step (landing on /fulfill-request, redeemGuestInvite, signInWithCustomToken,
-// GuestClaimAccountModal's full atomic-batch + wallet-registration + guestPasswordUpdate flow)
-// runs for real, through the real UI.
+// createOrRetrieveGuestAccount.ts would have created, via getBackend() (see
+// e2e/helpers/backend/) — the same Admin-SDK-privileged path those functions themselves write
+// through in production. From that point on, every step (landing on /fulfill-request,
+// redeemGuestInvite, signInWithCustomToken, GuestClaimAccountModal's full atomic-batch +
+// wallet-registration + guestPasswordUpdate flow) runs for real, through the real UI.
 //
 // guestContext="record_request" specifically avoids needing any pre-existing wrappedKeys/shared
 // record: handleCredentialsSubmit's hasGuestFileKeys() guard and handleClaim's Step 1a rewrap
@@ -22,31 +22,38 @@
 // real record ever existing — that's the shared-file-key rewrap path, not this one.
 
 import { test, expect } from '@playwright/test';
-import { createGuestAuthUser } from './helpers/guestAuthUser';
-import { seedFirestoreDoc } from './helpers/firestoreRest';
+import { getBackend } from './helpers/backend';
 
-const PROJECT_ID = process.env.VITE_FIREBASE_PROJECT_ID;
+const backend = getBackend();
+let refs: { guestUid: string; requestId: string; inviteDocId: string } | undefined;
+
+test.afterEach(async () => {
+  if (!refs) return;
+  await backend.cleanup({
+    docPaths: [`recordRequests/${refs.requestId}`, `guestInvites/${refs.inviteDocId}`],
+    authUids: [refs.guestUid],
+  });
+});
 
 test('guest provider claims their account via the record-request fulfill flow', async ({
   page,
 }) => {
   test.setTimeout(240_000);
 
-  if (!PROJECT_ID) {
-    throw new Error('VITE_FIREBASE_PROJECT_ID must be set in the environment.');
-  }
-
   const stamp = Date.now();
   const guestUid = `e2e-guest-${stamp}`;
   const guestEmail = `e2e-guest-${stamp}@example.com`;
   const requestId = `e2e-request-${stamp}`;
   const guestInviteCode = `e2e-guestcode-${stamp}`;
+  const inviteDocId = `e2e-invite-${stamp}`;
   const claimPassword = 'GuestSecure!2026Pw';
 
-  // ── Seed the guest account + invite/request docs a real createRecordRequest call would leave ──
-  await createGuestAuthUser(PROJECT_ID, guestUid, guestEmail);
+  refs = { guestUid, requestId, inviteDocId };
 
-  await seedFirestoreDoc(PROJECT_ID, `users/${guestUid}`, {
+  // ── Seed the guest account + invite/request docs a real createRecordRequest call would leave ──
+  await backend.createGuestAuthUser(guestUid, guestEmail);
+
+  await backend.seedDoc(`users/${guestUid}`, {
     uid: guestUid,
     email: guestEmail,
     displayName: guestEmail,
@@ -55,7 +62,7 @@ test('guest provider claims their account via the record-request fulfill flow', 
     encryption: { publicKey: 'e2e-fake-guest-public-key' },
   });
 
-  await seedFirestoreDoc(PROJECT_ID, `recordRequests/${requestId}`, {
+  await backend.seedDoc(`recordRequests/${requestId}`, {
     inviteCode: requestId,
     requesterId: 'e2e-requester-uid',
     requesterEmail: 'requester@example.com',
@@ -71,7 +78,7 @@ test('guest provider claims their account via the record-request fulfill flow', 
     fulfilledRecordIds: null,
   });
 
-  await seedFirestoreDoc(PROJECT_ID, `guestInvites/e2e-invite-${stamp}`, {
+  await backend.seedDoc(`guestInvites/${inviteDocId}`, {
     guestUserId: guestUid,
     invitedBy: 'e2e-requester-uid',
     guestEmail,
@@ -117,8 +124,12 @@ test('guest provider claims their account via the record-request fulfill flow', 
   await page.locator('input[type="checkbox"]').check();
   await page.getByRole('button', { name: 'Complete Registration' }).click();
 
+  // Longer than the 60s used elsewhere in this file — this step alone chains several sequential
+  // real round trips (key rewrap writes, a recordRequests query, on-chain wallet registration,
+  // then a separate guestPasswordUpdate CF call + custom-token sign-in), so it's the slowest
+  // single wait in the flow against real infra.
   await expect(page.getByRole('heading', { name: 'Welcome to Belrose!' })).toBeVisible({
-    timeout: 60_000,
+    timeout: 90_000,
   });
   await page.getByRole('button', { name: 'Get Started' }).click();
 

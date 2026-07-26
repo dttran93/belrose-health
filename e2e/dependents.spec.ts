@@ -4,7 +4,7 @@
 // registration via createDependentAccount CF). The switch-into-dependent / switch-back flow is a
 // separate test below, marked test.fail() — see its own header comment for why.
 //
-// The guardian itself is a reused fixture account (see fixtureGuardian.ts) rather than a fresh
+// The guardian itself is a reused fixture account (see helpers/fixtures/guardian.ts) rather than a fresh
 // registration per run — the guardian's own registration flow (real crypto + real on-chain call +
 // email-verification UI) is already covered end-to-end by signup.spec.ts, and duplicating it here
 // just doubled this spec's exposure to on-chain/emulator flakiness without testing anything this
@@ -21,16 +21,14 @@
 // password to unlock, and shows that account's own identity), not the internals.
 
 import { test, expect, type Page } from '@playwright/test';
-import { seedFixtureGuardian, FIXTURE_GUARDIAN } from './helpers/fixtureGuardian';
+import { FIXTURE_GUARDIAN } from './helpers/fixtures/guardian';
+import { seedFixtureUser } from './helpers/fixtures/seedFixtureUser';
+import { getBackend } from './helpers/backend';
 
-const PROJECT_ID = process.env.VITE_FIREBASE_PROJECT_ID;
+const backend = getBackend();
 
 async function loginAsFixtureGuardian(page: Page): Promise<void> {
-  if (!PROJECT_ID) {
-    throw new Error('VITE_FIREBASE_PROJECT_ID must be set in the environment.');
-  }
-
-  await seedFixtureGuardian(PROJECT_ID);
+  await seedFixtureUser(backend, FIXTURE_GUARDIAN);
 
   await page.goto('/auth');
   await page.locator('input[name="email"]').fill(FIXTURE_GUARDIAN.email);
@@ -95,8 +93,11 @@ async function createDependent(
 test('guardian creates a dependent', async ({ page }) => {
   test.setTimeout(90_000);
 
+  // lastName carries a timestamp so the created-dependent assertion below still matches exactly
+  // one card under the staging backend, where (unlike the emulator) dependents created by prior
+  // runs are never cleaned up and persist under the same fixture guardian.
   await loginAsFixtureGuardian(page);
-  await createDependent(page, 'Little', 'Dependent', 'DepSecure!2026Pw');
+  await createDependent(page, 'Little', `Dependent${Date.now()}`, 'DepSecure!2026Pw');
 });
 
 test('guardian switches into a dependent account and back', async ({ page }) => {
@@ -131,9 +132,10 @@ test('guardian switches into a dependent account and back', async ({ page }) => 
   test.fail();
 
   const dependentPassword = 'DepSecure!2026Pw';
+  const lastName = `Testerson${Date.now()}`;
 
   await loginAsFixtureGuardian(page);
-  await createDependent(page, 'Switchy', 'Testerson', dependentPassword);
+  await createDependent(page, 'Switchy', lastName, dependentPassword);
 
   // ── Switch into the dependent's account ───────────────────────────────────
   await openAccountSwitcher(page);

@@ -14,6 +14,7 @@
     "test:rules": "firebase emulators:exec --only firestore --project belrose-rules-test \"vitest run --config vitest.rules.config.ts\"",
     "test:orchestration": "firebase emulators:exec --config firebase.orchestration.json --only firestore --project belrose-orchestration-test \"vitest run --config vitest.orchestration.config.ts\"",
     "test:e2e": "firebase emulators:exec --only auth,firestore,functions \"playwright test\"",
+    "test:e2e:staging": "playwright test --config playwright.staging.config.ts",
     "test:functions": "firebase emulators:exec --only auth,firestore --project belrose-functions-test \"npm --prefix functions run test\""
   },
   "dependencies": {
@@ -79,6 +80,7 @@
     "eslint": "^9.25.0",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.19",
+    "firebase-admin": "^12.7.0",
     "firebase-tools": "^15.22.4",
     "globals": "^16.0.0",
     "jsdom": "^29.1.1",

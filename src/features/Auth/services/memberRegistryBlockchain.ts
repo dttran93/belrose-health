@@ -61,7 +61,7 @@ export class MemberRegistryBlockchain {
   /**
    * Full registration flow — generates EOA + smart account, registers both
    * on-chain in a single transaction, saves to Firestore.
-   * Called once during initial registration.
+   * Called during initial account registrations.
    * @param masterKeyHex - Master encryption key in hex format (used server-side to encrypt wallet)
    */
   static async registerMemberOnChainComplete(

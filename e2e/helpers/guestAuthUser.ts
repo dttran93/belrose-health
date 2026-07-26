@@ -37,7 +37,7 @@ export async function createAuthUser(projectId: string, params: CreateAuthUserPa
     const body = await res.text();
     // Idempotent by design: the Auth emulator's state persists across every test in the same
     // emulators:exec session (only wiped on the next fresh boot), not just across separate runs —
-    // so a fixed-uid fixture (see fixtureGuardian.ts) legitimately gets re-seeded once per test in
+    // so a fixed-uid fixture (see helpers/fixtures/guardian.ts) legitimately gets re-seeded once per test in
     // a multi-test file. DUPLICATE_LOCAL_ID means the user is already there in the exact state we
     // want, which is success, not failure — mirrors real createOrRetrieveGuestAccount's own
     // getUserByEmail-then-createUser fallback in functions/src/utils/guestAccountUtils.ts.

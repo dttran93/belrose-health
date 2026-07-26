@@ -27,6 +27,7 @@
     "vite.config.ts",
     "vitest.setup.ts",
     "playwright.config.ts",
+    "playwright.staging.config.ts",
     "contracts/scripts/**/*",
     "test/**/*",
     "e2e/**/*",
