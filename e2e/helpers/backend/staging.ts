@@ -26,7 +26,7 @@ import { fileURLToPath } from 'url';
 // a namespace import, which left `admin.credential` undefined at runtime.
 import admin from 'firebase-admin';
 import { ethers } from 'ethers';
-import type { TestBackend, CreateAuthUserParams, CleanupRefs } from './types';
+import type { TestBackend, CreateAuthUserParams, CleanupRefs, ArrayRemoval } from './types';
 import { TEST_INVITE_CODE } from '../seedInvite';
 // Relative path into the shared package's source, not the `@belrose/shared` workspace alias —
 // that alias resolves through node_modules/@belrose/shared (a symlink to raw .ts, no build
@@ -124,18 +124,22 @@ async function createUser(params: CreateAuthUserParams): Promise<void> {
 // generated (db.collection('guestInvites').add(...)), so it can only be found by querying. This
 // is a real query (not a known-path get), and recordShareGuestClaim.spec.ts — the only caller —
 // is inherently staging-only anyway (its fixture record only exists on belrose-757fe), so there's
-// no emulator-side equivalent worth building.
-export async function findGuestInviteCode(guestUid: string): Promise<string> {
+// no emulator-side equivalent worth building. Returns docPath too (not just inviteCode) so the
+// caller can pass it straight into cleanup()'s docPaths for teardown.
+export async function findGuestInvite(
+  guestUid: string
+): Promise<{ inviteCode: string; docPath: string }> {
   const snap = await db()
     .collection('guestInvites')
     .where('guestUserId', '==', guestUid)
     .limit(1)
     .get();
-  const inviteCode = snap.docs[0]?.data()?.inviteCode;
-  if (!inviteCode) {
+  const doc = snap.docs[0];
+  const inviteCode = doc?.data()?.inviteCode;
+  if (!doc || !inviteCode) {
     throw new Error(`No guestInvites doc found for guestUserId=${guestUid}`);
   }
-  return inviteCode;
+  return { inviteCode, docPath: doc.ref.path };
 }
 
 export const stagingBackend: TestBackend = {
@@ -178,6 +182,13 @@ export const stagingBackend: TestBackend = {
     ];
 
     await Promise.all((refs.docPaths ?? []).map(p => db().doc(p).delete()));
+    await Promise.all(
+      (refs.arrayRemovals ?? []).map(({ path, field, value }: ArrayRemoval) =>
+        db()
+          .doc(path)
+          .update({ [field]: admin.firestore.FieldValue.arrayRemove(value) })
+      )
+    );
     await Promise.all(
       uids.flatMap(uid => [
         deactivateOnChain(uid),

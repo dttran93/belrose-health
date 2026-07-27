@@ -1,7 +1,6 @@
 // e2e/signup.spec.ts
 //
-// Thin E2E smoke test — proves the Playwright harness works end-to-end before tackling
-// anything permission-specific. Drives the real signup flow (real wallet generation + real
+// Drives the real signup flow (real wallet generation + real
 // on-chain registration via Base Sepolia/Pimlico, since that's baked into step 1 of
 // registration itself — there's no way to sign up without it), verifies the email without a
 // real inbox (via getBackend() — see e2e/helpers/backend/), and confirms the user lands on
@@ -52,9 +51,7 @@ test('signs up, verifies email via the Auth emulator, and reaches /app', async (
   await page.locator('input[type="checkbox"]').check();
   await page.getByRole('button', { name: 'Complete Registration' }).first().click();
 
-  await page
-    .getByRole('button', { name: 'Continue to Verification' })
-    .click({ timeout: 30_000 });
+  await page.getByRole('button', { name: 'Continue to Verification' }).click({ timeout: 30_000 });
 
   await expect(page).toHaveURL(/\/verification/);
 

@@ -32,7 +32,13 @@ let createdDependentUids: string[] = [];
 
 test.afterEach(async () => {
   if (createdDependentUids.length === 0) return;
-  await backend.cleanup({ authUids: createdDependentUids });
+  // trusteeRelationships/{dependentUid}_{guardianUid} — the controller relationship
+  // createDependentAccount's bootstrapDependentTrustee step writes (see
+  // functions/src/handlers/createDependentAccount.ts) — deterministic id, no query needed.
+  await backend.cleanup({
+    authUids: createdDependentUids,
+    docPaths: createdDependentUids.map(uid => `trusteeRelationships/${uid}_${FIXTURE_GUARDIAN.uid}`),
+  });
   createdDependentUids = [];
 });
 
@@ -112,12 +118,86 @@ async function createDependent(
   return dependentUid;
 }
 
+/**
+ * Real on-chain trustee revoke for the dependent-guardian relationship bootstrapDependentTrustee
+ * created. MemberRoleManager.revokeTrustee is onlyActiveMember and requires the caller to BE the
+ * trustor or trustee — deliberately not admin-callable (see bootstrapDependentTrustee's own doc
+ * comment in MemberRoleManager.sol: "Revocation flows through the normal onlyActiveMember
+ * revokeTrustee path — no admin involvement after creation"). So the only way to actually revoke
+ * it is a real signed transaction from one of their own live sessions — this drives the guardian
+ * through the real "Delete account" UI (DependentsSettingsPage → SwitchAndDeleteDialog), which
+ * switches into the dependent's own session (unlocked with the password the guardian set for them
+ * at creation) and runs AccountDeletionService.deleteMyAccount() as the dependent — Step 2 of
+ * that service calls TrusteeRelationshipService.revokeTrustee(guardianUid), a genuine on-chain tx.
+ *
+ * Ends fully signed out (deleteMyAccount signs out) — nothing to switch back to afterward, since
+ * every other test in this file starts its own fresh loginAsFixtureGuardian() anyway.
+ *
+ * Two things this does NOT do, both still needed from the Admin-SDK cleanup path afterward:
+ * deleteOwnAccount (the CF this calls) never touches on-chain MEMBER status (still "Active",
+ * needs deactivateOnChain), and revokeTrustee only soft-updates trusteeRelationships to
+ * status:'revoked' (see trusteeRelationshipService.ts) rather than deleting the doc.
+ */
+async function deleteDependentViaRealFlow(
+  page: Page,
+  dependentUid: string,
+  dependentPassword: string
+): Promise<void> {
+  // Scope to this dependent's card by uid, not displayName — DependentsSettingsPage's list
+  // currently renders every card as "Unknown User" regardless of the underlying account's real
+  // name (a separate, apparently pre-existing display bug — the uid text next to it does render
+  // correctly, and is what UserCard's copy-to-clipboard row shows either way). .last() picks the
+  // innermost div matching both conditions (Playwright locators resolve in document order,
+  // outermost-to-innermost for nested matches), then :visible narrows to whichever of UserCard's
+  // mobile/desktop layouts the current viewport actually renders (see createDependent's own
+  // comment on that same CSS-toggle pattern).
+  const card = page
+    .locator('div', { hasText: dependentUid })
+    .filter({ has: page.locator('button[title="More options"]') })
+    .last();
+  // Explicit scroll before interacting — with many cards on the page (this guardian
+  // accumulates them across runs), Playwright's own auto-scroll-into-view doesn't reliably
+  // reach a card near the bottom of the list before opening its dropdown, leaving the dropdown
+  // itself positioned outside the viewport ("element is outside of the viewport", never resolves
+  // even after 150s of retries).
+  await card.scrollIntoViewIfNeeded();
+  await card.locator('button[title="More options"]:visible').click();
+  const deleteAccountItem = page.getByRole('button', { name: 'Delete account' });
+  await deleteAccountItem.scrollIntoViewIfNeeded();
+  await deleteAccountItem.click();
+
+  await expect(page.getByRole('heading', { name: 'Delete Dependent Account' })).toBeVisible();
+  await page.getByRole('button', { name: 'Continue' }).click();
+
+  // Switching clears the encryption session — same pattern as the account-switch test below.
+  await expect(page.getByText('Unlock Account')).toBeVisible({ timeout: 15_000 });
+  await page.getByLabel('Password').fill(dependentPassword);
+  await page.getByRole('button', { name: 'Unlock' }).click();
+
+  // Lands on /app/settings/account?action=delete-account, which auto-opens DeleteAccountDialog.
+  await expect(page.getByRole('heading', { name: 'Delete Account' })).toBeVisible({
+    timeout: 20_000,
+  });
+  await page.getByPlaceholder('DELETE').fill('DELETE');
+
+  // Chains records/trustees(real on-chain revoke)/subject-requests/profile/account phases —
+  // the on-chain revoke is the slow part, same order of magnitude as the other on-chain waits
+  // elsewhere in this suite.
+  await page.getByRole('button', { name: 'Delete Account' }).click();
+  await expect(page).not.toHaveURL(/\/app/, { timeout: 60_000 });
+}
+
 test('guardian creates a dependent', async ({ page }) => {
-  test.setTimeout(90_000);
+  test.setTimeout(150_000);
 
   await loginAsFixtureGuardian(page);
-  const uid = await createDependent(page, 'Little', `Dependent${Date.now()}`, 'DepSecure!2026Pw');
+  const firstName = 'Little';
+  const lastName = `Dependent${Date.now()}`;
+  const dependentPassword = 'DepSecure!2026Pw';
+  const uid = await createDependent(page, firstName, lastName, dependentPassword);
   createdDependentUids.push(uid);
+
+  await deleteDependentViaRealFlow(page, uid, dependentPassword);
 });
 
 test('guardian switches into a dependent account and back', async ({ page }) => {
@@ -157,6 +237,11 @@ test('guardian switches into a dependent account and back', async ({ page }) => 
   await loginAsFixtureGuardian(page);
   const uid = await createDependent(page, 'Switchy', lastName, dependentPassword);
   createdDependentUids.push(uid);
+  // Unlike the "creates a dependent" test above, this one doesn't also drive
+  // deleteDependentViaRealFlow — it's already switching accounts as the actual thing under test,
+  // and is expected to fail partway through (test.fail(), see above). Its on-chain trustee
+  // relationship is accepted residue rather than adding a second, conflicting switch-and-delete
+  // flow to an already-fragile test; the Firestore side still gets fully cleaned up below.
 
   // ── Switch into the dependent's account ───────────────────────────────────
   await openAccountSwitcher(page);

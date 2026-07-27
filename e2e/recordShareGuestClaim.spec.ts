@@ -8,7 +8,7 @@
 // Staging-only. Unlike every other fixture, the record here (see helpers/fixtures/record.ts)
 // can't be seeded via Admin SDK — its encrypted content lives in real Cloud Storage, created
 // through the real upload pipeline, which is out of scope for this account-creation-focused
-// suite (that's a job for a future records-focused e2e suite). findGuestInviteCode (from
+// suite (that's a job for a future records-focused e2e suite). findGuestInvite (from
 // helpers/backend/staging directly, not the TestBackend interface — see its own comment) is
 // staging-only for the same reason: no fixture record means nothing to share on the emulator.
 //
@@ -22,24 +22,34 @@
 
 import { test, expect } from '@playwright/test';
 import { getBackend } from './helpers/backend';
-import { findGuestInviteCode } from './helpers/backend/staging';
+import { findGuestInvite } from './helpers/backend/staging';
 import { FIXTURE_GUARDIAN } from './helpers/fixtures/guardian';
 import { RECORD_ID } from './helpers/fixtures/record';
 import { loginAsFixtureUser } from './helpers/loginAsFixtureUser';
 import { driveGuestClaimFlow } from './helpers/driveGuestClaimFlow';
 
 const backend = getBackend();
-let createdGuestUid: string | undefined;
+let cleanupState:
+  | { guestUid: string; guestInviteDocPath?: string }
+  | undefined;
 
 test.afterEach(async () => {
-  if (!createdGuestUid) return;
-  // Deactivates on-chain + deletes the Auth user + Firestore users/{uid} doc (see staging.ts).
-  // Known gap: this doesn't remove the guestInvites doc, the wrappedKeys/{RECORD_ID}_{guestUid}
-  // doc, or the guestUid this run added to the fixture record's `viewers` array — all minor,
-  // slowly-accumulating cruft on the persistent fixture record, left for a follow-up pass
-  // (same shape as the dependents.spec.ts cleanup work) rather than blocking this spec.
-  await backend.cleanup({ authUids: [createdGuestUid] });
-  createdGuestUid = undefined;
+  if (!cleanupState) return;
+  const { guestUid, guestInviteDocPath } = cleanupState;
+  // Deactivates on-chain + deletes the Auth user + users/{uid} doc (see staging.ts), plus the
+  // guestInvites doc and the wrappedKeys/{RECORD_ID}_{guestUid} doc grantEncryptionAccess wrote
+  // (same {recordId}_{userId} id scheme GuestClaimAccountModal's own Step 1a rewrap uses), and
+  // removes just this guestUid from the persistent fixture record's `viewers` array — the record
+  // itself must survive, only this run's addition to it should.
+  await backend.cleanup({
+    authUids: [guestUid],
+    docPaths: [
+      ...(guestInviteDocPath ? [guestInviteDocPath] : []),
+      `wrappedKeys/${RECORD_ID}_${guestUid}`,
+    ],
+    arrayRemovals: [{ path: `records/${RECORD_ID}`, field: 'viewers', value: guestUid }],
+  });
+  cleanupState = undefined;
 });
 
 test('guest claims their account after a record is shared with them', async ({ page }) => {
@@ -80,11 +90,13 @@ test('guest claims their account after a record is shared with them', async ({ p
       `createGuestInvite response missing guestUid/guestPrivateKeyBase64 — got ${JSON.stringify(responseBody)}`
     );
   }
-  createdGuestUid = guestUid;
+  cleanupState = { guestUid };
 
-  // Not in the response (functions/src/handlers/createGuestInvite.ts only ever sends it in the
-  // real invite email) — the guestInvites doc ID is server-generated, so this has to be a query.
-  const inviteCode = await findGuestInviteCode(guestUid);
+  // inviteCode isn't in the response (functions/src/handlers/createGuestInvite.ts only ever
+  // sends it in the real invite email) — the guestInvites doc ID is server-generated too, so
+  // both have to come from a query.
+  const { inviteCode, docPath: guestInviteDocPath } = await findGuestInvite(guestUid);
+  cleanupState = { guestUid, guestInviteDocPath };
 
   // ── Visit the invite link as the guest (real redeemGuestInvite CF call + sign-in) ──────────
   // Full navigation (not an in-app route change), so this cleanly replaces Johnny's session

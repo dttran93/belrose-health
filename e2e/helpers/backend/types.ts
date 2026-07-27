@@ -11,6 +11,12 @@ export interface CreateAuthUserParams {
   displayName?: string;
 }
 
+export interface ArrayRemoval {
+  path: string;
+  field: string;
+  value: unknown;
+}
+
 export interface CleanupRefs {
   /** Doc paths to delete outright — for docs a spec seeded directly (invites/, recordRequests/, guestInvites/). */
   docPaths?: string[];
@@ -18,6 +24,8 @@ export interface CleanupRefs {
   authUids?: string[];
   /** Same as authUids, but resolved to a uid via getUserByEmail first (for uids the test never learns). */
   authEmails?: string[];
+  /** For fields on a doc that must persist (e.g. a fixture record's `viewers` array) — removes just one array entry rather than deleting the whole doc. */
+  arrayRemovals?: ArrayRemoval[];
 }
 
 export interface TestBackend {
