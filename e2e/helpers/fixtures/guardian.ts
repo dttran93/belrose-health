@@ -1,8 +1,9 @@
-// e2e/helpers/fixtureGuardian.ts
+// e2e/helpers/fixtures/guardian.ts
 //
 // A real, pre-existing guardian account — already genuinely registered on Base Sepolia (see
-// onChainIdentity.userIdHash / linkedWallets below, both real, both already confirmed on-chain)
-// — reused across e2e runs instead of registering a fresh guardian through the UI every time.
+// doc.onChainIdentity.userIdHash / linkedWallets below, both real, both already confirmed
+// on-chain) — reused across e2e runs instead of registering a fresh guardian through the UI
+// every time.
 //
 // The Firebase emulator wipes Firestore/Auth on every boot, but the on-chain registration lives
 // on the real chain and never resets — so re-seeding this account's real Firestore snapshot back
@@ -12,37 +13,28 @@
 // createDependentAccount, which needs a genuinely-registered guardian to bootstrap a trustee
 // relationship against (bootstrapDependentTrustee checks the guardian's on-chain status too).
 //
-// The encryption.* and wallet.* values below are this account's REAL PBKDF2/AES-GCM-derived key
-// material for FIXTURE_GUARDIAN.password — they can't be regenerated or faked; they have to be
+// The doc.encryption.* and doc.wallet.* values below are this account's REAL PBKDF2/AES-GCM-derived
+// key material for FIXTURE_GUARDIAN.password — they can't be regenerated or faked; they have to be
 // the actual values for EncryptionGate's unlock flow to decrypt correctly. Do not "clean up" or
-// alter these — they're an exact snapshot of a real Firestore users/{uid} document.
+// alter these — they're an exact snapshot of a real Firestore users/{uid} document. Any new
+// fixture follows this same recipe: register a real account once through the UI with a chosen
+// password, then hand-copy the resulting users/{uid} doc in here.
 
-import { seedFirestoreDoc } from './firestoreRest';
-import { createAuthUser } from './guestAuthUser';
+import type { FixtureUser } from './types';
 
-export const FIXTURE_GUARDIAN = {
+export const FIXTURE_GUARDIAN: FixtureUser = {
   uid: 'kzGZLEgNZpbWRp7XyEFFsQz3OfB2',
   email: 'belrose.test+2@gmail.com',
   password: 'pleasebeourGuest1!',
   displayName: 'Johnny Hopkins',
-};
 
-export async function seedFixtureGuardian(projectId: string): Promise<void> {
-  await createAuthUser(projectId, {
-    uid: FIXTURE_GUARDIAN.uid,
-    email: FIXTURE_GUARDIAN.email,
-    password: FIXTURE_GUARDIAN.password,
-    emailVerified: true,
-    displayName: FIXTURE_GUARDIAN.displayName,
-  });
-
-  await seedFirestoreDoc(projectId, `users/${FIXTURE_GUARDIAN.uid}`, {
-    uid: FIXTURE_GUARDIAN.uid,
-    email: FIXTURE_GUARDIAN.email,
+  doc: {
+    uid: 'kzGZLEgNZpbWRp7XyEFFsQz3OfB2',
+    email: 'belrose.test+2@gmail.com',
     emailVerified: true,
     emailVerifiedAt: new Date('2026-03-24T14:40:05.000Z'),
-    displayName: FIXTURE_GUARDIAN.displayName,
-    displayNameLower: FIXTURE_GUARDIAN.displayName.toLowerCase(),
+    displayName: 'Johnny Hopkins',
+    displayNameLower: 'johnny hopkins',
     firstName: 'Johnny',
     lastName: 'Hopkins',
     identityVerified: true,
@@ -128,5 +120,5 @@ export async function seedFixtureGuardian(projectId: string): Promise<void> {
         },
       ],
     },
-  });
-}
+  },
+};

@@ -1,5 +1,6 @@
 {
   "projects": {
-    "default": "belrose-757fe"
+    "default": "belrose-757fe",
+    "staging": "belrose-757fe"
   }
 }

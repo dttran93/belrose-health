@@ -11,6 +11,8 @@ import { useLayout } from '@/components/app/LayoutProvider';
 import { useAIChatContext } from '@/features/Ai/components/AIChatContext';
 import { navigationSections } from './navigation';
 import { GuestBanner, GuestFooter } from './GuestBanner';
+import { GuestClaimAccountModal } from '@/features/GuestAccess/components/GuestClaimAccountModal';
+import { useGuestContext } from '@/features/GuestAccess/hooks/useGuestContext';
 import useNotifications from '@/features/Notifications/hooks/useNotifications';
 import { useUnreadMessageCount } from '@/features/Messaging/hooks/useUnreadMessageCount';
 import { useInboundRequests } from '@/features/RequestRecord/hooks/useInboundRequests';
@@ -23,6 +25,18 @@ function AppLayout() {
   const { header, footer } = useLayout();
   const navigate = useNavigate();
   const isGuest = user?.isGuest === true;
+
+  // Owned here rather than inside GuestBanner/GuestFooter, and rendered outside the `isGuest &&`
+  // blocks below — a successful claim flips isGuest to false partway through
+  // GuestClaimAccountModal's own handleClaim, and if the modal were nested inside an
+  // isGuest-gated component it would unmount right then, before ever showing its "Welcome to
+  // Belrose!" success step.
+  const [isClaimOpen, setIsClaimOpen] = useState(false);
+  const { guestContext, fetchGuestContext } = useGuestContext();
+  const handleOpenClaim = async () => {
+    await fetchGuestContext();
+    setIsClaimOpen(true);
+  };
 
   const { count: actionsCount } = useActionsCount();
   const { unreadCount } = useNotifications(user?.uid);
@@ -108,7 +122,7 @@ function AppLayout() {
         </div>
 
         <div className="flex flex-col flex-1 overflow-hidden">
-          {isGuest && <GuestBanner />}
+          {isGuest && <GuestBanner onOpenClaim={handleOpenClaim} />}
           {header && <div>{header}</div>}
 
           <div className="flex flex-1 overflow-hidden">
@@ -118,9 +132,14 @@ function AppLayout() {
             </main>
           </div>
 
-          {isGuest && <GuestFooter />}
+          {isGuest && <GuestFooter onOpenClaim={handleOpenClaim} />}
           {footer && <div>{footer}</div>}
         </div>
+        <GuestClaimAccountModal
+          isOpen={isClaimOpen}
+          onClose={() => setIsClaimOpen(false)}
+          guestContext={guestContext}
+        />
       </div>
     );
   }
@@ -134,7 +153,7 @@ function AppLayout() {
         additionalContent={header}
       />
 
-      {isGuest && <GuestBanner />}
+      {isGuest && <GuestBanner onOpenClaim={handleOpenClaim} />}
 
       <MobileSidebar
         isOpen={isMobileOpen}
@@ -161,8 +180,13 @@ function AppLayout() {
         </main>
       </div>
 
-      {isGuest && <GuestFooter />}
+      {isGuest && <GuestFooter onOpenClaim={handleOpenClaim} />}
       {footer && <div className="border-t border-gray-200 bg-white shadow-sm">{footer}</div>}
+      <GuestClaimAccountModal
+        isOpen={isClaimOpen}
+        onClose={() => setIsClaimOpen(false)}
+        guestContext={guestContext}
+      />
     </div>
   );
 }
