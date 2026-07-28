@@ -26,6 +26,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Search, Check, X, FileText, Calendar, Lock } from 'lucide-react';
 import { FileObject } from '@/types/core';
 
@@ -50,7 +51,7 @@ export interface RecordPickerProps {
 // RecordPickerContent — no overlay, fits inside any container
 // ============================================================================
 
-export function RecordPicker({
+export function RecordPickerContent({
   records,
   selectedRecordIds,
   onSelectionChange,
@@ -289,5 +290,32 @@ export function RecordPicker({
         </div>
       </div>
     </div>
+  );
+}
+
+// ============================================================================
+// RecordPicker — RecordPickerContent wrapped in a full-screen overlay
+// ============================================================================
+
+export function RecordPicker(props: RecordPickerProps) {
+  // Portaled to document.body — this is a full-screen overlay, so it can't be left to mount
+  // wherever the caller happens to render it. A bare `<>...</>` fragment upstream (as in
+  // GuestSharePanel/GuestFeatureGate) would otherwise make this `fixed` div a literal direct
+  // child of whatever layout container hosts the caller, picking up unrelated spacing (e.g. a
+  // parent's `space-y-*` margin) since Tailwind's sibling-margin selector doesn't know or care
+  // that this div is meant to be a detached overlay.
+  return createPortal(
+    <div
+      className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center"
+      onClick={props.onClose}
+    >
+      <div
+        className="bg-white rounded-xl shadow-2xl max-w-2xl w-full h-[80vh] flex flex-col"
+        onClick={e => e.stopPropagation()}
+      >
+        <RecordPickerContent {...props} />
+      </div>
+    </div>,
+    document.body
   );
 }

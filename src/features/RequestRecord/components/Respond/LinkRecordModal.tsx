@@ -21,7 +21,7 @@ import React, { useEffect } from 'react';
 import { Button } from '@/components/ui/Button';
 import { useLinkRecord } from '../../hooks/useLinkRecord';
 import { DENY_REASONS, DenyReasonValue } from '../../services/fulfillRequestService';
-import { RecordPicker } from '@/features/Ai/components/ui/RecordPicker';
+import { RecordPickerContent } from '@/features/Ai/components/ui/RecordPicker';
 import { RecordRequest } from '@belrose/shared';
 import { LinkModalOverlay, ExecutingPhase, ErrorPhase, PickRolePhase } from '../ui/LinkModalShell';
 
@@ -203,7 +203,7 @@ const PickRecordsPhase: React.FC<PickRecordsPhaseProps> = ({
         </div>
       ) : (
         <div className="flex-1 overflow-hidden h-full">
-          <RecordPicker
+          <RecordPickerContent
             records={records}
             selectedRecordIds={selectedIds}
             onSelectionChange={onSelectionChange}
