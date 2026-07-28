@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/Button';
 import { X, Save, Ellipsis, Info } from 'lucide-react';
 import { FileObject } from '@/types/core';
@@ -36,6 +36,10 @@ import { BelroseFields } from '@belrose/shared';
 import LinkRequestModal from '@/features/RequestRecord/components/Respond/LinkRequestModal';
 import { useRecordFollowUps } from '@/features/RecordFollowUp/hooks/useRecordFollowUps';
 import { CopyableHash } from '@/features/BackendChainParity/components/ui/CopyableHash';
+import { useAuthContext } from '@/features/Auth/AuthContext';
+import { GuestFeatureGate } from '@/features/GuestAccess/components/GuestFeatureGate';
+import { toast } from 'sonner';
+import { PermissionsService } from '@/features/Permissions/services/permissionsService';
 
 type ViewMode =
   | 'record'
@@ -93,6 +97,8 @@ export const RecordFull: React.FC<RecordFullProps> = ({
   readOnly = false,
   onViewModeChange,
 }) => {
+  const { user } = useAuthContext();
+
   // Subject Alerts hook
   const subjectAlerts = useSubjectAlerts({ recordId: record.id });
 
@@ -133,6 +139,19 @@ export const RecordFull: React.FC<RecordFullProps> = ({
     setIsVersionDetail(false);
     onViewModeChange?.(mode); // sync URL in parent
   };
+
+  // Only owners/administrators can edit — viewers/sharers can reach ?view=edit directly via
+  // URL even though the menu hides "Edit" for them, so this is enforced here too, not just at
+  // the button level.
+  const canEditRecord = user ? PermissionsService.canManageRecord(record, user.uid) : false;
+
+  useEffect(() => {
+    if (viewMode === 'edit' && !canEditRecord) {
+      toast.error("You don't have permission to edit this record");
+      setViewMode('record');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, canEditRecord]);
 
   const [activeTab, setActiveTab] = useState<TabType>('record');
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -235,7 +254,7 @@ export const RecordFull: React.FC<RecordFullProps> = ({
   };
 
   const handleEnterEditMode = () => {
-    if (readOnly) return;
+    if (readOnly || !canEditRecord) return;
     setViewMode('edit');
     setActiveTab('record');
     setEditedBelroseFields(record.belroseFields || undefined);
@@ -519,6 +538,7 @@ export const RecordFull: React.FC<RecordFullProps> = ({
                   triggerIcon={Ellipsis}
                   triggerClassName="p-2 text-white/80 hover:text-white hover:bg-white/20 rounded-lg transition-colors"
                   onView={viewMode !== 'record' ? handleBackToRecord : undefined}
+                  showEdit={canEditRecord}
                   onEdit={viewMode !== 'edit' ? handleEnterEditMode : undefined}
                   onVersion={viewMode !== 'versions' ? handleViewVersionHistory : undefined}
                   onSubject={viewMode !== 'subject' ? handleSubjectPage : undefined}
@@ -629,19 +649,23 @@ export const RecordFull: React.FC<RecordFullProps> = ({
       )}
 
       {viewMode === 'permissions' && (
-        <PermissionsManager
-          record={displayRecord}
-          onBack={handleBackToRecord}
-          onPermissionChange={onRefreshRecord}
-        />
+        <GuestFeatureGate featureName="manage sharing permissions">
+          <PermissionsManager
+            record={displayRecord}
+            onBack={handleBackToRecord}
+            onPermissionChange={onRefreshRecord}
+          />
+        </GuestFeatureGate>
       )}
 
       {viewMode === 'subject' && (
-        <SubjectManager
-          record={displayRecord}
-          onSuccess={handleRefreshRecord}
-          onBack={handleBackToRecord}
-        />
+        <GuestFeatureGate featureName="manage record subjects">
+          <SubjectManager
+            record={displayRecord}
+            onSuccess={handleRefreshRecord}
+            onBack={handleBackToRecord}
+          />
+        </GuestFeatureGate>
       )}
 
       {/* ===== FOOTER SECTIONS ===== */}
@@ -734,6 +758,7 @@ export const RecordFull: React.FC<RecordFullProps> = ({
           setLinkRequestOpen(false);
           handleRefreshRecord();
         }}
+        isGuest={user?.isGuest}
       />
     </div>
   );

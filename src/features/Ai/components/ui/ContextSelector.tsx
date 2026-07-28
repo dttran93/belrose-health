@@ -245,16 +245,12 @@ export function ContextSelector({
 
       {/* Record Picker Modal */}
       {showRecordPicker && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full h-[80vh] flex flex-col">
-            <RecordPicker
-              records={allRecords}
-              selectedRecordIds={selectedContext.recordIds || []}
-              onSelectionChange={handleRecordSelectionChange}
-              onClose={() => setShowRecordPicker(false)}
-            />
-          </div>
-        </div>
+        <RecordPicker
+          records={allRecords}
+          selectedRecordIds={selectedContext.recordIds || []}
+          onSelectionChange={handleRecordSelectionChange}
+          onClose={() => setShowRecordPicker(false)}
+        />
       )}
     </>
   );

@@ -39,6 +39,7 @@ import {
   SubjectConsentRequest,
   VerificationLevelOptions,
 } from '@belrose/shared';
+import { PermissionsService } from '@/features/Permissions/services/permissionsService';
 
 // ============================================================================
 // TYPES
@@ -94,7 +95,7 @@ export class SubjectService {
     } as FileObject;
 
     // Check general management permissions
-    if (!SubjectPermissionService.canManageRecord(recordData, user.uid)) {
+    if (!PermissionsService.canManageRecord(recordData, user.uid)) {
       throw new Error('You do not have permission to modify this record');
     }
 
@@ -354,7 +355,7 @@ export class SubjectService {
     // Permission checks. Must be owner/admin/uploader. target must not already be subject
     const recordData = recordDoc.data() as FileObject;
 
-    if (!SubjectPermissionService.canManageRecord(recordData, user.uid)) {
+    if (!PermissionsService.canManageRecord(recordData, user.uid)) {
       throw new Error('You do not have permission to modify this record');
     }
 

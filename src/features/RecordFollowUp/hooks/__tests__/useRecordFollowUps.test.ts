@@ -3,7 +3,7 @@
 // src/features/RecordFollowUp/hooks/__tests__/useRecordFollowUps.test.ts
 //
 // Tier 3 — mocks every sub-hook/service this hook composes (useAuth, useReviewedByCurrentUser,
-// useInboundRequests, useSubjectAlerts, SubjectPermissionService, firebase/firestore's fresh-
+// useInboundRequests, useSubjectAlerts, PermissionsService, firebase/firestore's fresh-
 // subjects lookup) and drives the real followUpItems derivation: eligibility gating, the
 // subject/subject-request/subject-rejection/verify/link-request conditions (including that
 // subject-request and the base "tag a subject" item are mutually exclusive, not both shown),
@@ -42,8 +42,8 @@ vi.mock('@/features/Subject/hooks/useSubjectAlerts', () => ({
   useSubjectAlerts: useSubjectAlertsMock,
 }));
 
-vi.mock('@/features/Subject/services/subjectPermissionService', () => ({
-  default: { canManageRecord: canManageRecordMock },
+vi.mock('@/features/Permissions/services/permissionsService', () => ({
+  PermissionsService: { canManageRecord: canManageRecordMock },
 }));
 
 vi.mock('firebase/firestore', () => ({
@@ -240,6 +240,33 @@ describe('useRecordFollowUps — link-request item', () => {
     const { result } = renderHook(() => useRecordFollowUps(makeFile()));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.followUpItems.some(i => i.id === 'link-request')).toBe(false);
+  });
+});
+
+describe('useRecordFollowUps — guest gating', () => {
+  it('shows only "Relate to a request" for a guest, even when subject/verify would otherwise apply', async () => {
+    useAuthMock.mockReturnValue({ user: { uid: 'guest-1', isGuest: true } });
+    canManageRecordMock.mockReturnValue(true);
+    useInboundRequestsMock.mockReturnValue({
+      requests: [{ status: 'pending' }],
+      loading: false,
+      refresh: vi.fn(),
+    });
+
+    const { result } = renderHook(() => useRecordFollowUps(makeFile()));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.followUpItems.map(i => i.id)).toEqual(['link-request']);
+  });
+
+  it('shows no items for a guest with no pending inbound requests', async () => {
+    useAuthMock.mockReturnValue({ user: { uid: 'guest-1', isGuest: true } });
+    canManageRecordMock.mockReturnValue(true);
+
+    const { result } = renderHook(() => useRecordFollowUps(makeFile()));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.followUpItems).toEqual([]);
   });
 });
 

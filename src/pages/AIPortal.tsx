@@ -18,7 +18,6 @@ import {
   LoadingView,
   UnauthenticatedView,
   ErrorView,
-  NoRecordsView,
 } from '@/features/Ai/components/AIAssistantView';
 import { RecordDecryptionService } from '@/features/Encryption/services/recordDecryptionService';
 import { useAIChatContext } from '@/features/Ai/components/AIChatContext';
@@ -194,11 +193,6 @@ export default function AIPortal() {
   // Error state
   if (error) {
     return <ErrorView error={error} />;
-  }
-
-  // No records state
-  if (allRecords.length === 0) {
-    return <NoRecordsView />;
   }
 
   // Main chat interface

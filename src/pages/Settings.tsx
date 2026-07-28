@@ -17,6 +17,7 @@ import ChangePasswordModal from '@/features/Settings/components/ChangePasswordMo
 import NotificationSettings from '@/features/Settings/components/NotificationSettings';
 import GuestInvitesSettings from '@/features/Settings/components/GuestInvitesSettings';
 import VouchesSettings from '@/features/Settings/components/VouchesSettings';
+import { GuestFeatureGate } from '@/features/GuestAccess/components/GuestFeatureGate';
 
 const SettingsPage = () => {
   const auth = getAuth();
@@ -211,14 +212,19 @@ const SettingsPage = () => {
             <span>Settings</span>
           </h1>
         </header>
-        <div className="flex flex-col md:flex-row gap-0 items-start">
-          <SettingsNav
-            activeSection={activeSection}
-            onSectionChange={id => navigate(`/app/settings/${id}`)}
-          />
-          {/* Content */}
-          <div className="flex-1 min-w-0 md:pl-6">{renderContent()}</div>
-        </div>
+        <GuestFeatureGate
+          featureName="access account settings"
+          featureDescription="Settings — name, email, trustees, dependents, vouches, and more — are available once you create a free account."
+        >
+          <div className="flex flex-col md:flex-row gap-0 items-start">
+            <SettingsNav
+              activeSection={activeSection}
+              onSectionChange={id => navigate(`/app/settings/${id}`)}
+            />
+            {/* Content */}
+            <div className="flex-1 min-w-0 md:pl-6">{renderContent()}</div>
+          </div>
+        </GuestFeatureGate>
       </div>
 
       {/* Modals */}

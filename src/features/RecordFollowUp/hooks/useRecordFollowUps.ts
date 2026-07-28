@@ -27,7 +27,7 @@ import { useInboundRequests } from '@/features/RequestRecord/hooks/useInboundReq
 import useAuth from '@/features/Auth/hooks/useAuth';
 import { useSubjectAlerts } from '@/features/Subject/hooks/useSubjectAlerts';
 import { doc, getDoc, getFirestore } from 'firebase/firestore';
-import SubjectPermissionService from '@/features/Subject/services/subjectPermissionService';
+import { PermissionsService } from '@/features/Permissions/services/permissionsService';
 
 // ─── Options ─────────────────────────────────────────────────────────────────
 
@@ -81,10 +81,8 @@ export function useRecordFollowUps(
   const { user } = useAuth();
 
   const isSubject = freshSubjects.includes(user?.uid || '');
-  // Uses SubjectPermissionService: uploader OR owner OR admin
-  const canManageRecord = user
-    ? SubjectPermissionService.canManageRecord(fileItem, user.uid)
-    : false; // ← NEW
+  // owner OR administrator only — uploadedBy is permanent audit metadata, not a live role
+  const canManageRecord = user ? PermissionsService.canManageRecord(fileItem, user.uid) : false;
 
   // ── Check 3: Verification ─────────────────────────────────────────────────
   const {
@@ -110,6 +108,23 @@ export function useRecordFollowUps(
     if (!isEligible || isLoading) return [];
 
     const items: FollowUpItem[] = [];
+
+    // Guests have no wallet — subject/verify actions lead to on-chain writes
+    // they can't perform, so only surface "Relate to a request" for them.
+    if (user?.isGuest) {
+      if (hasPendingRequests) {
+        items.push({
+          id: 'link-request',
+          label: 'Relate to a request',
+          subtext: 'You have open requests. Link this record to a relevant request.',
+          icon: LinkIcon,
+          status: 'pending',
+          ctaLabel: 'Link',
+          onAction: () => onAction?.(fileItem, 'link-request'),
+        });
+      }
+      return items;
+    }
 
     // Only admins/owners/uploaders can tag a subject
     if (!hasSubject && !hasSubjectRequest && canManageRecord) {
@@ -202,6 +217,7 @@ export function useRecordFollowUps(
     isSubject,
     fileItem,
     onAction,
+    user?.isGuest,
   ]);
 
   return {

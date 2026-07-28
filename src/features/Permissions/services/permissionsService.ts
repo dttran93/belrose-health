@@ -15,6 +15,7 @@ import { BlockchainSyncQueueService } from '@/features/BlockchainWallet/services
 import writePermissionChangeEvent from './writePermissionChangeEvent';
 import { buildMemberRegistryRef, BlockchainRef, RecordRole, ROLE_HIERARCHY } from '@belrose/shared';
 import { ethers, id } from 'ethers';
+import { FileObject } from '@/types/core';
 
 interface RoleEligibility {
   enabled: boolean;
@@ -2131,5 +2132,14 @@ export class PermissionsService {
       console.error('Error getting record roles:', err);
       return null;
     }
+  }
+
+  /**
+   * General check: Can this user manage the record (edit/request subjects)?
+   */
+  static canManageRecord(record: FileObject, userId: string): boolean {
+    const isOwner = record.owners?.includes(userId);
+    const isAdmin = record.administrators?.includes(userId);
+    return isOwner || isAdmin;
   }
 }

@@ -9,6 +9,8 @@ import { formatTimestamp } from '@/utils/dataFormattingUtils';
 import SubjectBadge from '@/features/Subject/components/SubjectBadge';
 import FollowUpBadge from '@/features/RecordFollowUp/components/ui/FollowUpBadge';
 import { useRecordFollowUps } from '@/features/RecordFollowUp/hooks/useRecordFollowUps';
+import { useAuthContext } from '@/features/Auth/AuthContext';
+import { PermissionsService } from '@/features/Permissions/services/permissionsService';
 
 interface HealthRecordCardProps {
   record: FileObject;
@@ -48,6 +50,8 @@ export const HealthRecordCard: React.FC<HealthRecordCardProps> = ({
 }) => {
   const displayName = record.fileName || 'Unknown Document';
   const { followUpItems, isLoading } = useRecordFollowUps(record);
+  const { user } = useAuthContext();
+  const canEditRecord = user ? PermissionsService.canManageRecord(record, user.uid) : false;
 
   return (
     <div
@@ -87,6 +91,7 @@ export const HealthRecordCard: React.FC<HealthRecordCardProps> = ({
               triggerIcon={Ellipsis}
               triggerClassName="p-2 rounded-3xl hover:bg-gray-100"
               onView={onView}
+              showEdit={canEditRecord}
               onEdit={onEdit}
               onVersion={onVersions}
               onSubject={onSubject}
