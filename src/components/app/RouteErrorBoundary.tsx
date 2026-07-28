@@ -1,5 +1,6 @@
 import { isRouteErrorResponse, useNavigate, useRouteError } from 'react-router-dom';
 import { useEffect } from 'react';
+import * as Sentry from '@sentry/react';
 import { Button } from '@/components/ui/Button';
 
 declare global {
@@ -28,7 +29,9 @@ const RouteErrorBoundary: React.FC<RouteErrorBoundaryProps> = ({ fullScreen = fa
     window.plausible?.('Error', {
       props: { path: window.location.pathname, message },
     });
-    // TODO: wire up a real error-tracking SDK (e.g. Sentry) here if one gets added.
+    // errorElement catches happen before React Router's error would otherwise become an
+    // unhandled browser error, so Sentry's automatic instrumentation never sees it — report explicitly.
+    Sentry.captureException(error, { tags: { path: window.location.pathname } });
   }, [error, message]);
 
   return (
