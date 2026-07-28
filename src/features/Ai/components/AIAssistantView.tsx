@@ -76,34 +76,6 @@ export function ErrorView({ error }: { error: Error }) {
   );
 }
 
-/**
- * No records state view
- */
-export function NoRecordsView() {
-  return (
-    <div className="min-h-screen">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 lg:py-8">
-        <div className="rounded-xl shadow-sm border p-12 text-center">
-          <div className="max-w-md mx-auto">
-            <MessageSquare className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-            <h3 className="text-xl font-semibold text-gray-900 mb-2">No Health Records Yet</h3>
-            <p className="text-gray-600 mb-6">
-              Upload your first health record to start chatting with your AI assistant.
-            </p>
-
-            <a
-              href="/app/add-record"
-              className="inline-block px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              Add Your First Record
-            </a>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ============================================================================
 // MAIN VIEW
 // ============================================================================
