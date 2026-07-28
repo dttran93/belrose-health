@@ -10,7 +10,6 @@ import SubjectBadge from '@/features/Subject/components/SubjectBadge';
 import FollowUpBadge from '@/features/RecordFollowUp/components/ui/FollowUpBadge';
 import { useRecordFollowUps } from '@/features/RecordFollowUp/hooks/useRecordFollowUps';
 import { useAuthContext } from '@/features/Auth/AuthContext';
-import SubjectPermissionService from '@/features/Subject/services/subjectPermissionService';
 import { PermissionsService } from '@/features/Permissions/services/permissionsService';
 
 interface HealthRecordCardProps {

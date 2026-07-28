@@ -15,7 +15,11 @@ import AccessUserCard from './ui/AccessUserCard';
 import RecordSectionPanel from '@/components/ui/RecordSectionPanel';
 import useAuth from '@/features/Auth/hooks/useAuth';
 import { GuestSharePanel } from '../../GuestAccess/components/GuestSharePanel';
-import { deriveAccessEntries, type WrappedKeyInfo, type AccessEntry } from '../services/accessEntries';
+import {
+  deriveAccessEntries,
+  type WrappedKeyInfo,
+  type AccessEntry,
+} from '../services/accessEntries';
 
 export type { AccessEntry, WrappedKeyInfo };
 
@@ -37,6 +41,7 @@ export const EncryptionAccessView: React.FC<EncryptionAccessViewProps> = ({
   const [isUserSearchOpen, setIsUserSearchOpen] = useState(false);
   const [selectedUserForGrant, setSelectedUserForGrant] = useState<BelroseUserProfile | null>(null);
   const patientName = user?.displayName || user?.email || 'A Belrose user';
+  const isGuest = user?.isGuest || false;
 
   const {
     dialogProps,
@@ -185,12 +190,14 @@ export const EncryptionAccessView: React.FC<EncryptionAccessViewProps> = ({
         tooltipClassName="border border-primary bg-primary/20 text-primary"
         tooltipContent={tooltipContent}
         headerAction={
-          <button
-            className="rounded-full hover:bg-gray-200 p-1 transition-colors"
-            onClick={() => setIsUserSearchOpen(!isUserSearchOpen)}
-          >
-            <Plus className="w-5 h-5" />
-          </button>
+          !isGuest && (
+            <button
+              className="rounded-full hover:bg-gray-200 p-1 transition-colors"
+              onClick={() => setIsUserSearchOpen(!isUserSearchOpen)}
+            >
+              <Plus className="w-5 h-5" />
+            </button>
+          )
         }
         isLoading={loading}
         loadingLabel="Loading encryption access..."
@@ -214,7 +221,9 @@ export const EncryptionAccessView: React.FC<EncryptionAccessViewProps> = ({
             entry={entry}
             record={record}
             onDelete={
-              entry.role !== 'none' && entry.profile ? () => handleRevokeClick(entry) : undefined
+              !isGuest && entry.role !== 'none' && entry.profile
+                ? () => handleRevokeClick(entry)
+                : undefined
             }
           />
         ))}
@@ -261,11 +270,13 @@ export const EncryptionAccessView: React.FC<EncryptionAccessViewProps> = ({
       {/* Permission Action Dialog - handles preparation, confirmation, and execution */}
       <PermissionActionDialog {...dialogProps} />
 
-      <GuestSharePanel
-        record={record}
-        patientName={patientName}
-        onSuccess={fetchEncryptionAccess}
-      />
+      {!isGuest && (
+        <GuestSharePanel
+          record={record}
+          patientName={patientName}
+          onSuccess={fetchEncryptionAccess}
+        />
+      )}
     </div>
   );
 };

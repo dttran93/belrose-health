@@ -38,7 +38,6 @@ import { useRecordFollowUps } from '@/features/RecordFollowUp/hooks/useRecordFol
 import { CopyableHash } from '@/features/BackendChainParity/components/ui/CopyableHash';
 import { useAuthContext } from '@/features/Auth/AuthContext';
 import { GuestFeatureGate } from '@/features/GuestAccess/components/GuestFeatureGate';
-import SubjectPermissionService from '@/features/Subject/services/subjectPermissionService';
 import { toast } from 'sonner';
 import { PermissionsService } from '@/features/Permissions/services/permissionsService';
 

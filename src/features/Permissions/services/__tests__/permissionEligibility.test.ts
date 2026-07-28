@@ -122,3 +122,52 @@ describe('PermissionsService.canRevokeAccess', () => {
     expect(PermissionsService.canRevokeAccess(record, OWNER, SHARER).enabled).toBe(false);
   });
 });
+
+describe('PermissionsService.canManageRecord', () => {
+  const UPLOADER = 'uploader-uid';
+  const STRANGER = 'stranger-uid';
+
+  function makeRecord(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'record1',
+      uploadedBy: UPLOADER,
+      owners: [OWNER],
+      administrators: [ADMIN],
+      ...overrides,
+    };
+  }
+
+  it('denies a plain uploader who is neither owner nor administrator', () => {
+    // uploadedBy is permanent audit metadata, not a live role — same reasoning as
+    // useSubjectFlow.getUserRoleForRecord's removed uploader fallback. An uploader who wants
+    // guaranteed standing can always make themselves owner.
+    expect(PermissionsService.canManageRecord(makeRecord() as any, UPLOADER)).toBe(false);
+  });
+
+  it('allows an owner', () => {
+    expect(PermissionsService.canManageRecord(makeRecord() as any, OWNER)).toBe(true);
+  });
+
+  it('allows an administrator', () => {
+    expect(PermissionsService.canManageRecord(makeRecord() as any, ADMIN)).toBe(true);
+  });
+
+  it('denies a stranger with no relationship to the record', () => {
+    expect(PermissionsService.canManageRecord(makeRecord() as any, STRANGER)).toBe(false);
+  });
+
+  it('handles missing owners/administrators arrays without throwing', () => {
+    const record = makeRecord({ owners: undefined, administrators: [] });
+    expect(PermissionsService.canManageRecord(record as any, STRANGER)).toBe(false);
+  });
+
+  it('denies a sharer — canManageRecord only recognizes uploader/owner/administrator', () => {
+    const record = makeRecord({ sharers: [SHARER] });
+    expect(PermissionsService.canManageRecord(record as any, SHARER)).toBe(false);
+  });
+
+  it('denies a viewer — canManageRecord only recognizes uploader/owner/administrator', () => {
+    const record = makeRecord({ viewers: [VIEWER] });
+    expect(PermissionsService.canManageRecord(record as any, VIEWER)).toBe(false);
+  });
+});

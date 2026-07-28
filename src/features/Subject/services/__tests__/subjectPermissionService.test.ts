@@ -21,42 +21,6 @@ function makeRecord(overrides: Partial<FileObject> = {}): FileObject {
   } as unknown as FileObject;
 }
 
-describe('SubjectPermissionService.canManageRecord', () => {
-  it('denies a plain uploader who is neither owner nor administrator', () => {
-    // uploadedBy is permanent audit metadata, not a live role — same reasoning as
-    // useSubjectFlow.getUserRoleForRecord's removed uploader fallback. An uploader who wants
-    // guaranteed standing can always make themselves owner.
-    expect(SubjectPermissionService.canManageRecord(makeRecord(), UPLOADER)).toBe(false);
-  });
-
-  it('allows an owner', () => {
-    expect(SubjectPermissionService.canManageRecord(makeRecord(), OWNER)).toBe(true);
-  });
-
-  it('allows an administrator', () => {
-    expect(SubjectPermissionService.canManageRecord(makeRecord(), ADMIN)).toBe(true);
-  });
-
-  it('denies a stranger with no relationship to the record', () => {
-    expect(SubjectPermissionService.canManageRecord(makeRecord(), STRANGER)).toBe(false);
-  });
-
-  it('handles missing owners/administrators arrays without throwing', () => {
-    const record = makeRecord({ owners: undefined, administrators: [] });
-    expect(SubjectPermissionService.canManageRecord(record, STRANGER)).toBe(false);
-  });
-
-  it('denies a sharer — canManageRecord only recognizes uploader/owner/administrator', () => {
-    const record = makeRecord({ sharers: ['sharer-uid'] } as any);
-    expect(SubjectPermissionService.canManageRecord(record, 'sharer-uid')).toBe(false);
-  });
-
-  it('denies a viewer — canManageRecord only recognizes uploader/owner/administrator', () => {
-    const record = makeRecord({ viewers: ['viewer-uid'] } as any);
-    expect(SubjectPermissionService.canManageRecord(record, 'viewer-uid')).toBe(false);
-  });
-});
-
 describe('SubjectPermissionService.canCancelRequest', () => {
   it('mirrors canManageRecord (currently the same rule, kept separate for future restrictions)', () => {
     const record = makeRecord();

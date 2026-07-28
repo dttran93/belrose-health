@@ -27,7 +27,6 @@ import { useInboundRequests } from '@/features/RequestRecord/hooks/useInboundReq
 import useAuth from '@/features/Auth/hooks/useAuth';
 import { useSubjectAlerts } from '@/features/Subject/hooks/useSubjectAlerts';
 import { doc, getDoc, getFirestore } from 'firebase/firestore';
-import SubjectPermissionService from '@/features/Subject/services/subjectPermissionService';
 import { PermissionsService } from '@/features/Permissions/services/permissionsService';
 
 // ─── Options ─────────────────────────────────────────────────────────────────
@@ -82,8 +81,8 @@ export function useRecordFollowUps(
   const { user } = useAuth();
 
   const isSubject = freshSubjects.includes(user?.uid || '');
-  // Uses SubjectPermissionService: uploader OR owner OR admin
-  const canManageRecord = user ? PermissionsService.canManageRecord(fileItem, user.uid) : false; // ← NEW
+  // owner OR administrator only — uploadedBy is permanent audit metadata, not a live role
+  const canManageRecord = user ? PermissionsService.canManageRecord(fileItem, user.uid) : false;
 
   // ── Check 3: Verification ─────────────────────────────────────────────────
   const {
