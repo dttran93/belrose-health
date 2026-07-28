@@ -8,6 +8,7 @@
 //   1. Sweep any pending subjectConsentRequests/subjectRemovalRequests where the
 //      caller is the target `subjectId` (not the requester) — Firestore rules don't
 //      let a subject delete those directly, only the requester or a record admin/owner.
+//      But needs to be deleted because there's no user anymore.
 //   2. Delete the Firebase Auth user — done server-side rather than via the client
 //      SDK's `user.delete()` to avoid its "requires recent login" failure mode after
 //      a long async cleanup sequence.

@@ -39,6 +39,7 @@ import HomeDashboard from './pages/HomeDashboard';
 import CreateDependentPage from './features/Dependents/components/CreateDependentPage';
 import ClaimAccountPage from './features/Dependents/components/ClaimAccountPage';
 import AccountSetupPage from './features/Dependents/components/AccountSetupPage';
+import RouteErrorBoundary from './components/app/RouteErrorBoundary';
 
 const queryClient = new QueryClient();
 
@@ -81,6 +82,7 @@ const router = createBrowserRouter([
   {
     // RootLayout wraps every route — all providers live here
     element: <RootLayout />,
+    errorElement: <RouteErrorBoundary fullScreen />,
     children: [
       // ── Public site shell ──
       { path: '/', element: <Index /> },
@@ -107,9 +109,10 @@ const router = createBrowserRouter([
       {
         path: '/app',
         element: <ProtectedLayout />,
+        errorElement: <RouteErrorBoundary fullScreen />,
         children: [
-          { index: true, element: <HomeDashboard /> },
-          { path: 'hash-tester', element: <HashTester /> },
+          { index: true, element: <HomeDashboard />, errorElement: <RouteErrorBoundary /> },
+          { path: 'hash-tester', element: <HashTester />, errorElement: <RouteErrorBoundary /> },
           {
             path: 'blockchain-admin',
             element: (
@@ -117,20 +120,37 @@ const router = createBrowserRouter([
                 <BlockchainAdminDashboard />
               </RequiresPlatformAdmin>
             ),
+            errorElement: <RouteErrorBoundary />,
           },
-          { path: 'health-profile/:subjectId', element: <HealthProfile /> },
-          { path: 'ai', element: <AIPortal /> },
-          { path: 'ai/chat/:chatId', element: <AIPortal /> },
-          { path: 'ai/history', element: <ChatHistoryPage /> },
-          { path: 'all-records', element: <AllRecords /> },
-          { path: 'record-requests', element: <RecordRequestsPage /> },
-          { path: 'records/:recordId', element: <RecordDetail /> },
-          { path: 'add-record', element: <AddRecord /> },
-          { path: 'settings/*', element: <SettingsPage /> },
-          { path: 'activity', element: <ActivityHub /> },
-          { path: 'messages', element: <Messaging /> },
-          { path: 'messages/:recipientId', element: <Messaging /> },
-          { path: 'dependents/create', element: <CreateDependentPage /> },
+          {
+            path: 'health-profile/:subjectId',
+            element: <HealthProfile />,
+            errorElement: <RouteErrorBoundary />,
+          },
+          { path: 'ai', element: <AIPortal />, errorElement: <RouteErrorBoundary /> },
+          { path: 'ai/chat/:chatId', element: <AIPortal />, errorElement: <RouteErrorBoundary /> },
+          { path: 'ai/history', element: <ChatHistoryPage />, errorElement: <RouteErrorBoundary /> },
+          { path: 'all-records', element: <AllRecords />, errorElement: <RouteErrorBoundary /> },
+          {
+            path: 'record-requests',
+            element: <RecordRequestsPage />,
+            errorElement: <RouteErrorBoundary />,
+          },
+          { path: 'records/:recordId', element: <RecordDetail />, errorElement: <RouteErrorBoundary /> },
+          { path: 'add-record', element: <AddRecord />, errorElement: <RouteErrorBoundary /> },
+          { path: 'settings/*', element: <SettingsPage />, errorElement: <RouteErrorBoundary /> },
+          { path: 'activity', element: <ActivityHub />, errorElement: <RouteErrorBoundary /> },
+          { path: 'messages', element: <Messaging />, errorElement: <RouteErrorBoundary /> },
+          {
+            path: 'messages/:recipientId',
+            element: <Messaging />,
+            errorElement: <RouteErrorBoundary />,
+          },
+          {
+            path: 'dependents/create',
+            element: <CreateDependentPage />,
+            errorElement: <RouteErrorBoundary />,
+          },
         ],
       },
 
