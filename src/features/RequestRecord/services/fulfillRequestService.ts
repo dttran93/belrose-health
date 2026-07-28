@@ -152,7 +152,7 @@ export class FulfillRequestService {
         context: {
           type: 'permission',
           targetUserId: recordRequest.requesterId,
-          targetWalletAddress: requesterProfile.wallet.address ?? '',
+          targetWalletAddress: requesterProfile.wallet?.address ?? '',
           role: 'administrator',
           recordId,
           recordIdHash: id(recordId),

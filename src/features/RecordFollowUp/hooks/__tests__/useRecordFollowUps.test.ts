@@ -243,6 +243,33 @@ describe('useRecordFollowUps — link-request item', () => {
   });
 });
 
+describe('useRecordFollowUps — guest gating', () => {
+  it('shows only "Relate to a request" for a guest, even when subject/verify would otherwise apply', async () => {
+    useAuthMock.mockReturnValue({ user: { uid: 'guest-1', isGuest: true } });
+    canManageRecordMock.mockReturnValue(true);
+    useInboundRequestsMock.mockReturnValue({
+      requests: [{ status: 'pending' }],
+      loading: false,
+      refresh: vi.fn(),
+    });
+
+    const { result } = renderHook(() => useRecordFollowUps(makeFile()));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.followUpItems.map(i => i.id)).toEqual(['link-request']);
+  });
+
+  it('shows no items for a guest with no pending inbound requests', async () => {
+    useAuthMock.mockReturnValue({ user: { uid: 'guest-1', isGuest: true } });
+    canManageRecordMock.mockReturnValue(true);
+
+    const { result } = renderHook(() => useRecordFollowUps(makeFile()));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.followUpItems).toEqual([]);
+  });
+});
+
 describe('useRecordFollowUps — onAction wiring', () => {
   it('invokes the provided onAction with the fileItem and item id when a CTA fires', async () => {
     canManageRecordMock.mockReturnValue(true);

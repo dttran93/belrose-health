@@ -7,25 +7,16 @@
  * - Can this user remove a subject (owner only, if no owner then admin)
  */
 
+import { PermissionsService } from '@/features/Permissions/services/permissionsService';
 import { FileObject } from '@/types/core';
 
 export class SubjectPermissionService {
-  /**
-   * General check: Can this user manage the record (upload/edit/request subjects)?
-   */
-  static canManageRecord(record: FileObject, userId: string): boolean {
-    const isOwner = record.owners?.includes(userId);
-    const isAdmin = record.administrators?.includes(userId);
-
-    return isOwner || isAdmin;
-  }
-
   /**
    * Logic for cancelling a pending request
    */
   static canCancelRequest(record: FileObject, userId: string): boolean {
     // Current rule: same as manage, but kept separate for future restrictions
-    return this.canManageRecord(record, userId);
+    return PermissionsService.canManageRecord(record, userId);
   }
 
   /**
