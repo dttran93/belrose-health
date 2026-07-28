@@ -10,12 +10,23 @@ if (sentryDsn) {
   Sentry.init({
     dsn: sentryDsn,
     environment: import.meta.env.MODE,
-    // No session replay / tracing integrations — this is a health-data app, so we only
-    // ever send error metadata (stack trace, message, path), never rendered page content.
-    integrations: [],
+    // No session replay / tracing integrations, and no breadcrumbsIntegration — this is a
+    // health-data app, so we only ever want error metadata (stack trace, message, URL), never
+    // a trail of recent console output, network calls, or clicks attached to that error.
+    defaultIntegrations: false,
+    integrations: [
+      Sentry.eventFiltersIntegration(),
+      Sentry.functionToStringIntegration(),
+      Sentry.globalHandlersIntegration(),
+      Sentry.browserApiErrorsIntegration(),
+      Sentry.linkedErrorsIntegration(),
+      Sentry.dedupeIntegration(),
+      Sentry.httpContextIntegration(),
+    ],
     beforeSend(event) {
       delete event.request?.cookies;
       delete event.user;
+      delete event.breadcrumbs;
       return event;
     },
   });
