@@ -192,6 +192,7 @@ export const EncryptionAccessView: React.FC<EncryptionAccessViewProps> = ({
         headerAction={
           !isGuest && (
             <button
+              aria-label="Grant Access"
               className="rounded-full hover:bg-gray-200 p-1 transition-colors"
               onClick={() => setIsUserSearchOpen(!isUserSearchOpen)}
             >

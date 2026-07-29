@@ -134,9 +134,8 @@ describe('useUserRecords — filterType "owner"', () => {
 });
 
 describe('useUserRecords — filterType "all"', () => {
-  it('returns records reachable via any role (uploaded/owner/admin/sharer/viewer/subject)', async () => {
+  it('returns records reachable via any role (owner/admin/sharer/viewer/subject)', async () => {
     const ME = 'user-all-test';
-    await seedPlainRecord('r-all-uploaded', { uploadedBy: ME });
     await seedPlainRecord('r-all-owner', { uploadedBy: 'other-3', owners: [ME] });
     await seedPlainRecord('r-all-admin', { uploadedBy: 'other-3', administrators: [ME] });
     await seedPlainRecord('r-all-sharer', { uploadedBy: 'other-3', sharers: [ME] });
@@ -149,7 +148,6 @@ describe('useUserRecords — filterType "all"', () => {
 
     expect(new Set(result.current.records.map(r => r.id))).toEqual(
       new Set([
-        'r-all-uploaded',
         'r-all-owner',
         'r-all-admin',
         'r-all-sharer',
@@ -157,6 +155,16 @@ describe('useUserRecords — filterType "all"', () => {
         'r-all-subject',
       ])
     );
+  });
+
+  it('excludes a record the user only uploaded but holds no role on (e.g. removed as admin afterward)', async () => {
+    const ME = 'user-all-former-uploader-test';
+    await seedPlainRecord('r-all-uploaded-no-role', { uploadedBy: ME });
+
+    const { result } = renderHook(() => useUserRecords(ME, { filterType: 'all' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.records).toHaveLength(0);
   });
 });
 

@@ -33,8 +33,10 @@ export const VIEWER = 'viewer-uid';
 export const NEW_USER = 'new-user-uid';
 
 export function baseRecord(overrides: Partial<RoleArrays> = {}): RoleArrays & { uploadedBy: string } {
-  // uploadedBy is always set on real records, and several rule helpers (e.g. hasRoleOnRecord)
-  // read it directly with no .get() fallback — always include it to match reality.
+  // uploadedBy is always set on real records (upload provenance metadata) — included here to
+  // match reality, but it is NOT read by any rule helper for access purposes: uploader access is
+  // only granted via the role arrays (createFirestoreRecord adds the uploader to administrators
+  // by default), so a removed/demoted uploader correctly loses access.
   return {
     owners: [],
     administrators: [],

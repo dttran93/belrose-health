@@ -29,7 +29,6 @@ service cloud.firestore {
     function hasRoleOnRecord(recordId) {
       let record = get(/databases/$(database)/documents/records/$(recordId));
       return record != null && (
-        record.data.uploadedBy == request.auth.uid ||
         request.auth.uid in record.data.owners ||
         request.auth.uid in record.data.administrators ||
         request.auth.uid in record.data.get('sharers', []) ||
@@ -267,7 +266,6 @@ service cloud.firestore {
       allow read: if request.auth != null && (
         isPlatformAdmin() ||
         !exists(/databases/$(database)/documents/records/$(recordId)) ||
-        resource.data.uploadedBy == request.auth.uid ||
         request.auth.uid in resource.data.owners ||
         request.auth.uid in resource.data.administrators ||
         ('sharers' in resource.data && request.auth.uid in resource.data.sharers) ||
@@ -857,7 +855,7 @@ service cloud.firestore {
       // never passed by any caller, so the whole menu (and this view) is reachable by anyone with
       // ANY role on the record. hasRoleOnRecord (not the narrower isSharerOrAboveOnRecord, which
       // would still leave viewers/subjects seeing "Failed to load access data") matches that —
-      // uploadedBy/owners/administrators/sharers/viewers/subjects. None of these are provable as
+      // owners/administrators/sharers/viewers/subjects. None of these are provable as
       // grantedBy or userId on someone ELSE's wrappedKeys entry, so unlike the two branches above
       // this isn't provable from the query's own filters — Firestore evaluates it per matched
       // document via get() — one extra records/{recordId} read per result (all the same doc,
