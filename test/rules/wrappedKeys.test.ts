@@ -251,8 +251,8 @@ describe('firestore.rules — wrappedKeys — read (sharer+ management, or your 
   //     (resource.data.userId == request.auth.uid && hasRoleOnRecord(resource.data.recordId))
   //   );
   // hasRoleOnRecord already existed (used by the records/{recordId} read rule) and checks
-  // uploadedBy/owners/administrators/sharers/viewers/subjects against request.auth.uid — no new
-  // helper needed since the self-read clause only ever evaluates it for the caller's own uid.
+  // owners/administrators/sharers/viewers/subjects against request.auth.uid — no new helper
+  // needed since the self-read clause only ever evaluates it for the caller's own uid.
   //
   // seedRecord always seeds: owners:[OWNER], administrators:[ADMIN], sharers:[SHARER,OTHER_SHARER],
   // viewers:[VIEWER]. RECEIVER holds no role on it at all — standing in for "never added yet"

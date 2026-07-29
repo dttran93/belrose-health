@@ -43,14 +43,14 @@ async function seed(recordId: string, data: object) {
 }
 
 describe('firestore.rules — records/{recordId} — read', () => {
-  it('lets the owner, admin, sharer, viewer, subject, and original uploader all read', async () => {
+  it('lets the owner, admin, sharer, viewer, and subject all read', async () => {
     const recordId = 'read-role-holders';
     await seed(recordId, {
       ...baseRecord({ owners: [OWNER], administrators: [ADMIN], sharers: [SHARER], viewers: [VIEWER], subjects: [SUBJECT] }),
       uploadedBy: UPLOADER,
     });
 
-    for (const uid of [OWNER, ADMIN, SHARER, VIEWER, SUBJECT, UPLOADER]) {
+    for (const uid of [OWNER, ADMIN, SHARER, VIEWER, SUBJECT]) {
       await assertSucceeds(testEnv.authenticatedContext(uid).firestore().doc(`records/${recordId}`).get());
     }
   });
@@ -60,6 +60,13 @@ describe('firestore.rules — records/{recordId} — read', () => {
     await seed(recordId, { ...baseRecord({ owners: [OWNER] }), uploadedBy: UPLOADER });
 
     await assertFails(testEnv.authenticatedContext(STRANGER).firestore().doc(`records/${recordId}`).get());
+  });
+
+  it('denies the original uploader once they hold no role arrays (e.g. removed as admin)', async () => {
+    const recordId = 'read-former-uploader-denied';
+    await seed(recordId, { ...baseRecord({ owners: [OWNER] }), uploadedBy: UPLOADER });
+
+    await assertFails(testEnv.authenticatedContext(UPLOADER).firestore().doc(`records/${recordId}`).get());
   });
 });
 

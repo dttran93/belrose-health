@@ -142,6 +142,34 @@ export async function findGuestInvite(
   return { inviteCode, docPath: doc.ref.path };
 }
 
+// Staging-only, not part of TestBackend — same rationale as findGuestInvite above. Grant/revoke
+// UI flows (usePermissionFlow's confirmGrant/confirmRevoke) fire their PermissionsService call
+// without awaiting it: the dialog closes to "Transaction Submitted" optimistically, well before
+// the real awaited chain (on-chain grantRole/revokeRole confirmation, THEN the Firestore
+// wrappedKeys/viewers write) actually resolves. Polling the real records/{recordId} doc directly
+// is the only unambiguous way to know that chain has actually finished — a Sonner success toast
+// looked like a cleaner signal but auto-dismisses ~4s after showing, so a slow-to-fire toast can
+// already be gone before an assertion starts polling for it.
+export async function waitForViewerStatus(
+  recordId: string,
+  userId: string,
+  expected: 'present' | 'absent',
+  timeoutMs = 120_000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const snap = await db().doc(`records/${recordId}`).get();
+    const viewers: string[] = snap.data()?.viewers ?? [];
+    if (viewers.includes(userId) === (expected === 'present')) return;
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+  throw new Error(
+    `Timed out waiting for records/${recordId}'s viewers array to ${
+      expected === 'present' ? 'include' : 'exclude'
+    } ${userId}`
+  );
+}
+
 export const stagingBackend: TestBackend = {
   async seedInvite(email) {
     await db()

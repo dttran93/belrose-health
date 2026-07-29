@@ -127,6 +127,7 @@ export const UserCard: React.FC<UserCardProps> = ({
     return (
       <div className="flex items-center gap-1 flex-shrink-0">
         <button
+          aria-label="Cancel"
           onClick={e => {
             e.stopPropagation();
             onCancel?.();
@@ -137,6 +138,7 @@ export const UserCard: React.FC<UserCardProps> = ({
         </button>
         {menuType === 'acceptOrCancel' && (
           <button
+            aria-label="Accept"
             onClick={e => {
               e.stopPropagation();
               onAccept?.();
@@ -199,6 +201,7 @@ export const UserCard: React.FC<UserCardProps> = ({
   return (
     <div
       onClick={onCardClick}
+      data-testid={uid ? `user-card-${uid}` : undefined}
       className={`p-4 ${colors.bg} rounded-lg border ${colors.border}
       ${isClickable ? 'cursor-pointer hover:opacity-80' : ''} ${className}`}
     >

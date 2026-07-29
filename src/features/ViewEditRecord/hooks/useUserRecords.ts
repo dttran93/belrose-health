@@ -81,7 +81,6 @@ export const useUserRecords = (
           q = query(
             recordsRef,
             or(
-              where('uploadedBy', '==', userId),
               where('owners', 'array-contains', userId),
               where('administrators', 'array-contains', userId),
               where('sharers', 'array-contains', userId),
@@ -110,7 +109,6 @@ export const useUserRecords = (
         q = query(
           recordsRef,
           or(
-            where('uploadedBy', '==', userId),
             where('owners', 'array-contains', userId),
             where('administrators', 'array-contains', userId),
             where('sharers', 'array-contains', userId),
@@ -136,7 +134,6 @@ export const useUserRecords = (
             // verify current user has permission to view
             if (subjectId && subjectId !== userId) {
               const hasAccess =
-                record.uploadedBy === userId ||
                 record.owners?.includes(userId) ||
                 record.administrators?.includes(userId) ||
                 record.viewers?.includes(userId);
