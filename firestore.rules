@@ -32,8 +32,8 @@ service cloud.firestore {
         request.auth.uid in record.data.owners ||
         request.auth.uid in record.data.administrators ||
         request.auth.uid in record.data.get('sharers', []) ||
-        request.auth.uid in record.data.viewers ||
-        request.auth.uid in record.data.subjects
+        request.auth.uid in record.data.get('viewers', []) ||
+        request.auth.uid in record.data.get('subjects', [])
       );
     }
 
@@ -73,7 +73,7 @@ service cloud.firestore {
       let affectedKeys = request.resource.data.diff(resource.data).affectedKeys();
       let isRightKeys = affectedKeys.hasOnly(['subjects', 'lastModified']);
       let subjectsBefore = resource.data.get('subjects', []);
-      let subjectsAfter = request.resource.data.subjects;
+      let subjectsAfter = request.resource.data.get('subjects', []);
       let arrayGrewCorrectly = subjectsAfter.size() == subjectsBefore.size() + 1;
       let addedSelf = request.auth.uid in subjectsAfter && !(request.auth.uid in subjectsBefore);
       return isRightKeys && arrayGrewCorrectly && addedSelf;
@@ -83,8 +83,8 @@ service cloud.firestore {
     function isSelfRejectionFlow() {
       let affectedKeys = request.resource.data.diff(resource.data).affectedKeys();
       let isRightKeys = affectedKeys.hasOnly(['subjects', 'viewers', 'sharers', 'lastModified']);
-      let removedSelf = !(request.auth.uid in request.resource.data.subjects) &&
-                        (request.auth.uid in resource.data.subjects);
+      let removedSelf = !(request.auth.uid in request.resource.data.get('subjects', [])) &&
+                        (request.auth.uid in resource.data.get('subjects', []));
       return isRightKeys && removedSelf;
     }
 
@@ -95,7 +95,7 @@ service cloud.firestore {
     function isControllerAddingTrustorAsSubject() {
       let affectedKeys = request.resource.data.diff(resource.data).affectedKeys();
       let subjectsBefore = resource.data.get('subjects', []);
-      let subjectsAfter = request.resource.data.subjects;
+      let subjectsAfter = request.resource.data.get('subjects', []);
       let trustorId = request.resource.data.get('controllerAnchorFor', '');
       let trustorRelId = trustorId + '_' + request.auth.uid;
       let relExists = trustorId != '' &&
@@ -268,8 +268,8 @@ service cloud.firestore {
         !exists(/databases/$(database)/documents/records/$(recordId)) ||
         request.auth.uid in resource.data.owners ||
         request.auth.uid in resource.data.administrators ||
-        ('sharers' in resource.data && request.auth.uid in resource.data.sharers) ||
-        request.auth.uid in resource.data.viewers ||
+        request.auth.uid in resource.data.get('sharers', []) ||
+        request.auth.uid in resource.data.get('viewers', []) ||
         request.auth.uid in resource.data.get('subjects', [])
       );
 
@@ -295,7 +295,7 @@ service cloud.firestore {
         ) ||
         // BRANCH 2: Subject consent flow - user adding self to subjects
         (
-          (request.auth.uid in resource.data.viewers ||
+          (request.auth.uid in resource.data.get('viewers', []) ||
            request.auth.uid in resource.data.get('sharers', []) ||
            request.auth.uid in resource.data.administrators ||
            request.auth.uid in resource.data.owners) &&
@@ -303,7 +303,7 @@ service cloud.firestore {
         ) ||
         // BRANCH 3: Subject rejection flow - removing self
         (
-          request.auth.uid in resource.data.subjects &&
+          request.auth.uid in resource.data.get('subjects', []) &&
           isSelfRejectionFlow()
         ) ||
         // BRANCH 4: Credibility score update
@@ -311,24 +311,29 @@ service cloud.firestore {
           (request.auth.uid in resource.data.owners ||
           request.auth.uid in resource.data.administrators ||
           request.auth.uid in resource.data.get('sharers', []) ||
-          request.auth.uid in resource.data.viewers ||
-          request.auth.uid in resource.data.subjects) &&
+          request.auth.uid in resource.data.get('viewers', []) ||
+          request.auth.uid in resource.data.get('subjects', [])) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['credibility'])
         ) ||
         // BRANCH 5: Sharer granting/revoking viewer access only. Sharers cannot modify the
         // sharers array — only owners and administrators can grant sharer role.
+        // subjects/viewers read via .get(..., []) everywhere here, not bare field access —
+        // records that predate the `subjects` field (real staging data confirmed this) have no
+        // such key at all, and a bare resource.data.subjects on a doc missing that key is a
+        // rules EVALUATION ERROR (fails closed, "Missing or insufficient permissions"), not a
+        // clean false — silently breaking every sharer's grant/self-removal on those records.
         (
           request.auth.uid in resource.data.get('sharers', []) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewers', 'trustees', 'lastModified']) &&
           resource.data.owners == request.resource.data.owners &&
           resource.data.administrators == request.resource.data.administrators &&
           resource.data.get('sharers', []) == request.resource.data.get('sharers', []) &&
-          resource.data.subjects == request.resource.data.subjects
+          resource.data.get('subjects', []) == request.resource.data.get('subjects', [])
         ) ||
         // BRANCH 6: Viewer removing themselves
         (
-          request.auth.uid in resource.data.viewers &&
-          !(request.auth.uid in resource.data.subjects) &&
+          request.auth.uid in resource.data.get('viewers', []) &&
+          !(request.auth.uid in resource.data.get('subjects', [])) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewers', 'trustees', 'lastModified']) &&
           resource.data.get('viewers', []).removeAll([request.auth.uid]) == request.resource.data.get('viewers', []) &&
           resource.data.get('trustees', []).removeAll([request.auth.uid]) == request.resource.data.get('trustees', [])
@@ -336,7 +341,7 @@ service cloud.firestore {
         // BRANCH 6b: Sharer removing themselves
         (
           request.auth.uid in resource.data.get('sharers', []) &&
-          !(request.auth.uid in resource.data.subjects) &&
+          !(request.auth.uid in resource.data.get('subjects', [])) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['sharers', 'trustees', 'lastModified']) &&
           resource.data.get('sharers', []).removeAll([request.auth.uid]) == request.resource.data.get('sharers', []) &&
           resource.data.get('trustees', []).removeAll([request.auth.uid]) == request.resource.data.get('trustees', [])
@@ -567,7 +572,7 @@ service cloud.firestore {
       // Helper: Check if target is actually a subject of the record
       function isSubjectOfRecord() {
         let record = get(/databases/$(database)/documents/records/$(request.resource.data.recordId));
-        return request.resource.data.subjectId in record.data.subjects;
+        return request.resource.data.subjectId in record.data.get('subjects', []);
       }
 
       // READ: User can read if they:
@@ -578,7 +583,7 @@ service cloud.firestore {
         !exists(/databases/$(database)/documents/subjectRemovalRequests/$(requestId)) ||
         resource.data.subjectId == request.auth.uid ||
         resource.data.requestedBy == request.auth.uid ||
-        request.auth.uid in get(/databases/$(database)/documents/records/$(resource.data.recordId)).data.subjects ||
+        request.auth.uid in get(/databases/$(database)/documents/records/$(resource.data.recordId)).data.get('subjects', []) ||
         isAdminOrOwnerOfRecord(resource.data.recordId)
       );
 
@@ -798,8 +803,8 @@ service cloud.firestore {
         request.auth.uid in resource.data.affectedUsers.owners ||
         request.auth.uid in resource.data.affectedUsers.administrators ||
         request.auth.uid in resource.data.affectedUsers.get('sharers', []) ||
-        request.auth.uid in resource.data.affectedUsers.viewers ||
-        request.auth.uid in resource.data.affectedUsers.subjects
+        request.auth.uid in resource.data.affectedUsers.get('viewers', []) ||
+        request.auth.uid in resource.data.affectedUsers.get('subjects', [])
       );
 
       // CREATE: Only owners (or admins if no owners) can create deletion events
