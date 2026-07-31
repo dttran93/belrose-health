@@ -37,6 +37,7 @@ vi.mock('@/features/Sharing/services/sharingService', () => ({
   SharingService: {
     grantEncryptionAccess: vi.fn(),
     revokeEncryptionAccess: vi.fn(),
+    prepareEncryptionAccessRevoke: vi.fn(),
   },
 }));
 
@@ -62,6 +63,10 @@ describe('PermissionsService.removeOwner (orchestration)', () => {
     await seedUser(db, OWNER, '0xOwnerWallet');
     await seedUser(db, OTHER_OWNER, '0xOtherOwnerWallet');
     await seedUser(db, ADMIN, '0xAdminWallet');
+    // Encryption revokes are tested in sharingService's own suite — default to "no-op" (as if
+    // there's no wrappedKey to deactivate) so these tests can focus on role/history/chain
+    // behavior without needing real key material.
+    vi.mocked(SharingService.prepareEncryptionAccessRevoke).mockResolvedValue(null);
   });
 
   afterAll(() => {
@@ -92,7 +97,7 @@ describe('PermissionsService.removeOwner (orchestration)', () => {
     expect(recordSnap.data()?.administrators).toEqual([OWNER]);
 
     // Demoting (not fully leaving) still needs the encryption key — must not be revoked.
-    expect(SharingService.revokeEncryptionAccess).not.toHaveBeenCalled();
+    expect(SharingService.prepareEncryptionAccessRevoke).not.toHaveBeenCalled();
 
     const events = await getDocs(collection(db, 'records', RECORD_ID, 'permissionHistory'));
     expect(events.docs[0]!.data().changes).toEqual([
@@ -121,7 +126,7 @@ describe('PermissionsService.removeOwner (orchestration)', () => {
     expect(recordSnap.data()?.sharers).toEqual([OWNER]);
 
     // Demoting (not fully leaving) still needs the encryption key — must not be revoked.
-    expect(SharingService.revokeEncryptionAccess).not.toHaveBeenCalled();
+    expect(SharingService.prepareEncryptionAccessRevoke).not.toHaveBeenCalled();
 
     const events = await getDocs(collection(db, 'records', RECORD_ID, 'permissionHistory'));
     expect(events.docs[0]!.data().changes).toEqual([
@@ -149,7 +154,7 @@ describe('PermissionsService.removeOwner (orchestration)', () => {
     expect(recordSnap.data()?.owners).toEqual([]);
     expect(recordSnap.data()?.viewers).toEqual([OWNER]);
 
-    expect(SharingService.revokeEncryptionAccess).not.toHaveBeenCalled();
+    expect(SharingService.prepareEncryptionAccessRevoke).not.toHaveBeenCalled();
 
     const events = await getDocs(collection(db, 'records', RECORD_ID, 'permissionHistory'));
     expect(events.docs[0]!.data().changes).toEqual([
@@ -172,7 +177,11 @@ describe('PermissionsService.removeOwner (orchestration)', () => {
       RECORD_ID,
       undefined
     );
-    expect(SharingService.revokeEncryptionAccess).toHaveBeenCalledWith(RECORD_ID, OWNER, OWNER);
+    expect(SharingService.prepareEncryptionAccessRevoke).toHaveBeenCalledWith(
+      RECORD_ID,
+      OWNER,
+      OWNER
+    );
 
     const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
     expect(recordSnap.data()?.owners).toEqual([]);
@@ -219,7 +228,7 @@ describe('PermissionsService.removeOwner (orchestration)', () => {
     expect(recordSnap.data()?.owners).toEqual([OWNER]);
   });
 
-  it('leaves Firestore untouched and logs a sync-queue failure when the blockchain call rejects', async () => {
+  it('keeps the Firestore removal when the blockchain call rejects, and logs it for reconciliation', async () => {
     await seedRecord(db, RECORD_ID, { owners: [OWNER, OTHER_OWNER] });
     setCaller(OWNER);
 
@@ -227,15 +236,27 @@ describe('PermissionsService.removeOwner (orchestration)', () => {
       new Error('transaction reverted')
     );
 
-    await expect(PermissionsService.removeOwner(RECORD_ID, OWNER)).rejects.toThrow(
-      'transaction reverted'
-    );
+    // Firestore-first: the chain call is best-effort and does not revert the removal that
+    // already succeeded, so this resolves rather than throwing.
+    await expect(PermissionsService.removeOwner(RECORD_ID, OWNER)).resolves.toBeUndefined();
 
     const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
-    expect(recordSnap.data()?.owners).toEqual([OWNER, OTHER_OWNER]);
+    expect(recordSnap.data()?.owners).toEqual([OTHER_OWNER]);
 
-    const failures = await getDocs(collection(db, 'blockchainSyncQueue'));
-    expect(failures.size).toBe(1);
-    expect(failures.docs[0]!.data().action).toBe('voluntarilyLeaveOwnership');
+    const events = await getDocs(collection(db, 'records', RECORD_ID, 'permissionHistory'));
+    expect(events.docs[0]!.data().changes).toEqual([
+      { userId: OWNER, action: 'revoked', previousRole: 'owner', newRole: null },
+    ]);
+    // No confirmed tx to cite — the audit event still exists, just without a chain reference yet.
+    expect(events.docs[0]!.data().blockchainRef).toBeNull();
+
+    const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+    expect(syncDocs.size).toBe(1);
+    expect(syncDocs.docs[0]!.data()).toMatchObject({
+      status: 'failed',
+      action: 'voluntarilyLeaveOwnership',
+      error: 'transaction reverted',
+      permissionHistoryPath: `records/${RECORD_ID}/permissionHistory/${events.docs[0]!.id}`,
+    });
   });
 });

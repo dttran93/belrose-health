@@ -136,6 +136,7 @@ export async function saveUserIdentityRecord(
       aiProcessingStatus: 'not_needed',
       owners: [userId],
       administrators: [],
+      sharers: [],
       viewers: [],
       subjects: [],
       uploadedBy: userId,

@@ -38,24 +38,15 @@ import { loginAsFixtureUser } from './helpers/loginAsFixtureUser';
 
 const backend = getBackend();
 
-test.afterEach(async () => {
-  // Defensive cleanup regardless of how far the test got — removes the wrappedKeys doc and the
-  // viewers array entry this run may have added, same {recordId}_{userId} id scheme
-  // grantEncryptionAccess uses elsewhere (see recordShareGuestClaim.spec.ts's cleanup).
-  //
-  // NOT cleaned up here: a real on-chain Viewer role left on FIXTURE_RECIPIENT if the test fails
-  // between grant and revoke. Both fixtures are persistent real accounts reused across runs, so a
-  // leftover on-chain grant just means the recipient fixture keeps real (harmless, staging-only)
-  // access to the fixture record until the next successful run revokes it — not cleaned up
-  // automatically because doing so reliably would mean re-driving the UI revoke flow from
-  // afterEach, which has the same failure modes as the test itself.
-  await backend.cleanup({
-    docPaths: [`wrappedKeys/${RECORD_ID}_${FIXTURE_RECIPIENT.uid}`],
-    arrayRemovals: [
-      { path: `records/${RECORD_ID}`, field: 'viewers', value: FIXTURE_RECIPIENT.uid },
-    ],
-  });
-});
+// Deliberately no afterEach cleanup. A passing run already leaves both Firestore and the real
+// chain clean via the closing revoke — nothing left to clean up. A blunt Firestore-only
+// arrayRemove backstop used to live here, but that's actively dangerous: on a mid-run failure
+// (e.g. between grant and revoke) it would silently wipe Firestore's viewers array while the
+// real on-chain Viewer role stayed active on FIXTURE_RECIPIENT — the fixture would look clean
+// but wasn't, with nothing surfacing the mismatch short of checking the chain directly. If a run
+// fails partway, the honest (if messy) state is more useful than a fake-clean one: it surfaces
+// the problem instead of hiding it, and the next run's own pre-flight checks (e.g. grantRole's
+// "Target already has a role" revert) will say so clearly.
 
 test('owner shares a record with a registered user, who views it, then access is revoked', async ({
   browser,

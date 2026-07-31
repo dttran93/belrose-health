@@ -37,7 +37,7 @@ export const SyncFailuresTable: React.FC<SyncFailuresTableProps> = ({ items, sea
     return (
       item.contract.toLowerCase().includes(q) ||
       item.action.toLowerCase().includes(q) ||
-      item.error.toLowerCase().includes(q) ||
+      (item.error ?? '').toLowerCase().includes(q) ||
       item.userId.toLowerCase().includes(q)
     );
   });
@@ -71,7 +71,7 @@ export const SyncFailuresTable: React.FC<SyncFailuresTableProps> = ({ items, sea
         <tbody className="divide-y text-left divide-gray-100">
           {filtered.map(item => {
             const isExpanded = expandedRows.has(item.id);
-            const decodedReason = decodeRevertReason(item.error);
+            const decodedReason = item.error ? decodeRevertReason(item.error) : null;
             const { type: contextType, ...contextFields } = item.context;
 
             return (
@@ -102,8 +102,10 @@ export const SyncFailuresTable: React.FC<SyncFailuresTableProps> = ({ items, sea
                   <td className="px-4 py-3 text-xs text-red-600 max-w-xs">
                     {decodedReason ? (
                       <span className="font-medium">{decodedReason}</span>
-                    ) : (
+                    ) : item.error ? (
                       <span title={item.error}>{truncateError(item.error)}</span>
+                    ) : (
+                      <span className="text-gray-400">—</span>
                     )}
                   </td>
                   <td className="px-4 py-3 text-xs text-gray-600 text-center">
@@ -112,7 +114,7 @@ export const SyncFailuresTable: React.FC<SyncFailuresTableProps> = ({ items, sea
                   <td className="px-4 py-3 text-xs">
                     <span
                       className={`px-2 py-0.5 rounded ${
-                        item.status === 'resolved'
+                        item.status === 'resolved' || item.status === 'confirmed'
                           ? 'bg-green-100 text-green-700'
                           : item.status === 'pending'
                             ? 'bg-amber-100 text-amber-700'
@@ -167,13 +169,26 @@ export const SyncFailuresTable: React.FC<SyncFailuresTableProps> = ({ items, sea
                           </div>
                         </div>
 
-                        {/* Raw error */}
-                        <div>
-                          <p className="text-xs font-medium text-gray-500 mb-1">Full Error</p>
-                          <pre className="text-xs text-gray-600 bg-white border border-gray-200 rounded-lg p-3 overflow-auto max-h-40 whitespace-pre-wrap break-all">
-                            {item.error}
-                          </pre>
-                        </div>
+                        {/* Raw error, or the confirmed tx if this attempt succeeded */}
+                        {item.error ? (
+                          <div>
+                            <p className="text-xs font-medium text-gray-500 mb-1">Full Error</p>
+                            <pre className="text-xs text-gray-600 bg-white border border-gray-200 rounded-lg p-3 overflow-auto max-h-40 whitespace-pre-wrap break-all">
+                              {item.error}
+                            </pre>
+                          </div>
+                        ) : (
+                          item.txHash && (
+                            <div>
+                              <p className="text-xs font-medium text-gray-500 mb-1">
+                                Confirmed Transaction
+                              </p>
+                              <p className="text-xs font-mono text-gray-600 break-all">
+                                {item.txHash} (block {item.blockNumber})
+                              </p>
+                            </div>
+                          )
+                        )}
                       </div>
                     </td>
                   </tr>

@@ -36,6 +36,7 @@ vi.mock('@/features/Sharing/services/sharingService', () => ({
   SharingService: {
     grantEncryptionAccess: vi.fn(),
     revokeEncryptionAccess: vi.fn(),
+    prepareEncryptionAccessRevoke: vi.fn(),
   },
 }));
 
@@ -63,6 +64,10 @@ describe('PermissionsService.revokeRoleBatch (orchestration)', () => {
       txHash: '0xdefault',
       blockNumber: 0,
     });
+    // Encryption revokes are tested in sharingService's own suite — default to "no-op" (as if
+    // there's no wrappedKey to deactivate) so these tests can focus on role/history/chain
+    // behavior without needing real key material.
+    vi.mocked(SharingService.prepareEncryptionAccessRevoke).mockResolvedValue(null);
     await seedUser(db, OWNER, '0xOwnerWallet');
     await seedUser(db, VIEWER, '0xViewerCallerWallet');
     await seedUser(db, TARGET, '0xTargetWallet');
@@ -88,8 +93,16 @@ describe('PermissionsService.revokeRoleBatch (orchestration)', () => {
       expect.arrayContaining([RECORD_A, RECORD_B]),
       '0xTargetWallet'
     );
-    expect(SharingService.revokeEncryptionAccess).toHaveBeenCalledWith(RECORD_A, TARGET, OWNER);
-    expect(SharingService.revokeEncryptionAccess).toHaveBeenCalledWith(RECORD_B, TARGET, OWNER);
+    expect(SharingService.prepareEncryptionAccessRevoke).toHaveBeenCalledWith(
+      RECORD_A,
+      TARGET,
+      OWNER
+    );
+    expect(SharingService.prepareEncryptionAccessRevoke).toHaveBeenCalledWith(
+      RECORD_B,
+      TARGET,
+      OWNER
+    );
 
     const recordA = await getDoc(doc(db, 'records', RECORD_A));
     expect(recordA.data()?.viewers).toEqual([]);
@@ -173,7 +186,7 @@ describe('PermissionsService.revokeRoleBatch (orchestration)', () => {
     expect(BlockchainRoleManagerService.revokeRoleBatch).not.toHaveBeenCalled();
   });
 
-  it('leaves Firestore untouched and logs a sync-queue failure when the blockchain batch call rejects', async () => {
+  it('keeps the Firestore removals when the blockchain batch call rejects, and logs it for reconciliation', async () => {
     await seedRecord(db, RECORD_A, { owners: [OWNER], viewers: [TARGET] });
     setCaller(OWNER);
 
@@ -181,15 +194,29 @@ describe('PermissionsService.revokeRoleBatch (orchestration)', () => {
       new Error('transaction reverted')
     );
 
-    await expect(PermissionsService.revokeRoleBatch([RECORD_A], TARGET)).rejects.toThrow(
-      'transaction reverted'
-    );
+    // Firestore-first: the chain call is best-effort and does not revert the removal that
+    // already succeeded.
+    await expect(
+      PermissionsService.revokeRoleBatch([RECORD_A], TARGET)
+    ).resolves.toBeUndefined();
 
     const recordA = await getDoc(doc(db, 'records', RECORD_A));
-    expect(recordA.data()?.viewers).toEqual([TARGET]);
+    expect(recordA.data()?.viewers).toEqual([]);
 
-    const failures = await getDocs(collection(db, 'blockchainSyncQueue'));
-    expect(failures.size).toBe(1);
-    expect(failures.docs[0]!.data().action).toBe('revokeRoleBatch');
+    const events = await getDocs(collection(db, 'records', RECORD_A, 'permissionHistory'));
+    expect(events.docs[0]!.data().changes).toEqual([
+      { userId: TARGET, action: 'revoked', previousRole: 'viewer', newRole: null },
+    ]);
+    // No confirmed tx to cite — the audit event still exists, just without a chain reference yet.
+    expect(events.docs[0]!.data().blockchainRef).toBeNull();
+
+    const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+    expect(syncDocs.size).toBe(1);
+    expect(syncDocs.docs[0]!.data()).toMatchObject({
+      status: 'failed',
+      action: 'revokeRoleBatch',
+      error: 'transaction reverted',
+      permissionHistoryPath: [`records/${RECORD_A}/permissionHistory/${events.docs[0]!.id}`],
+    });
   });
 });

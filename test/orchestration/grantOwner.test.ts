@@ -37,6 +37,7 @@ vi.mock('@/features/Sharing/services/sharingService', () => ({
   SharingService: {
     grantEncryptionAccess: vi.fn(),
     revokeEncryptionAccess: vi.fn(),
+    prepareEncryptionAccessGrant: vi.fn(),
   },
 }));
 
@@ -66,6 +67,10 @@ describe('PermissionsService.grantOwner (orchestration)', () => {
     await seedUser(db, SUBJECT_ONLY, '0xSubjectOnlyWallet');
     await seedUser(db, STRANGER, '0xStrangerWallet');
     await seedUser(db, TARGET, '0xTargetWallet');
+    // Encryption grants are tested in sharingService's own suite — default to "no-op" (as if
+    // the receiver already has active access) so these tests can focus on role/history/chain
+    // behavior without needing real key material.
+    vi.mocked(SharingService.prepareEncryptionAccessGrant).mockResolvedValue(null);
   });
 
   afterAll(() => {
@@ -88,7 +93,11 @@ describe('PermissionsService.grantOwner (orchestration)', () => {
       '0xTargetWallet',
       'owner'
     );
-    expect(SharingService.grantEncryptionAccess).toHaveBeenCalledWith(RECORD_ID, TARGET, OWNER);
+    expect(SharingService.prepareEncryptionAccessGrant).toHaveBeenCalledWith(
+      RECORD_ID,
+      TARGET,
+      OWNER
+    );
 
     const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
     expect(recordSnap.data()?.owners).toEqual([OWNER, TARGET]);
@@ -149,7 +158,7 @@ describe('PermissionsService.grantOwner (orchestration)', () => {
       'Target user does not exist or has no profile'
     );
     expect(BlockchainRoleManagerService.grantRole).not.toHaveBeenCalled();
-    expect(SharingService.grantEncryptionAccess).not.toHaveBeenCalled();
+    expect(SharingService.prepareEncryptionAccessGrant).not.toHaveBeenCalled();
   });
 
   it('regression: denies a caller who is only a subject, with no other role, even when no owner exists', async () => {
@@ -256,7 +265,7 @@ describe('PermissionsService.grantOwner (orchestration)', () => {
     ]);
   });
 
-  it('leaves Firestore untouched and logs a sync-queue failure when the blockchain call rejects', async () => {
+  it('keeps the Firestore grant when the blockchain call rejects, and logs it for reconciliation', async () => {
     await seedRecord(db, RECORD_ID, { owners: [OWNER] });
     setCaller(OWNER);
 
@@ -264,16 +273,33 @@ describe('PermissionsService.grantOwner (orchestration)', () => {
       new Error('transaction reverted')
     );
 
-    await expect(PermissionsService.grantOwner(RECORD_ID, TARGET)).rejects.toThrow(
-      'transaction reverted'
+    // Firestore-first: the chain call is best-effort and does not revert the grant that
+    // already succeeded, so this resolves rather than throwing.
+    await expect(PermissionsService.grantOwner(RECORD_ID, TARGET)).resolves.toBeUndefined();
+
+    expect(SharingService.prepareEncryptionAccessGrant).toHaveBeenCalledWith(
+      RECORD_ID,
+      TARGET,
+      OWNER
     );
 
-    expect(SharingService.grantEncryptionAccess).not.toHaveBeenCalled();
     const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
-    expect(recordSnap.data()?.owners).toEqual([OWNER]);
+    expect(recordSnap.data()?.owners).toEqual([OWNER, TARGET]);
 
-    const failures = await getDocs(collection(db, 'blockchainSyncQueue'));
-    expect(failures.size).toBe(1);
-    expect(failures.docs[0]!.data().action).toBe('grantRole');
+    const events = await getDocs(collection(db, 'records', RECORD_ID, 'permissionHistory'));
+    expect(events.docs[0]!.data().changes).toEqual([
+      { userId: TARGET, action: 'granted', previousRole: null, newRole: 'owner' },
+    ]);
+    // No confirmed tx to cite — the audit event still exists, just without a chain reference yet.
+    expect(events.docs[0]!.data().blockchainRef).toBeNull();
+
+    const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+    expect(syncDocs.size).toBe(1);
+    expect(syncDocs.docs[0]!.data()).toMatchObject({
+      status: 'failed',
+      action: 'grantRole',
+      error: 'transaction reverted',
+      permissionHistoryPath: `records/${RECORD_ID}/permissionHistory/${events.docs[0]!.id}`,
+    });
   });
 });

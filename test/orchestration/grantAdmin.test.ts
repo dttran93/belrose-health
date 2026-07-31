@@ -38,6 +38,7 @@ vi.mock('@/features/Sharing/services/sharingService', () => ({
   SharingService: {
     grantEncryptionAccess: vi.fn(),
     revokeEncryptionAccess: vi.fn(),
+    prepareEncryptionAccessGrant: vi.fn(),
   },
 }));
 
@@ -69,6 +70,10 @@ describe('PermissionsService.grantAdmin (orchestration)', () => {
     await seedUser(db, SUBJECT_ONLY, '0xSubjectOnlyWallet');
     await seedUser(db, STRANGER, '0xStrangerWallet');
     await seedUser(db, TARGET, '0xTargetWallet');
+    // Encryption grants are tested in sharingService's own suite — default to "no-op" (as if
+    // the receiver already has active access) so these tests can focus on role/history/chain
+    // behavior without needing real key material.
+    vi.mocked(SharingService.prepareEncryptionAccessGrant).mockResolvedValue(null);
   });
 
   afterAll(() => {
@@ -91,7 +96,11 @@ describe('PermissionsService.grantAdmin (orchestration)', () => {
       '0xTargetWallet',
       'administrator'
     );
-    expect(SharingService.grantEncryptionAccess).toHaveBeenCalledWith(RECORD_ID, TARGET, OWNER);
+    expect(SharingService.prepareEncryptionAccessGrant).toHaveBeenCalledWith(
+      RECORD_ID,
+      TARGET,
+      OWNER
+    );
 
     const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
     expect(recordSnap.data()?.administrators).toEqual([TARGET]);
@@ -100,6 +109,23 @@ describe('PermissionsService.grantAdmin (orchestration)', () => {
     expect(events.docs[0]!.data().changes).toEqual([
       { userId: TARGET, action: 'granted', previousRole: null, newRole: 'administrator' },
     ]);
+    // blockchainRef starts null in the atomic Firestore write and is filled in once the
+    // (mocked, successful) chain call resolves.
+    expect(events.docs[0]!.data().blockchainRef).toMatchObject({
+      txHash: '0xgrant',
+      blockNumber: 1,
+    });
+
+    // blockchainSyncQueue now records every attempt, not just failures — confirmed here.
+    const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+    expect(syncDocs.size).toBe(1);
+    expect(syncDocs.docs[0]!.data()).toMatchObject({
+      status: 'confirmed',
+      action: 'grantRole',
+      txHash: '0xgrant',
+      blockNumber: 1,
+      permissionHistoryPath: `records/${RECORD_ID}/permissionHistory/${events.docs[0]!.id}`,
+    });
   });
 
   it('admin upgrades an existing sharer to administrator via changeRole, not grantRole', async () => {
@@ -177,7 +203,7 @@ describe('PermissionsService.grantAdmin (orchestration)', () => {
       'Target user does not exist or has no profile'
     );
     expect(BlockchainRoleManagerService.grantRole).not.toHaveBeenCalled();
-    expect(SharingService.grantEncryptionAccess).not.toHaveBeenCalled();
+    expect(SharingService.prepareEncryptionAccessGrant).not.toHaveBeenCalled();
   });
 
   it('denies a plain sharer', async () => {
@@ -220,7 +246,7 @@ describe('PermissionsService.grantAdmin (orchestration)', () => {
     expect(BlockchainRoleManagerService.grantRole).not.toHaveBeenCalled();
   });
 
-  it('leaves Firestore untouched and logs a sync-queue failure when the blockchain call rejects', async () => {
+  it('keeps the Firestore grant when the blockchain call rejects, and logs it for reconciliation', async () => {
     await seedRecord(db, RECORD_ID, { owners: [OWNER] });
     setCaller(OWNER);
 
@@ -228,16 +254,38 @@ describe('PermissionsService.grantAdmin (orchestration)', () => {
       new Error('transaction reverted')
     );
 
-    await expect(PermissionsService.grantAdmin(RECORD_ID, TARGET)).rejects.toThrow(
-      'transaction reverted'
+    // Firestore-first: the chain call is best-effort and does not revert the grant that
+    // already succeeded, so this resolves rather than throwing.
+    await expect(PermissionsService.grantAdmin(RECORD_ID, TARGET)).resolves.toBeUndefined();
+
+    expect(SharingService.prepareEncryptionAccessGrant).toHaveBeenCalledWith(
+      RECORD_ID,
+      TARGET,
+      OWNER
     );
 
-    expect(SharingService.grantEncryptionAccess).not.toHaveBeenCalled();
     const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
-    expect(recordSnap.data()?.administrators).toEqual([]);
+    expect(recordSnap.data()?.administrators).toEqual([TARGET]);
 
-    const failures = await getDocs(collection(db, 'blockchainSyncQueue'));
-    expect(failures.size).toBe(1);
-    expect(failures.docs[0]!.data().action).toBe('grantRole');
+    const events = await getDocs(collection(db, 'records', RECORD_ID, 'permissionHistory'));
+    expect(events.docs[0]!.data().changes).toEqual([
+      { userId: TARGET, action: 'granted', previousRole: null, newRole: 'administrator' },
+    ]);
+    // No confirmed tx to cite — the audit event still exists, just without a chain reference yet.
+    expect(events.docs[0]!.data().blockchainRef).toBeNull();
+
+    const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+    expect(syncDocs.size).toBe(1);
+    expect(syncDocs.docs[0]!.data()).toMatchObject({
+      status: 'failed',
+      action: 'grantRole',
+      error: 'transaction reverted',
+      permissionHistoryPath: `records/${RECORD_ID}/permissionHistory/${events.docs[0]!.id}`,
+    });
+    // chainId/contractAddress are known upfront (static config, not outcome data), so a failed
+    // attempt still carries them — unlike txHash/blockNumber, which only exist once confirmed.
+    expect(syncDocs.docs[0]!.data().chainId).toEqual(expect.any(Number));
+    expect(syncDocs.docs[0]!.data().contractAddress).toEqual(expect.any(String));
+    expect(syncDocs.docs[0]!.data().txHash).toBeUndefined();
   });
 });

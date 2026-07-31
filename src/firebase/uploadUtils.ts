@@ -167,6 +167,16 @@ export async function createFirestoreRecord({
     uploadedBy: user.uid,
     owners: fileObj.owners || [],
     administrators: administrators,
+    // Always present, even empty — sharers/viewers otherwise only ever get created lazily by
+    // the first arrayUnion() a share/grant performs, and subjects only by the first anchor.
+    // Firestore rules reading these via bare field access (not .get(key, default)) on a doc
+    // missing the key entirely get an EVALUATION ERROR, not a clean empty-array check — that's
+    // a real bug found live in staging (a sharer's grantViewer call denied with "Missing or
+    // insufficient permissions" on a record that had never had a subject). Rules were hardened
+    // to use .get(..., []) everywhere, but setting these here too closes the gap at the source.
+    sharers: fileObj.sharers || [],
+    viewers: fileObj.viewers || [],
+    subjects: fileObj.subjects || [],
 
     isEncrypted: true,
     isVirtual: fileObj.isVirtual,

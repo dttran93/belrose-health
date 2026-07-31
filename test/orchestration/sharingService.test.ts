@@ -2,12 +2,11 @@
 //
 // Layer 3 (orchestration) — SharingService.
 // Real Firestore (emulator, permissive rules) and the REAL SharingKeyManagementService (actual
-// WebCrypto RSA-OAEP) run for every test here — only EncryptionKeyManager.getSessionKey,
-// RecordDecryptionService.getRecordKey, and EmailInvitationService are mocked, since those are
-// session-state/Cloud-Function concerns owned elsewhere. RecordDecryptionService.getRecordKey is
-// stubbed to return a REAL generated AES-GCM key (not a fake object) so the real wrapKey call
-// downstream has something genuine to wrap — that's what makes the "receiver can actually unwrap
-// it" test below possible.
+// WebCrypto RSA-OAEP) run for every test here — only EncryptionKeyManager.getSessionKey and
+// RecordDecryptionService.getRecordKey are mocked, since those are session-state concerns owned
+// elsewhere. RecordDecryptionService.getRecordKey is stubbed to return a REAL generated AES-GCM
+// key (not a fake object) so the real wrapKey call downstream has something genuine to wrap —
+// that's what makes the "receiver can actually unwrap it" test below possible.
 
 import { beforeEach, afterAll, describe, it, expect, vi } from 'vitest';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
@@ -47,17 +46,10 @@ vi.mock('@/features/Encryption/services/recordDecryptionService', () => ({
   },
 }));
 
-vi.mock('@/features/Sharing/services/emailInvitationService', () => ({
-  EmailInvitationService: {
-    sendShareInvitation: vi.fn(),
-  },
-}));
-
 import { SharingService } from '../../src/features/Sharing/services/sharingService';
 import { SharingKeyManagementService } from '../../src/features/Sharing/services/sharingKeyManagementService';
 import { EncryptionKeyManager } from '@/features/Encryption/services/encryptionKeyManager';
 import { RecordDecryptionService } from '@/features/Encryption/services/recordDecryptionService';
-import { EmailInvitationService } from '@/features/Sharing/services/emailInvitationService';
 
 const GRANTOR = 'sharing-grantor';
 const TARGET = 'sharing-target';
@@ -90,11 +82,6 @@ describe('SharingService (orchestration)', () => {
     defaultRecordKey = await generateAesKey();
     vi.mocked(EncryptionKeyManager.getSessionKey).mockResolvedValue({} as CryptoKey);
     vi.mocked(RecordDecryptionService.getRecordKey).mockResolvedValue(defaultRecordKey);
-    vi.mocked(EmailInvitationService.sendShareInvitation).mockResolvedValue({
-      success: true,
-      message: 'sent',
-      action: 'signup_required',
-    });
 
     setCaller(GRANTOR);
   });
@@ -339,152 +326,4 @@ describe('SharingService (orchestration)', () => {
     });
   });
 
-  describe('getReceiver', () => {
-    it('throws when the caller is not authenticated', async () => {
-      setCaller(null);
-      await expect(SharingService.getReceiver({ receiverUserId: TARGET })).rejects.toThrow(
-        'User not authenticated'
-      );
-    });
-
-    it('throws when no lookup field is provided', async () => {
-      await expect(SharingService.getReceiver({})).rejects.toThrow(
-        'Either receiver email, wallet address, or user ID must be provided'
-      );
-    });
-
-    describe('by userId', () => {
-      it('returns the profile when it exists and has a public key', async () => {
-        await setDoc(doc(db, 'users', TARGET), { encryption: { publicKey: 'pk' }, displayName: 'Target' });
-
-        const result = await SharingService.getReceiver({ receiverUserId: TARGET });
-
-        expect(result.id).toBe(TARGET);
-        expect(result.data.displayName).toBe('Target');
-      });
-
-      it('throws when the profile does not exist', async () => {
-        await expect(SharingService.getReceiver({ receiverUserId: TARGET })).rejects.toThrow(
-          'Receiver not found. The user may have been deleted.'
-        );
-      });
-
-      it('throws when the profile has no public key', async () => {
-        await setDoc(doc(db, 'users', TARGET), {});
-
-        await expect(SharingService.getReceiver({ receiverUserId: TARGET })).rejects.toThrow(
-          'Receiver has not completed their account setup (encryption keys missing).'
-        );
-      });
-    });
-
-    describe('by email', () => {
-      const EMAIL = 'target@example.com';
-
-      it('sends an invitation and throws when no matching user exists', async () => {
-        await expect(
-          SharingService.getReceiver({ receiverEmail: EMAIL }, { fileName: 'Lab Results' })
-        ).rejects.toThrow(`We sent an invitation to ${EMAIL}!`);
-
-        expect(EmailInvitationService.sendShareInvitation).toHaveBeenCalledWith(
-          expect.objectContaining({ receiverEmail: EMAIL, recordName: 'Lab Results' })
-        );
-      });
-
-      it('sends a reminder and throws when the matching user has not verified their email', async () => {
-        await setDoc(doc(db, 'users', TARGET), { email: EMAIL, emailVerified: false });
-
-        await expect(SharingService.getReceiver({ receiverEmail: EMAIL })).rejects.toThrow(
-          `hasn't verified their email yet`
-        );
-        expect(EmailInvitationService.sendShareInvitation).toHaveBeenCalledTimes(1);
-      });
-
-      it('throws without sending an email when verification status is unknown', async () => {
-        await setDoc(doc(db, 'users', TARGET), { email: EMAIL });
-
-        await expect(SharingService.getReceiver({ receiverEmail: EMAIL })).rejects.toThrow(
-          `Unable to confirm if ${EMAIL} has verified their email`
-        );
-        expect(EmailInvitationService.sendShareInvitation).not.toHaveBeenCalled();
-      });
-
-      it('throws when verified but missing an encryption public key', async () => {
-        await setDoc(doc(db, 'users', TARGET), { email: EMAIL, emailVerified: true });
-
-        await expect(SharingService.getReceiver({ receiverEmail: EMAIL })).rejects.toThrow(
-          'Receiver has not completed their account setup (encryption keys missing).'
-        );
-      });
-
-      it('throws when verified with a public key but no wallet', async () => {
-        await setDoc(doc(db, 'users', TARGET), {
-          email: EMAIL,
-          emailVerified: true,
-          encryption: { publicKey: 'pk' },
-        });
-
-        await expect(SharingService.getReceiver({ receiverEmail: EMAIL })).rejects.toThrow(
-          'Receiver has not set up a wallet.'
-        );
-      });
-
-      it('returns the profile on the full success path', async () => {
-        await setDoc(doc(db, 'users', TARGET), {
-          email: EMAIL,
-          emailVerified: true,
-          encryption: { publicKey: 'pk' },
-          wallet: { address: '0xTarget' },
-        });
-
-        const result = await SharingService.getReceiver({ receiverEmail: EMAIL });
-        expect(result.id).toBe(TARGET);
-        expect(EmailInvitationService.sendShareInvitation).not.toHaveBeenCalled();
-      });
-
-      it('still throws the original "invitation sent" message even if the email send itself fails', async () => {
-        vi.mocked(EmailInvitationService.sendShareInvitation).mockRejectedValue(new Error('SMTP down'));
-
-        await expect(SharingService.getReceiver({ receiverEmail: EMAIL })).rejects.toThrow(
-          `We sent an invitation to ${EMAIL}!`
-        );
-      });
-    });
-
-    describe('by wallet address', () => {
-      const WALLET = '0xTargetWalletAddress';
-
-      it('throws a generic not-found error and never sends an invitation email', async () => {
-        await expect(
-          SharingService.getReceiver({ receiverWalletAddress: '0xNoSuchWallet' })
-        ).rejects.toThrow('Receiver not found. They need a Belrose account to receive shared records.');
-
-        expect(EmailInvitationService.sendShareInvitation).not.toHaveBeenCalled();
-      });
-
-      it('throws when the matched user has no encryption public key', async () => {
-        await setDoc(doc(db, 'users', TARGET), { wallet: { address: WALLET } });
-
-        await expect(SharingService.getReceiver({ receiverWalletAddress: WALLET })).rejects.toThrow(
-          'Receiver has not completed their account setup (encryption keys missing).'
-        );
-        expect(EmailInvitationService.sendShareInvitation).not.toHaveBeenCalled();
-      });
-
-      it('returns the profile on success, ignoring emailVerified entirely since this is not an email lookup', async () => {
-        // The email-unverified/unknown branches in getReceiver are gated on `request.receiverEmail`
-        // — a wallet-only request must never trip them, even when emailVerified is explicitly false.
-        await setDoc(doc(db, 'users', TARGET), {
-          wallet: { address: WALLET },
-          encryption: { publicKey: 'pk' },
-          emailVerified: false,
-        });
-
-        const result = await SharingService.getReceiver({ receiverWalletAddress: WALLET });
-
-        expect(result.id).toBe(TARGET);
-        expect(EmailInvitationService.sendShareInvitation).not.toHaveBeenCalled();
-      });
-    });
-  });
 });

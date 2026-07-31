@@ -36,6 +36,7 @@ vi.mock('@/features/Sharing/services/sharingService', () => ({
   SharingService: {
     grantEncryptionAccess: vi.fn(),
     revokeEncryptionAccess: vi.fn(),
+    prepareEncryptionAccessGrant: vi.fn(),
   },
 }));
 
@@ -69,6 +70,10 @@ describe('PermissionsService.grantRoleBatch (orchestration)', () => {
       txHash: '0xdefault',
       blockNumber: 0,
     });
+    // Encryption grants are tested in sharingService's own suite — default to "no-op" (as if
+    // the receiver already has active access) so these tests can focus on role/history/chain
+    // behavior without needing real key material.
+    vi.mocked(SharingService.prepareEncryptionAccessGrant).mockResolvedValue(null);
     await seedUser(db, OWNER, '0xOwnerWallet');
     await seedUser(db, SHARER, '0xSharerCallerWallet');
     await seedUser(db, SUBJECT_ONLY, '0xSubjectOnlyWallet');
@@ -223,7 +228,7 @@ describe('PermissionsService.grantRoleBatch (orchestration)', () => {
     expect(BlockchainRoleManagerService.grantRoleBatch).not.toHaveBeenCalled();
   });
 
-  it('leaves Firestore untouched and logs a sync-queue failure when the blockchain batch call rejects', async () => {
+  it('keeps the Firestore grants when the blockchain batch call rejects, and logs it for reconciliation', async () => {
     await seedRecord(db, RECORD_A, { owners: [OWNER] });
     setCaller(OWNER);
 
@@ -231,16 +236,29 @@ describe('PermissionsService.grantRoleBatch (orchestration)', () => {
       new Error('transaction reverted')
     );
 
-    await expect(
-      PermissionsService.grantRoleBatch([RECORD_A], TARGET, ['viewer'])
-    ).rejects.toThrow('transaction reverted');
+    // Firestore-first: the chain call is best-effort and does not revert the grant that
+    // already succeeded, so this resolves with the record still counted as processed.
+    const result = await PermissionsService.grantRoleBatch([RECORD_A], TARGET, ['viewer']);
+    expect(result).toEqual([RECORD_A]);
 
     const recordA = await getDoc(doc(db, 'records', RECORD_A));
-    expect(recordA.data()?.viewers).toEqual([]);
+    expect(recordA.data()?.viewers).toEqual([TARGET]);
 
-    const failures = await getDocs(collection(db, 'blockchainSyncQueue'));
-    expect(failures.size).toBe(1);
-    expect(failures.docs[0]!.data().action).toBe('grantRoleBatch');
+    const events = await getDocs(collection(db, 'records', RECORD_A, 'permissionHistory'));
+    expect(events.docs[0]!.data().changes).toEqual([
+      { userId: TARGET, action: 'granted', previousRole: null, newRole: 'viewer' },
+    ]);
+    // No confirmed tx to cite — the audit event still exists, just without a chain reference yet.
+    expect(events.docs[0]!.data().blockchainRef).toBeNull();
+
+    const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+    expect(syncDocs.size).toBe(1);
+    expect(syncDocs.docs[0]!.data()).toMatchObject({
+      status: 'failed',
+      action: 'grantRoleBatch',
+      error: 'transaction reverted',
+      permissionHistoryPath: [`records/${RECORD_A}/permissionHistory/${events.docs[0]!.id}`],
+    });
   });
 
   // ── Suspected bugs: the pre-flight's own copy of the permission rules has drifted from

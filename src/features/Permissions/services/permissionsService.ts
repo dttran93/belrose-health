@@ -6,15 +6,35 @@
  * Integrates with roleInitializationService for first-time blockchain permission setup
  */
 
-import { getFirestore, doc, updateDoc, arrayRemove, arrayUnion, getDoc } from 'firebase/firestore';
+import {
+  getFirestore,
+  doc,
+  collection,
+  updateDoc,
+  writeBatch,
+  arrayRemove,
+  arrayUnion,
+  getDoc,
+  DocumentReference,
+} from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
+import * as Sentry from '@sentry/react';
 import { SharingService } from '@/features/Sharing/services/sharingService';
 import { BlockchainRoleManagerService } from './blockchainRoleManagerService';
 import { getUserProfile } from '@/features/Users/services/userProfileService';
 import { BlockchainSyncQueueService } from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
-import writePermissionChangeEvent from './writePermissionChangeEvent';
-import { buildMemberRegistryRef, BlockchainRef, RecordRole, ROLE_HIERARCHY } from '@belrose/shared';
-import { ethers, id } from 'ethers';
+import {
+  preparePermissionChangeEventData,
+  buildPermissionHistoryDocId,
+} from './writePermissionChangeEvent';
+import {
+  buildMemberRegistryRef,
+  BlockchainRef,
+  PermissionChange,
+  RecordRole,
+  ROLE_HIERARCHY,
+} from '@belrose/shared';
+import { id } from 'ethers';
 import { FileObject } from '@/types/core';
 
 interface RoleEligibility {
@@ -420,9 +440,82 @@ export class PermissionsService {
 
     console.log('🔄 Granting viewer access:', targetUserId);
 
-    // Step 1: Grant viewer role on blockchain
+    const changes: PermissionChange[] = [
+      {
+        userId: targetUserId,
+        action: 'granted', //Always granted, you never upgrade to viewer
+        previousRole: existingRole ?? null,
+        newRole: 'viewer',
+      },
+    ];
 
-    let blockchainRef: BlockchainRef;
+    const historyRef = doc(
+      collection(db, 'records', recordId, 'permissionHistory'),
+      buildPermissionHistoryDocId(targetUserId)
+    );
+
+    // Encryption key material must be prepared before the batch below — this does client-side
+    // RSA-wrapping using the caller's own unlocked session key, which can fail for reasons
+    // (encryption session not unlocked, receiver has no public key) that are validation
+    // failures like the checks above, not infrastructure failures — so it throws before
+    // anything is written, same as those checks.
+    const encryptionGrant = await SharingService.prepareEncryptionAccessGrant(
+      recordId,
+      targetUserId,
+      currentUser.uid
+    );
+
+    // Step 1: Atomic Firestore write — role array + permission history event + wrapped key,
+    // all three or none. A wrapped-key write failing on its own, after the role already
+    // committed, is not something a reconciliation engine could ever fix later (it needs THIS
+    // grantor's session, not just any backend retry) — so it has to be all-or-nothing with the
+    // role write itself, not a separate step. blockchainRef starts null; it's filled in below
+    // once the chain call resolves.
+    try {
+      const eventData = await preparePermissionChangeEventData(
+        recordId,
+        currentUser.uid,
+        changes,
+        recordTitle
+      );
+
+      const batch = writeBatch(db);
+      batch.update(recordRef, {
+        viewers: arrayUnion(targetUserId),
+      });
+      batch.set(historyRef, eventData);
+      if (encryptionGrant) {
+        if (encryptionGrant.isReactivation) {
+          batch.update(encryptionGrant.ref, encryptionGrant.data);
+        } else {
+          batch.set(encryptionGrant.ref, encryptionGrant.data);
+        }
+      }
+      await batch.commit();
+    } catch (firestoreError) {
+      Sentry.captureException(firestoreError, {
+        tags: { feature: 'permissions', action: 'grantViewer', recordId },
+      });
+      throw firestoreError;
+    }
+
+    // Step 2: Blockchain — best-effort, does not revert the Firestore write above. The
+    // permission change already stands regardless of what happens here.
+    const syncRef = await BlockchainSyncQueueService.startAttempt({
+      contract: 'MemberRoleManager',
+      action: 'grantRole',
+      userId: currentUser.uid,
+      userWalletAddress,
+      permissionHistoryPath: historyRef.path,
+      context: {
+        type: 'permission',
+        targetUserId,
+        targetWalletAddress,
+        role: 'viewer',
+        recordId,
+        recordIdHash: id(recordId),
+      },
+    });
 
     try {
       console.log('🔗 Granting viewer role on blockchain...');
@@ -431,7 +524,11 @@ export class PermissionsService {
         targetWalletAddress,
         'viewer'
       );
-      blockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
+
+      const blockchainRef: BlockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
+      await updateDoc(historyRef, { blockchainRef });
+      await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
+
       console.log('✅ Blockchain: Viewer role granted');
     } catch (blockchainError) {
       console.error('⚠️ Blockchain update failed:', blockchainError);
@@ -439,48 +536,8 @@ export class PermissionsService {
       const errorMessage =
         blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
 
-      await BlockchainSyncQueueService.logFailure({
-        contract: 'MemberRoleManager',
-        action: 'grantRole',
-        userId: currentUser.uid,
-        userWalletAddress: userWalletAddress,
-        error: errorMessage,
-        context: {
-          type: 'permission',
-          targetUserId: targetUserId,
-          targetWalletAddress: targetWalletAddress,
-          role: 'viewer',
-          recordId,
-          recordIdHash: id(recordId),
-        },
-      });
-
-      throw blockchainError;
+      await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
-
-    // Step 2: Grant encryption access
-    await SharingService.grantEncryptionAccess(recordId, targetUserId, currentUser.uid);
-
-    // Step 3: Write event log for audit/notification purposes
-    await writePermissionChangeEvent(
-      recordId,
-      currentUser.uid,
-      [
-        {
-          userId: targetUserId,
-          action: 'granted', //Always granted, you never upgrade to viewer
-          previousRole: existingRole ?? null,
-          newRole: 'viewer',
-        },
-      ],
-      blockchainRef,
-      recordTitle
-    );
-
-    // Step 4: Add to viewers array in Firebase
-    await updateDoc(recordRef, {
-      viewers: arrayUnion(targetUserId),
-    });
 
     console.log('✅ Viewer access granted successfully');
   }
@@ -546,7 +603,90 @@ export class PermissionsService {
 
     console.log('🔄 Granting sharer access:', targetUserId);
 
-    let blockchainRef: BlockchainRef;
+    const changes: PermissionChange[] = [
+      existingRole
+        ? {
+            userId: targetUserId,
+            action: 'upgraded' as const,
+            previousRole: existingRole as Role,
+            newRole: 'sharer' as const,
+          }
+        : {
+            userId: targetUserId,
+            action: 'granted' as const,
+            previousRole: null,
+            newRole: 'sharer' as const,
+          },
+    ];
+
+    const historyRef = doc(
+      collection(db, 'records', recordId, 'permissionHistory'),
+      buildPermissionHistoryDocId(targetUserId)
+    );
+
+    // Encryption key material must be prepared before the batch below — this does client-side
+    // RSA-wrapping using the caller's own unlocked session key, which can fail for reasons
+    // (encryption session not unlocked, receiver has no public key) that are validation
+    // failures like the checks above, not infrastructure failures — so it throws before
+    // anything is written, same as those checks.
+    const encryptionGrant = await SharingService.prepareEncryptionAccessGrant(
+      recordId,
+      targetUserId,
+      currentUser.uid
+    );
+
+    // Step 1: Atomic Firestore write — role arrays + permission history event + wrapped key,
+    // all three or none. A wrapped-key write failing on its own, after the role already
+    // committed, is not something a reconciliation engine could ever fix later (it needs THIS
+    // grantor's session, not just any backend retry) — so it has to be all-or-nothing with the
+    // role write itself, not a separate step. blockchainRef starts null; it's filled in below
+    // once the chain call resolves.
+    try {
+      const eventData = await preparePermissionChangeEventData(
+        recordId,
+        currentUser.uid,
+        changes,
+        recordTitle
+      );
+
+      const batch = writeBatch(db);
+      batch.update(recordRef, {
+        sharers: arrayUnion(targetUserId),
+        viewers: arrayRemove(targetUserId),
+      });
+      batch.set(historyRef, eventData);
+      if (encryptionGrant) {
+        if (encryptionGrant.isReactivation) {
+          batch.update(encryptionGrant.ref, encryptionGrant.data);
+        } else {
+          batch.set(encryptionGrant.ref, encryptionGrant.data);
+        }
+      }
+      await batch.commit();
+    } catch (firestoreError) {
+      Sentry.captureException(firestoreError, {
+        tags: { feature: 'permissions', action: 'grantSharer', recordId },
+      });
+      throw firestoreError;
+    }
+
+    // Step 2: Blockchain — best-effort, does not revert the Firestore write above. The
+    // permission change already stands regardless of what happens here.
+    const syncRef = await BlockchainSyncQueueService.startAttempt({
+      contract: 'MemberRoleManager',
+      action: 'grantRole',
+      userId: currentUser.uid,
+      userWalletAddress,
+      permissionHistoryPath: historyRef.path,
+      context: {
+        type: 'permission',
+        targetUserId,
+        targetWalletAddress,
+        role: 'sharer',
+        recordId,
+        recordIdHash: id(recordId),
+      },
+    });
 
     try {
       console.log('🔗 Granting sharer role on blockchain...');
@@ -555,61 +695,20 @@ export class PermissionsService {
         targetWalletAddress,
         'sharer'
       );
-      blockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
+
+      const blockchainRef: BlockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
+      await updateDoc(historyRef, { blockchainRef });
+      await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
+
       console.log('✅ Blockchain: Sharer role granted');
     } catch (blockchainError) {
       console.error('⚠️ Blockchain update failed:', blockchainError);
+
       const errorMessage =
         blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
-      await BlockchainSyncQueueService.logFailure({
-        contract: 'MemberRoleManager',
-        action: 'grantRole',
-        userId: currentUser.uid,
-        userWalletAddress,
-        error: errorMessage,
-        context: {
-          type: 'permission',
-          targetUserId,
-          targetWalletAddress,
-          role: 'sharer',
-          recordId,
-          recordIdHash: id(recordId),
-        },
-      });
-      throw blockchainError;
+
+      await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
-
-    // Step 2: Grant encryption access
-    await SharingService.grantEncryptionAccess(recordId, targetUserId, currentUser.uid);
-
-    // Step 3: Write event log
-    await writePermissionChangeEvent(
-      recordId,
-      currentUser.uid,
-      [
-        existingRole
-          ? {
-              userId: targetUserId,
-              action: 'upgraded' as const,
-              previousRole: existingRole as Role,
-              newRole: 'sharer' as const,
-            }
-          : {
-              userId: targetUserId,
-              action: 'granted' as const,
-              previousRole: null,
-              newRole: 'sharer' as const,
-            },
-      ],
-      blockchainRef,
-      recordTitle
-    );
-
-    // Step 4: Add to sharers, remove from viewers (highest role only)
-    await updateDoc(recordRef, {
-      sharers: arrayUnion(targetUserId),
-      viewers: arrayRemove(targetUserId),
-    });
 
     console.log('✅ Sharer access granted successfully');
   }
@@ -674,31 +773,110 @@ export class PermissionsService {
 
     console.log('🔄 Granting administrator role:', targetUserId);
 
-    // Step 1: Blockchain - determine action based on existing role
-    // changeRole is in case they're being upgraded from viewer to admin
-    let blockchainRef: BlockchainRef;
     const hasExistingRole = existingRole !== null;
+    const changes: PermissionChange[] = [
+      hasExistingRole
+        ? {
+            userId: targetUserId,
+            action: 'upgraded' as const,
+            previousRole: existingRole as Role, // narrowed — hasExistingRole guarantees non-null
+            newRole: 'administrator' as const,
+          }
+        : {
+            userId: targetUserId,
+            action: 'granted' as const,
+            previousRole: null,
+            newRole: 'administrator' as const,
+          },
+    ];
+
+    const historyRef = doc(
+      collection(db, 'records', recordId, 'permissionHistory'),
+      buildPermissionHistoryDocId(targetUserId)
+    );
+
+    // Step 1: Encryption Key preparation. Preparation function performs various checks
+    // ahead of wrappedKey write (is there existing one, is this a guest etc.). Only performs checks and not writes
+    // because the wrappedKey write needs to be atomic with role array + history event below.
+    // If preparation fails, we won't be able to write an access key and there's no point in granting permission.
+    const encryptionGrant = await SharingService.prepareEncryptionAccessGrant(
+      recordId,
+      targetUserId,
+      currentUser.uid
+    );
+
+    // Step 2: Atomic Firestore write — role arrays + permission history event + wrapped key,
+    // all three or none. blockchainRef starts null; it's filled in below once the chain call resolves.
+    try {
+      // Step 2A: Prepare permissionHistory event data. This is done here so we can include the encrypted title if available.
+      const eventData = await preparePermissionChangeEventData(
+        recordId,
+        currentUser.uid,
+        changes,
+        recordTitle
+      );
+
+      // Step 2B: Write role array + permissionHistory event + wrapped key in a single batch
+      const batch = writeBatch(db);
+      batch.update(recordRef, {
+        administrators: arrayUnion(targetUserId),
+        sharers: arrayRemove(targetUserId),
+        viewers: arrayRemove(targetUserId),
+      });
+      batch.set(historyRef, eventData);
+      if (encryptionGrant) {
+        if (encryptionGrant.isReactivation) {
+          batch.update(encryptionGrant.ref, encryptionGrant.data);
+        } else {
+          batch.set(encryptionGrant.ref, encryptionGrant.data);
+        }
+      }
+      await batch.commit();
+    } catch (firestoreError) {
+      Sentry.captureException(firestoreError, {
+        tags: { feature: 'permissions', action: 'grantAdmin', recordId },
+      });
+      throw firestoreError;
+    }
+
+    // Step 3: Blockchain — best-effort, does not revert the Firestore write above. The
+    // permission change already stands regardless of what happens here.
+    const syncRef = await BlockchainSyncQueueService.startAttempt({
+      contract: 'MemberRoleManager',
+      action: hasExistingRole ? 'changeRole' : 'grantRole',
+      userId: currentUser.uid,
+      userWalletAddress,
+      permissionHistoryPath: historyRef.path,
+      context: {
+        type: 'permission',
+        targetUserId,
+        targetWalletAddress,
+        role: 'administrator',
+        recordId,
+        recordIdHash: id(recordId),
+      },
+    });
 
     try {
       console.log(
         `🔗 ${hasExistingRole ? 'Upgrading to' : 'Granting'} administrator role on blockchain...`
       );
 
-      if (hasExistingRole) {
-        const tx = await BlockchainRoleManagerService.changeRole(
-          recordId,
-          targetWalletAddress,
-          'administrator'
-        );
-        blockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
-      } else {
-        const tx = await BlockchainRoleManagerService.grantRole(
-          recordId,
-          targetWalletAddress,
-          'administrator'
-        );
-        blockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
-      }
+      const tx = hasExistingRole
+        ? await BlockchainRoleManagerService.changeRole(
+            recordId,
+            targetWalletAddress,
+            'administrator'
+          )
+        : await BlockchainRoleManagerService.grantRole(
+            recordId,
+            targetWalletAddress,
+            'administrator'
+          );
+
+      const blockchainRef: BlockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
+      await updateDoc(historyRef, { blockchainRef });
+      await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
 
       console.log('✅ Blockchain: Administrator role set');
     } catch (blockchainError) {
@@ -707,57 +885,8 @@ export class PermissionsService {
       const errorMessage =
         blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
 
-      await BlockchainSyncQueueService.logFailure({
-        contract: 'MemberRoleManager',
-        action: hasExistingRole ? 'changeRole' : 'grantRole',
-        userId: currentUser.uid,
-        userWalletAddress: userWalletAddress,
-        error: errorMessage,
-        context: {
-          type: 'permission',
-          targetUserId: targetUserId,
-          targetWalletAddress: targetWalletAddress,
-          role: 'administrator',
-          recordId,
-          recordIdHash: id(recordId),
-        },
-      });
-
-      throw blockchainError;
+      await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
-
-    // Step 2: Grant encryption access
-    await SharingService.grantEncryptionAccess(recordId, targetUserId, currentUser.uid);
-
-    // Step 3: Write event log
-    await writePermissionChangeEvent(
-      recordId,
-      currentUser.uid,
-      [
-        hasExistingRole
-          ? {
-              userId: targetUserId,
-              action: 'upgraded' as const,
-              previousRole: existingRole as Role, // narrowed — hasExistingRole guarantees non-null
-              newRole: 'administrator' as const,
-            }
-          : {
-              userId: targetUserId,
-              action: 'granted' as const,
-              previousRole: null,
-              newRole: 'administrator' as const,
-            },
-      ],
-      blockchainRef,
-      recordTitle
-    );
-
-    // Step 4: Update arrays - add to admins, remove from lower roles (highest role only)
-    await updateDoc(recordRef, {
-      administrators: arrayUnion(targetUserId),
-      sharers: arrayRemove(targetUserId),
-      viewers: arrayRemove(targetUserId),
-    });
 
     console.log('✅ Administrator access granted successfully');
   }
@@ -820,88 +949,116 @@ export class PermissionsService {
 
     console.log('🔄 Granting owner access:', targetUserId);
 
-    // Step 1: Blockchain - determine action based on existing role
-    let blockchainRef: BlockchainRef;
     const hasExistingRole = existingRole !== null;
+    const changes: PermissionChange[] = [
+      hasExistingRole
+        ? {
+            userId: targetUserId,
+            action: 'upgraded' as const,
+            previousRole: existingRole as Role,
+            newRole: 'owner' as const,
+          }
+        : {
+            userId: targetUserId,
+            action: 'granted' as const,
+            previousRole: null,
+            newRole: 'owner' as const,
+          },
+    ];
+
+    const historyRef = doc(
+      collection(db, 'records', recordId, 'permissionHistory'),
+      buildPermissionHistoryDocId(targetUserId)
+    );
+
+    // Encryption key material must be prepared before the batch below — this does client-side
+    // RSA-wrapping using the caller's own unlocked session key, which can fail for reasons
+    // (encryption session not unlocked, receiver has no public key) that are validation
+    // failures like the checks above, not infrastructure failures — so it throws before
+    // anything is written, same as those checks.
+    const encryptionGrant = await SharingService.prepareEncryptionAccessGrant(
+      recordId,
+      targetUserId,
+      currentUser.uid
+    );
+
+    // Step 1: Atomic Firestore write — role arrays + permission history event + wrapped key,
+    // all three or none. A wrapped-key write failing on its own, after the role already
+    // committed, is not something a reconciliation engine could ever fix later (it needs THIS
+    // grantor's session, not just any backend retry) — so it has to be all-or-nothing with the
+    // role write itself, not a separate step. blockchainRef starts null; it's filled in below
+    // once the chain call resolves.
+    try {
+      const eventData = await preparePermissionChangeEventData(
+        recordId,
+        currentUser.uid,
+        changes,
+        recordTitle
+      );
+
+      const batch = writeBatch(db);
+      batch.update(recordRef, {
+        owners: arrayUnion(targetUserId),
+        administrators: arrayRemove(targetUserId),
+        sharers: arrayRemove(targetUserId),
+        viewers: arrayRemove(targetUserId),
+      });
+      batch.set(historyRef, eventData);
+      if (encryptionGrant) {
+        if (encryptionGrant.isReactivation) {
+          batch.update(encryptionGrant.ref, encryptionGrant.data);
+        } else {
+          batch.set(encryptionGrant.ref, encryptionGrant.data);
+        }
+      }
+      await batch.commit();
+    } catch (firestoreError) {
+      Sentry.captureException(firestoreError, {
+        tags: { feature: 'permissions', action: 'grantOwner', recordId },
+      });
+      throw firestoreError;
+    }
+
+    // Step 2: Blockchain — best-effort, does not revert the Firestore write above. The
+    // permission change already stands regardless of what happens here.
+    const syncRef = await BlockchainSyncQueueService.startAttempt({
+      contract: 'MemberRoleManager',
+      action: hasExistingRole ? 'changeRole' : 'grantRole',
+      userId: currentUser.uid,
+      userWalletAddress,
+      permissionHistoryPath: historyRef.path,
+      context: {
+        type: 'permission',
+        targetUserId,
+        targetWalletAddress,
+        role: 'owner',
+        recordId,
+        recordIdHash: id(recordId),
+      },
+    });
 
     try {
       console.log(
         `🔗 ${hasExistingRole ? 'Upgrading to' : 'Granting'} owner role on blockchain...`
       );
 
-      if (hasExistingRole) {
-        const tx = await BlockchainRoleManagerService.changeRole(
-          recordId,
-          targetWalletAddress,
-          'owner'
-        );
-        blockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
-      } else {
-        const tx = await BlockchainRoleManagerService.grantRole(
-          recordId,
-          targetWalletAddress,
-          'owner'
-        );
-        blockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
-      }
+      const tx = hasExistingRole
+        ? await BlockchainRoleManagerService.changeRole(recordId, targetWalletAddress, 'owner')
+        : await BlockchainRoleManagerService.grantRole(recordId, targetWalletAddress, 'owner');
+
+      const blockchainRef: BlockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
+      await updateDoc(historyRef, { blockchainRef });
+      await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
 
       console.log('✅ Blockchain: Owner role set');
     } catch (blockchainError) {
       console.error('⚠️ Blockchain update failed:', blockchainError);
+
       const errorMessage =
         blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
-      await BlockchainSyncQueueService.logFailure({
-        contract: 'MemberRoleManager',
-        action: hasExistingRole ? 'changeRole' : 'grantRole',
-        userId: currentUser.uid,
-        userWalletAddress: userWalletAddress,
-        error: errorMessage,
-        context: {
-          type: 'permission',
-          targetUserId: targetUserId,
-          targetWalletAddress: targetWalletAddress,
-          role: 'owner',
-          recordId,
-          recordIdHash: id(recordId),
-        },
-      });
 
-      throw blockchainError;
+      await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
-
-    // Step 2: Grant encryption access
-    await SharingService.grantEncryptionAccess(recordId, targetUserId, currentUser.uid);
-
-    // Step 3: Write event log
-    await writePermissionChangeEvent(
-      recordId,
-      currentUser.uid,
-      [
-        hasExistingRole
-          ? {
-              userId: targetUserId,
-              action: 'upgraded' as const,
-              previousRole: existingRole as Role,
-              newRole: 'owner' as const,
-            }
-          : {
-              userId: targetUserId,
-              action: 'granted' as const,
-              previousRole: null,
-              newRole: 'owner' as const,
-            },
-      ],
-      blockchainRef,
-      recordTitle
-    );
-
-    // Step 4: Update arrays - add to owners, remove from lower roles (highest role only)
-    await updateDoc(recordRef, {
-      owners: arrayUnion(targetUserId),
-      administrators: arrayRemove(targetUserId),
-      sharers: arrayRemove(targetUserId),
-      viewers: arrayRemove(targetUserId),
-    });
 
     console.log('✅ Owner access granted successfully');
   }
@@ -985,13 +1142,83 @@ export class PermissionsService {
 
     console.log('🔄 Removing viewer access:', targetUserId);
 
-    // Step 1: Revoke role on blockchain
-    let blockchainRef: BlockchainRef;
+    const changes: PermissionChange[] = [
+      {
+        userId: targetUserId,
+        action: 'revoked',
+        previousRole: 'viewer',
+        newRole: null,
+      },
+    ];
+
+    const historyRef = doc(
+      collection(db, 'records', recordId, 'permissionHistory'),
+      buildPermissionHistoryDocId(targetUserId)
+    );
+
+    // Unlike grant, this has no crypto dependency on the caller's session — it's a metadata-only
+    // flip, recoverable later by anyone if it ever failed on its own. Still prepared before the
+    // batch and included in it, for consistency and so the sharing dashboard's status is never
+    // even transiently wrong.
+    const encryptionRevoke = await SharingService.prepareEncryptionAccessRevoke(
+      recordId,
+      targetUserId,
+      currentUser.uid
+    );
+
+    // Step 1: Atomic Firestore write — role array + permission history event + wrapped-key
+    // deactivation, all three or none. blockchainRef starts null; it's filled in below once
+    // the chain call resolves.
+    try {
+      const eventData = await preparePermissionChangeEventData(
+        recordId,
+        currentUser.uid,
+        changes,
+        recordTitle
+      );
+
+      const batch = writeBatch(db);
+      batch.update(recordRef, {
+        viewers: arrayRemove(targetUserId),
+      });
+      batch.set(historyRef, eventData);
+      if (encryptionRevoke) {
+        batch.update(encryptionRevoke.ref, encryptionRevoke.data);
+      }
+      await batch.commit();
+    } catch (firestoreError) {
+      Sentry.captureException(firestoreError, {
+        tags: { feature: 'permissions', action: 'removeViewer', recordId },
+      });
+      throw firestoreError;
+    }
+
+    // Step 2: Blockchain — best-effort, does not revert the Firestore write above. The
+    // permission change already stands regardless of what happens here.
+    const syncRef = await BlockchainSyncQueueService.startAttempt({
+      contract: 'MemberRoleManager',
+      action: 'revokeRole',
+      userId: currentUser.uid,
+      userWalletAddress,
+      permissionHistoryPath: historyRef.path,
+      context: {
+        type: 'permission',
+        targetUserId,
+        targetWalletAddress,
+        role: 'viewer',
+        recordId,
+        recordIdHash: id(recordId),
+      },
+    });
 
     try {
       console.log('🔗 Revoking role on blockchain...');
       const tx = await BlockchainRoleManagerService.revokeRole(recordId, targetWalletAddress);
-      blockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
+
+      const blockchainRef: BlockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
+      await updateDoc(historyRef, { blockchainRef });
+      await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
+
       console.log('✅ Blockchain: Role revoked');
     } catch (blockchainError) {
       console.error('⚠️ Blockchain update failed:', blockchainError);
@@ -999,48 +1226,8 @@ export class PermissionsService {
       const errorMessage =
         blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
 
-      await BlockchainSyncQueueService.logFailure({
-        contract: 'MemberRoleManager',
-        action: 'revokeRole',
-        userId: currentUser.uid,
-        userWalletAddress: userWalletAddress,
-        error: errorMessage,
-        context: {
-          type: 'permission',
-          targetUserId,
-          targetWalletAddress: targetWalletAddress,
-          role: 'viewer',
-          recordId,
-          recordIdHash: id(recordId),
-        },
-      });
-
-      throw blockchainError;
+      await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
-
-    // Step 2: Revoke encryption access
-    await SharingService.revokeEncryptionAccess(recordId, targetUserId, currentUser.uid);
-
-    // Step 3: Write event log
-    await writePermissionChangeEvent(
-      recordId,
-      currentUser.uid,
-      [
-        {
-          userId: targetUserId,
-          action: 'revoked',
-          previousRole: 'viewer',
-          newRole: null,
-        },
-      ],
-      blockchainRef,
-      recordTitle
-    );
-
-    // Step 4: Remove from viewers array
-    await updateDoc(recordRef, {
-      viewers: arrayRemove(targetUserId),
-    });
 
     console.log('✅ Viewer access removed successfully');
   }
@@ -1123,80 +1310,104 @@ export class PermissionsService {
     console.log('🔄 Removing sharer access:', targetUserId);
 
     const demoteToViewer = options?.demoteToViewer ?? false;
+    const changes: PermissionChange[] = [
+      demoteToViewer
+        ? {
+            userId: targetUserId,
+            action: 'downgraded' as const,
+            previousRole: 'sharer' as const,
+            newRole: 'viewer' as const,
+          }
+        : {
+            userId: targetUserId,
+            action: 'revoked' as const,
+            previousRole: 'sharer' as const,
+            newRole: null,
+          },
+    ];
 
-    let blockchainRef: BlockchainRef;
-
-    try {
-      if (demoteToViewer) {
-        console.log('🔗 Demoting sharer to viewer on blockchain...');
-        const tx = await BlockchainRoleManagerService.changeRole(
-          recordId,
-          targetWalletAddress,
-          'viewer'
-        );
-        blockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
-        console.log('✅ Blockchain: Sharer demoted to viewer');
-      } else {
-        console.log('🔗 Revoking sharer role on blockchain...');
-        const tx = await BlockchainRoleManagerService.revokeRole(recordId, targetWalletAddress);
-        blockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
-        console.log('✅ Blockchain: Sharer role revoked');
-      }
-    } catch (blockchainError) {
-      console.error('⚠️ Blockchain update failed:', blockchainError);
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
-      await BlockchainSyncQueueService.logFailure({
-        contract: 'MemberRoleManager',
-        action: demoteToViewer ? 'changeRole' : 'revokeRole',
-        userId: currentUser.uid,
-        userWalletAddress,
-        error: errorMessage,
-        context: {
-          type: 'permission',
-          targetUserId,
-          targetWalletAddress,
-          role: 'sharer',
-          recordId,
-          recordIdHash: id(recordId),
-        },
-      });
-      throw blockchainError;
-    }
-
-    // Step 2: Revoke encryption access (only on full revoke — viewer still needs the key)
-    if (!demoteToViewer) {
-      await SharingService.revokeEncryptionAccess(recordId, targetUserId, currentUser.uid);
-    }
-
-    // Step 3: Write event log
-    await writePermissionChangeEvent(
-      recordId,
-      currentUser.uid,
-      [
-        demoteToViewer
-          ? {
-              userId: targetUserId,
-              action: 'downgraded' as const,
-              previousRole: 'sharer' as const,
-              newRole: 'viewer' as const,
-            }
-          : {
-              userId: targetUserId,
-              action: 'revoked' as const,
-              previousRole: 'sharer' as const,
-              newRole: null,
-            },
-      ],
-      blockchainRef,
-      recordTitle
+    const historyRef = doc(
+      collection(db, 'records', recordId, 'permissionHistory'),
+      buildPermissionHistoryDocId(targetUserId)
     );
 
-    // Step 4: Update role arrays
-    await updateDoc(recordRef, {
-      sharers: arrayRemove(targetUserId),
-      ...(demoteToViewer && { viewers: arrayUnion(targetUserId) }),
+    // Only a full revoke drops encryption access — a viewer demotion still needs the key.
+    const encryptionRevoke = demoteToViewer
+      ? null
+      : await SharingService.prepareEncryptionAccessRevoke(recordId, targetUserId, currentUser.uid);
+
+    // Step 1: Atomic Firestore write — role arrays + permission history event + wrapped-key
+    // deactivation (full revoke only), all together or none. blockchainRef starts null; it's
+    // filled in below once the chain call resolves.
+    try {
+      const eventData = await preparePermissionChangeEventData(
+        recordId,
+        currentUser.uid,
+        changes,
+        recordTitle
+      );
+
+      const batch = writeBatch(db);
+      batch.update(recordRef, {
+        sharers: arrayRemove(targetUserId),
+        ...(demoteToViewer && { viewers: arrayUnion(targetUserId) }),
+      });
+      batch.set(historyRef, eventData);
+      if (encryptionRevoke) {
+        batch.update(encryptionRevoke.ref, encryptionRevoke.data);
+      }
+      await batch.commit();
+    } catch (firestoreError) {
+      Sentry.captureException(firestoreError, {
+        tags: { feature: 'permissions', action: 'removeSharer', recordId },
+      });
+      throw firestoreError;
+    }
+
+    // Step 2: Blockchain — best-effort, does not revert the Firestore write above. The
+    // permission change already stands regardless of what happens here.
+    const syncRef = await BlockchainSyncQueueService.startAttempt({
+      contract: 'MemberRoleManager',
+      action: demoteToViewer ? 'changeRole' : 'revokeRole',
+      userId: currentUser.uid,
+      userWalletAddress,
+      permissionHistoryPath: historyRef.path,
+      context: {
+        type: 'permission',
+        targetUserId,
+        targetWalletAddress,
+        role: 'sharer',
+        recordId,
+        recordIdHash: id(recordId),
+      },
     });
+
+    try {
+      console.log(
+        demoteToViewer
+          ? '🔗 Demoting sharer to viewer on blockchain...'
+          : '🔗 Revoking sharer role on blockchain...'
+      );
+
+      const tx = demoteToViewer
+        ? await BlockchainRoleManagerService.changeRole(recordId, targetWalletAddress, 'viewer')
+        : await BlockchainRoleManagerService.revokeRole(recordId, targetWalletAddress);
+
+      const blockchainRef: BlockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
+      await updateDoc(historyRef, { blockchainRef });
+      await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
+
+      console.log(
+        demoteToViewer ? '✅ Blockchain: Sharer demoted to viewer' : '✅ Blockchain: Sharer role revoked'
+      );
+    } catch (blockchainError) {
+      console.error('⚠️ Blockchain update failed:', blockchainError);
+
+      const errorMessage =
+        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+
+      await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
+    }
 
     console.log('✅ Sharer access removed successfully');
   }
@@ -1284,91 +1495,105 @@ export class PermissionsService {
     console.log('🔄 Removing administrator access:', targetUserId);
 
     const demoteTo = options?.demoteTo;
+    const changes: PermissionChange[] = [
+      demoteTo
+        ? {
+            userId: targetUserId,
+            action: 'downgraded' as const,
+            previousRole: 'administrator' as const,
+            newRole: demoteTo,
+          }
+        : {
+            userId: targetUserId,
+            action: 'revoked' as const,
+            previousRole: 'administrator' as const,
+            newRole: null,
+          },
+    ];
 
-    // Step 1: Update blockchain
-    let blockchainRef: BlockchainRef;
+    const historyRef = doc(
+      collection(db, 'records', recordId, 'permissionHistory'),
+      buildPermissionHistoryDocId(targetUserId)
+    );
+
+    // Only a full revoke drops encryption access — sharer/viewer demotions still need the key.
+    const encryptionRevoke = demoteTo
+      ? null
+      : await SharingService.prepareEncryptionAccessRevoke(recordId, targetUserId, currentUser.uid);
+
+    // Step 1: Atomic Firestore write — role arrays + permission history event + wrapped-key
+    // deactivation (full revoke only), all together or none. Previously the encryption revoke
+    // had to run BEFORE the array update as two separate writes, specifically for self-removal:
+    // wrappedKeys' `allow update` rule checks isAdminOrOwnerOfRecord(recordId), and Firestore
+    // rules evaluate get() against the pre-write snapshot — so revoking your own key AFTER your
+    // own admin status had already been removed would fail that check. Batching both into one
+    // atomic write removes the ordering hazard entirely: everything in a batch is evaluated
+    // against the same pre-batch snapshot regardless of write order.
+    try {
+      const eventData = await preparePermissionChangeEventData(
+        recordId,
+        currentUser.uid,
+        changes,
+        recordTitle
+      );
+
+      const batch = writeBatch(db);
+      batch.update(recordRef, {
+        administrators: arrayRemove(targetUserId),
+        ...(demoteTo === 'sharer' ? { sharers: arrayUnion(targetUserId) } : {}),
+        ...(demoteTo === 'viewer' ? { viewers: arrayUnion(targetUserId) } : {}),
+      });
+      batch.set(historyRef, eventData);
+      if (encryptionRevoke) {
+        batch.update(encryptionRevoke.ref, encryptionRevoke.data);
+      }
+      await batch.commit();
+    } catch (firestoreError) {
+      Sentry.captureException(firestoreError, {
+        tags: { feature: 'permissions', action: 'removeAdmin', recordId },
+      });
+      throw firestoreError;
+    }
+
+    // Step 2: Blockchain — best-effort, does not revert the Firestore write above. The
+    // permission change already stands regardless of what happens here.
+    const syncRef = await BlockchainSyncQueueService.startAttempt({
+      contract: 'MemberRoleManager',
+      action: demoteTo ? 'changeRole' : 'revokeRole',
+      userId: currentUser.uid,
+      userWalletAddress,
+      permissionHistoryPath: historyRef.path,
+      context: {
+        type: 'permission',
+        targetUserId,
+        targetWalletAddress,
+        role: 'administrator',
+        recordId,
+        recordIdHash: id(recordId),
+      },
+    });
 
     try {
-      if (demoteTo) {
-        console.log(`🔗 Demoting to ${demoteTo} on blockchain...`);
-        const tx = await BlockchainRoleManagerService.changeRole(
-          recordId,
-          targetWalletAddress,
-          demoteTo
-        );
-        blockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
-        console.log(`✅ Blockchain: Demoted to ${demoteTo}`);
-      } else {
-        console.log('🔗 Revoking role on blockchain...');
-        const tx = await BlockchainRoleManagerService.revokeRole(recordId, targetWalletAddress);
-        blockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
-        console.log('✅ Blockchain: Role revoked');
-      }
+      console.log(
+        demoteTo ? `🔗 Demoting to ${demoteTo} on blockchain...` : '🔗 Revoking role on blockchain...'
+      );
+
+      const tx = demoteTo
+        ? await BlockchainRoleManagerService.changeRole(recordId, targetWalletAddress, demoteTo)
+        : await BlockchainRoleManagerService.revokeRole(recordId, targetWalletAddress);
+
+      const blockchainRef: BlockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
+      await updateDoc(historyRef, { blockchainRef });
+      await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
+
+      console.log(demoteTo ? `✅ Blockchain: Demoted to ${demoteTo}` : '✅ Blockchain: Role revoked');
     } catch (blockchainError) {
       console.error('⚠️ Blockchain update failed:', blockchainError);
 
       const errorMessage =
         blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
 
-      await BlockchainSyncQueueService.logFailure({
-        contract: 'MemberRoleManager',
-        action: 'revokeRole',
-        userId: currentUser.uid,
-        userWalletAddress: userWalletAddress,
-        error: errorMessage,
-        context: {
-          type: 'permission',
-          targetUserId,
-          targetWalletAddress: targetWalletAddress,
-          role: 'administrator',
-          recordId,
-          recordIdHash: id(recordId),
-        },
-      });
-
-      throw blockchainError;
-    }
-
-    // Step 2: Write event log
-    await writePermissionChangeEvent(
-      recordId,
-      currentUser.uid,
-      [
-        demoteTo
-          ? {
-              userId: targetUserId,
-              action: 'downgraded' as const,
-              previousRole: 'administrator' as const,
-              newRole: demoteTo,
-            }
-          : {
-              userId: targetUserId,
-              action: 'revoked' as const,
-              previousRole: 'administrator' as const,
-              newRole: null,
-            },
-      ],
-      blockchainRef,
-      recordTitle
-    );
-
-    // Step 3: Update Firestore arrays and encryption access if applicable
-    if (demoteTo) {
-      await updateDoc(recordRef, {
-        administrators: arrayRemove(targetUserId),
-        ...(demoteTo === 'sharer' ? { sharers: arrayUnion(targetUserId) } : {}),
-        ...(demoteTo === 'viewer' ? { viewers: arrayUnion(targetUserId) } : {}),
-      });
-      console.log(`✅ Demoted to ${demoteTo}`);
-    } else {
-      // Revoke encryption access only if fully removing
-      // Must remove before updating arrays, otherwise wrappedKey update will fail
-      await SharingService.revokeEncryptionAccess(recordId, targetUserId, currentUser.uid);
-
-      await updateDoc(recordRef, {
-        administrators: arrayRemove(targetUserId),
-      });
-      console.log('✅ Removed from administrators array');
+      await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
 
     console.log('✅ Administrator access removed successfully');
@@ -1451,15 +1676,108 @@ export class PermissionsService {
     console.log('🔄 Removing owner access:', targetUserId);
 
     const demoteTo = options?.demoteTo;
+    const changes: PermissionChange[] = [
+      demoteTo
+        ? {
+            userId: targetUserId,
+            action: 'downgraded' as const,
+            previousRole: 'owner' as const,
+            newRole: demoteTo, // Role — non-null, TypeScript is happy
+          }
+        : {
+            userId: targetUserId,
+            action: 'revoked' as const,
+            previousRole: 'owner' as const,
+            newRole: null, // null — matches revoked member
+          },
+    ];
 
-    // Step 1: Update blockchain — leave (and optionally demote) in a single atomic call.
-    // An owner has no other way to acquire a role for themselves once they've left, so this
-    // can't be split into two transactions (see voluntarilyLeaveOwnership's contract docstring).
-    let blockchainRef: BlockchainRef;
+    const historyRef = doc(
+      collection(db, 'records', recordId, 'permissionHistory'),
+      buildPermissionHistoryDocId(targetUserId)
+    );
+
+    // Only a full revoke drops encryption access — admin/sharer/viewer demotions still need
+    // the key.
+    const encryptionRevoke = demoteTo
+      ? null
+      : await SharingService.prepareEncryptionAccessRevoke(recordId, targetUserId, currentUser.uid);
+
+    // Step 1: Atomic Firestore write — role arrays + permission history event + wrapped-key
+    // deactivation (full revoke only), all together or none. See removeAdmin for why batching
+    // eliminates the old "revoke encryption before updating arrays" ordering hazard for
+    // self-removal.
+    try {
+      const eventData = await preparePermissionChangeEventData(
+        recordId,
+        currentUser.uid,
+        changes,
+        recordTitle
+      );
+
+      const batch = writeBatch(db);
+      if (demoteTo === 'administrator') {
+        batch.update(recordRef, {
+          owners: arrayRemove(targetUserId),
+          administrators: arrayUnion(targetUserId),
+        });
+      } else if (demoteTo === 'sharer') {
+        batch.update(recordRef, {
+          owners: arrayRemove(targetUserId),
+          sharers: arrayUnion(targetUserId),
+        });
+      } else if (demoteTo === 'viewer') {
+        batch.update(recordRef, {
+          owners: arrayRemove(targetUserId),
+          viewers: arrayUnion(targetUserId),
+        });
+      } else {
+        batch.update(recordRef, {
+          owners: arrayRemove(targetUserId),
+        });
+      }
+      batch.set(historyRef, eventData);
+      if (encryptionRevoke) {
+        batch.update(encryptionRevoke.ref, encryptionRevoke.data);
+      }
+      await batch.commit();
+
+      console.log(demoteTo ? `✅ Demoted to ${demoteTo}` : '✅ Removed from owners array');
+    } catch (firestoreError) {
+      Sentry.captureException(firestoreError, {
+        tags: { feature: 'permissions', action: 'removeOwner', recordId },
+      });
+      throw firestoreError;
+    }
+
+    // Step 2: Blockchain — best-effort, does not revert the Firestore write above. Leave (and
+    // optionally demote) is a single atomic contract call — an owner has no other way to
+    // acquire a role for themselves once they've left, so this can't be split into two
+    // transactions (see voluntarilyLeaveOwnership's contract docstring). The permission change
+    // already stands regardless of what happens here.
+    const syncRef = await BlockchainSyncQueueService.startAttempt({
+      contract: 'MemberRoleManager',
+      action: 'voluntarilyLeaveOwnership',
+      userId: currentUser.uid,
+      userWalletAddress,
+      permissionHistoryPath: historyRef.path,
+      context: {
+        type: 'permission',
+        targetUserId,
+        targetWalletAddress,
+        role: demoteTo || 'owner',
+        recordId,
+        recordIdHash: id(recordId),
+      },
+    });
 
     try {
       const tx = await BlockchainRoleManagerService.voluntarilyLeaveOwnership(recordId, demoteTo);
-      blockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
+
+      const blockchainRef: BlockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
+      await updateDoc(historyRef, { blockchainRef });
+      await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
+
       console.log(
         demoteTo ? `✅ Blockchain: Demoted to ${demoteTo}` : '✅ Blockchain: Ownership removed'
       );
@@ -1469,76 +1787,7 @@ export class PermissionsService {
       const errorMessage =
         blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
 
-      await BlockchainSyncQueueService.logFailure({
-        contract: 'MemberRoleManager',
-        action: 'voluntarilyLeaveOwnership',
-        userId: currentUser.uid,
-        userWalletAddress: userWalletAddress,
-        error: errorMessage,
-        context: {
-          type: 'permission',
-          targetUserId,
-          targetWalletAddress: targetWalletAddress,
-          role: demoteTo || 'owner',
-          recordId,
-          recordIdHash: id(recordId),
-        },
-      });
-
-      throw blockchainError;
-    }
-
-    // Step 2: Write event log
-    await writePermissionChangeEvent(
-      recordId,
-      currentUser.uid,
-      [
-        demoteTo
-          ? {
-              userId: targetUserId,
-              action: 'downgraded' as const,
-              previousRole: 'owner' as const,
-              newRole: demoteTo, // Role — non-null, TypeScript is happy
-            }
-          : {
-              userId: targetUserId,
-              action: 'revoked' as const,
-              previousRole: 'owner' as const,
-              newRole: null, // null — matches revoked member
-            },
-      ],
-      blockchainRef,
-      recordTitle
-    );
-
-    // Step 3: Update Firestore arrays
-    if (demoteTo === 'administrator') {
-      await updateDoc(recordRef, {
-        owners: arrayRemove(targetUserId),
-        administrators: arrayUnion(targetUserId),
-      });
-      console.log('✅ Demoted to administrator');
-    } else if (demoteTo === 'sharer') {
-      await updateDoc(recordRef, {
-        owners: arrayRemove(targetUserId),
-        sharers: arrayUnion(targetUserId),
-      });
-      console.log('✅ Demoted to sharer');
-    } else if (demoteTo === 'viewer') {
-      await updateDoc(recordRef, {
-        owners: arrayRemove(targetUserId),
-        viewers: arrayUnion(targetUserId),
-      });
-      console.log('✅ Demoted to viewer');
-    } else {
-      // Revoke encryption access only if fully removing
-      // Must remove before updating arrays, otherwise wrappedKey update will fail
-      await SharingService.revokeEncryptionAccess(recordId, targetUserId, currentUser.uid);
-
-      await updateDoc(recordRef, {
-        owners: arrayRemove(targetUserId),
-      });
-      console.log('✅ Removed from owners array');
+      await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
 
     console.log('✅ Owner access removed successfully');
@@ -1662,109 +1911,140 @@ export class PermissionsService {
       return [];
     }
 
-    // ── Step 1: Single blockchain transaction for all eligible records ────────
-    let batchBlockchainRef: BlockchainRef;
-
-    try {
-      const tx = await BlockchainRoleManagerService.grantRoleBatch(
-        eligible.map(e => e.recordId),
-        targetWalletAddress,
-        eligible.map(e => e.role)
-      );
-      batchBlockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
-      console.log(`✅ Blockchain: batch grant complete (${eligible.length} records)`);
-    } catch (blockchainError) {
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
-      const userWalletAddress = await this.getUserWalletAddress(currentUser.uid);
-      await BlockchainSyncQueueService.logFailure({
-        contract: 'MemberRoleManager',
-        action: 'grantRoleBatch',
-        userId: currentUser.uid,
-        userWalletAddress,
-        error: errorMessage,
-        context: {
-          type: 'permission',
-          targetUserId,
-          targetWalletAddress,
-          role: eligible.map(e => e.role),
-          recordId: eligible.map(e => e.recordId),
-          recordIdHash: eligible.map(e => ethers.id(e.recordId)),
-        },
-      });
-      throw blockchainError; // surface to caller — don't do partial Firestore updates
-    }
-
-    // ── Steps 2 & 3: Encryption + Firestore per record (off-chain, parallel) ─
-    const succeededRecordIds: string[] = [];
+    // ── Step 1: Atomic Firestore write per eligible record — role arrays + permission
+    // history event + wrapped key, all together or none, independently per record (one
+    // record's Firestore failure doesn't block the others — same fault tolerance the
+    // pre-flight filtering above already establishes). blockchainRef starts null on each
+    // history event; filled in below once the single batch blockchain transaction resolves.
+    const succeeded: { recordId: string; role: Role; historyRef: DocumentReference }[] = [];
 
     await Promise.all(
       eligible.map(async ({ recordId, role, existingRole }) => {
-        try {
-          // Encryption access
-          await SharingService.grantEncryptionAccess(recordId, targetUserId, currentUser.uid);
+        const recordRef = doc(db, 'records', recordId);
+        const historyRef = doc(
+          collection(db, 'records', recordId, 'permissionHistory'),
+          buildPermissionHistoryDocId(targetUserId)
+        );
 
-          // Write event log per record
-          await writePermissionChangeEvent(
+        try {
+          const encryptionGrant = await SharingService.prepareEncryptionAccessGrant(
             recordId,
-            currentUser.uid,
-            [
-              existingRole
-                ? {
-                    userId: targetUserId,
-                    action: 'upgraded' as const,
-                    previousRole: existingRole, // already Role since existingRole is truthy
-                    newRole: role,
-                  }
-                : {
-                    userId: targetUserId,
-                    action: 'granted' as const,
-                    previousRole: null,
-                    newRole: role,
-                  },
-            ],
-            batchBlockchainRef
+            targetUserId,
+            currentUser.uid
           );
 
-          // Firestore role arrays
-          const recordRef = doc(db, 'records', recordId);
+          const eventData = await preparePermissionChangeEventData(recordId, currentUser.uid, [
+            existingRole
+              ? {
+                  userId: targetUserId,
+                  action: 'upgraded' as const,
+                  previousRole: existingRole, // already Role since existingRole is truthy
+                  newRole: role,
+                }
+              : {
+                  userId: targetUserId,
+                  action: 'granted' as const,
+                  previousRole: null,
+                  newRole: role,
+                },
+          ]);
+
+          const batch = writeBatch(db);
           if (role === 'owner') {
-            await updateDoc(recordRef, {
+            batch.update(recordRef, {
               owners: arrayUnion(targetUserId),
               administrators: arrayRemove(targetUserId),
               sharers: arrayRemove(targetUserId),
               viewers: arrayRemove(targetUserId),
             });
           } else if (role === 'administrator') {
-            await updateDoc(recordRef, {
+            batch.update(recordRef, {
               administrators: arrayUnion(targetUserId),
               sharers: arrayRemove(targetUserId),
               viewers: arrayRemove(targetUserId),
             });
           } else if (role === 'sharer') {
-            await updateDoc(recordRef, {
+            batch.update(recordRef, {
               sharers: arrayUnion(targetUserId),
               viewers: arrayRemove(targetUserId),
             });
           } else {
-            await updateDoc(recordRef, {
+            batch.update(recordRef, {
               viewers: arrayUnion(targetUserId),
             });
           }
+          batch.set(historyRef, eventData);
+          if (encryptionGrant) {
+            if (encryptionGrant.isReactivation) {
+              batch.update(encryptionGrant.ref, encryptionGrant.data);
+            } else {
+              batch.set(encryptionGrant.ref, encryptionGrant.data);
+            }
+          }
+          await batch.commit();
 
-          succeededRecordIds.push(recordId);
-          console.log(`✅ Encryption + Firestore updated for record ${recordId}`);
+          succeeded.push({ recordId, role, historyRef });
+          console.log(`✅ Firestore updated for record ${recordId}`);
         } catch (err) {
-          console.error(`❌ Post-blockchain update failed for record ${recordId}:`, err);
-          // Don't throw — blockchain already succeeded, log for manual reconciliation
+          Sentry.captureException(err, {
+            tags: { feature: 'permissions', action: 'grantRoleBatch', recordId },
+          });
+          console.error(`❌ Firestore update failed for record ${recordId}:`, err);
+          // Don't throw — other records in the batch still proceed independently.
         }
       })
     );
 
+    if (succeeded.length === 0) {
+      console.log('ℹ️ No records were successfully updated in Firestore');
+      return [];
+    }
+
+    // ── Step 2: Single blockchain transaction covering only the records that actually
+    // got the Firestore write — best-effort, does not revert any of the Firestore writes
+    // above. The permission changes already stand regardless of what happens here.
+    const userWalletAddress = await this.getUserWalletAddress(currentUser.uid);
+    const syncRef = await BlockchainSyncQueueService.startAttempt({
+      contract: 'MemberRoleManager',
+      action: 'grantRoleBatch',
+      userId: currentUser.uid,
+      userWalletAddress,
+      permissionHistoryPath: succeeded.map(s => s.historyRef.path),
+      context: {
+        type: 'permission',
+        targetUserId,
+        targetWalletAddress,
+        role: succeeded.map(s => s.role),
+        recordId: succeeded.map(s => s.recordId),
+        recordIdHash: succeeded.map(s => id(s.recordId)),
+      },
+    });
+
+    try {
+      const tx = await BlockchainRoleManagerService.grantRoleBatch(
+        succeeded.map(s => s.recordId),
+        targetWalletAddress,
+        succeeded.map(s => s.role)
+      );
+
+      const blockchainRef: BlockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
+      await Promise.all(succeeded.map(s => updateDoc(s.historyRef, { blockchainRef })));
+      await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
+
+      console.log(`✅ Blockchain: batch grant complete (${succeeded.length} records)`);
+    } catch (blockchainError) {
+      console.error('⚠️ Blockchain batch update failed:', blockchainError);
+
+      const errorMessage =
+        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+
+      await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
+    }
+
     console.log(
-      `✅ Batch grant complete — ${succeededRecordIds.length}/${eligible.length} records fully processed`
+      `✅ Batch grant complete — ${succeeded.length}/${eligible.length} records fully processed`
     );
-    return succeededRecordIds;
+    return succeeded.map(s => s.recordId);
   }
 
   /**
@@ -1827,70 +2107,104 @@ export class PermissionsService {
       return;
     }
 
-    // ── Step 1: Single blockchain transaction ────────────────────────────────
-    let batchBlockchainRef: BlockchainRef;
+    // ── Step 1: Atomic Firestore write per eligible record — role arrays + permission
+    // history event + wrapped-key deactivation, all together or none, independently per
+    // record. blockchainRef starts null on each history event; filled in below once the
+    // single batch blockchain transaction resolves.
+    const succeeded: { recordId: string; existingRole: Role; historyRef: DocumentReference }[] = [];
 
-    try {
-      const tx = await BlockchainRoleManagerService.revokeRoleBatch(
-        eligible.map(e => e.recordId),
-        targetWalletAddress
-      );
-      batchBlockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
-      console.log(`✅ Blockchain: batch revoke complete (${eligible.length} records)`);
-    } catch (blockchainError) {
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
-      await BlockchainSyncQueueService.logFailure({
-        contract: 'MemberRoleManager',
-        action: 'revokeRoleBatch',
-        userId: currentUser.uid,
-        userWalletAddress,
-        error: errorMessage,
-        context: {
-          type: 'permission',
-          targetUserId,
-          targetWalletAddress,
-          role: eligible.map(e => e.existingRole),
-          recordId: eligible.map(e => e.recordId),
-          recordIdHash: eligible.map(e => ethers.id(e.recordId)),
-        },
-      });
-      throw blockchainError;
-    }
-
-    // ── Step 2: Encryption + Firestore per record (parallel) ─────────────────
     await Promise.all(
       eligible.map(async ({ recordId, existingRole }) => {
-        try {
-          await SharingService.revokeEncryptionAccess(recordId, targetUserId, currentUser.uid);
+        const recordRef = doc(db, 'records', recordId);
+        const historyRef = doc(
+          collection(db, 'records', recordId, 'permissionHistory'),
+          buildPermissionHistoryDocId(targetUserId)
+        );
 
-          await writePermissionChangeEvent(
+        try {
+          const encryptionRevoke = await SharingService.prepareEncryptionAccessRevoke(
             recordId,
-            currentUser.uid,
-            [
-              {
-                userId: targetUserId,
-                action: 'revoked',
-                previousRole: existingRole,
-                newRole: null,
-              },
-            ],
-            batchBlockchainRef
+            targetUserId,
+            currentUser.uid
           );
 
-          await updateDoc(doc(db, 'records', recordId), {
+          const eventData = await preparePermissionChangeEventData(recordId, currentUser.uid, [
+            {
+              userId: targetUserId,
+              action: 'revoked',
+              previousRole: existingRole,
+              newRole: null,
+            },
+          ]);
+
+          const batch = writeBatch(db);
+          batch.update(recordRef, {
             owners: arrayRemove(targetUserId),
             administrators: arrayRemove(targetUserId),
             sharers: arrayRemove(targetUserId),
             viewers: arrayRemove(targetUserId),
           });
+          batch.set(historyRef, eventData);
+          if (encryptionRevoke) {
+            batch.update(encryptionRevoke.ref, encryptionRevoke.data);
+          }
+          await batch.commit();
 
-          console.log(`✅ Encryption + Firestore updated for record ${recordId}`);
+          succeeded.push({ recordId, existingRole, historyRef });
+          console.log(`✅ Firestore updated for record ${recordId}`);
         } catch (err) {
-          console.error(`❌ Post-blockchain update failed for record ${recordId}:`, err);
+          Sentry.captureException(err, {
+            tags: { feature: 'permissions', action: 'revokeRoleBatch', recordId },
+          });
+          console.error(`❌ Firestore update failed for record ${recordId}:`, err);
+          // Don't throw — other records in the batch still proceed independently.
         }
       })
     );
+
+    if (succeeded.length === 0) {
+      console.log('ℹ️ No records were successfully updated in Firestore');
+      return;
+    }
+
+    // ── Step 2: Single blockchain transaction covering only the records that actually
+    // got the Firestore write — best-effort, does not revert any of the Firestore writes
+    // above. The permission changes already stand regardless of what happens here.
+    const syncRef = await BlockchainSyncQueueService.startAttempt({
+      contract: 'MemberRoleManager',
+      action: 'revokeRoleBatch',
+      userId: currentUser.uid,
+      userWalletAddress,
+      permissionHistoryPath: succeeded.map(s => s.historyRef.path),
+      context: {
+        type: 'permission',
+        targetUserId,
+        targetWalletAddress,
+        role: succeeded.map(s => s.existingRole),
+        recordId: succeeded.map(s => s.recordId),
+        recordIdHash: succeeded.map(s => id(s.recordId)),
+      },
+    });
+
+    try {
+      const tx = await BlockchainRoleManagerService.revokeRoleBatch(
+        succeeded.map(s => s.recordId),
+        targetWalletAddress
+      );
+
+      const blockchainRef: BlockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
+      await Promise.all(succeeded.map(s => updateDoc(s.historyRef, { blockchainRef })));
+      await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
+
+      console.log(`✅ Blockchain: batch revoke complete (${succeeded.length} records)`);
+    } catch (blockchainError) {
+      console.error('⚠️ Blockchain batch update failed:', blockchainError);
+
+      const errorMessage =
+        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+
+      await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
+    }
 
     console.log(`✅ Batch revoke complete`);
   }
@@ -2000,72 +2314,59 @@ export class PermissionsService {
       return;
     }
 
-    // ── Step 1: Single blockchain transaction ────────────────────────────────
-    let batchBlockchainRef: BlockchainRef;
-
-    try {
-      const tx = await BlockchainRoleManagerService.changeRoleBatch(
-        eligible.map(e => e.recordId),
-        targetWalletAddress,
-        eligible.map(e => e.newRole)
-      );
-      batchBlockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
-      console.log(`✅ Blockchain: batch change complete (${eligible.length} records)`);
-    } catch (blockchainError) {
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
-      await BlockchainSyncQueueService.logFailure({
-        contract: 'MemberRoleManager',
-        action: 'changeRoleBatch',
-        userId: currentUser.uid,
-        userWalletAddress,
-        error: errorMessage,
-        context: {
-          type: 'permission',
-          targetUserId,
-          targetWalletAddress,
-          role: eligible.map(e => e.newRole),
-          recordId: eligible.map(e => e.recordId),
-          recordIdHash: eligible.map(e => ethers.id(e.recordId)),
-        },
-      });
-      throw blockchainError;
-    }
-
-    // ── Step 2: Encryption + Firestore per record (parallel) ─────────────────
     const roleOrder: Record<Role, number> = { viewer: 0, sharer: 1, administrator: 2, owner: 3 };
+
+    // ── Step 1: Atomic Firestore write per eligible record — role arrays + permission
+    // history event + encryption grant (only when actually needed), all together or none,
+    // independently per record. A downgrade to viewer/sharer never needs a NEW key (it
+    // already has one); only an upgrade FROM viewer/sharer to something higher does.
+    // changeRoleBatch never revokes encryption access outright — that's revokeRoleBatch's
+    // job — so there's no revoke branch here. blockchainRef starts null on each history
+    // event; filled in below once the single batch blockchain transaction resolves.
+    const succeeded: {
+      recordId: string;
+      existingRole: Role;
+      newRole: Role;
+      historyRef: DocumentReference;
+    }[] = [];
 
     await Promise.all(
       eligible.map(async ({ recordId, existingRole, newRole }) => {
+        const recordRef = doc(db, 'records', recordId);
+        const historyRef = doc(
+          collection(db, 'records', recordId, 'permissionHistory'),
+          buildPermissionHistoryDocId(targetUserId)
+        );
+
         try {
-          if (
+          const needsEncryptionGrant =
             (existingRole === 'viewer' || existingRole === 'sharer') &&
             newRole !== 'viewer' &&
-            newRole !== 'sharer'
-          ) {
-            await SharingService.grantEncryptionAccess(recordId, targetUserId, currentUser.uid);
-          }
+            newRole !== 'sharer';
 
-          await writePermissionChangeEvent(
-            recordId,
-            currentUser.uid,
-            [
-              roleOrder[newRole] > roleOrder[existingRole]
-                ? {
-                    userId: targetUserId,
-                    action: 'upgraded' as const,
-                    previousRole: existingRole,
-                    newRole,
-                  }
-                : {
-                    userId: targetUserId,
-                    action: 'downgraded' as const,
-                    previousRole: existingRole,
-                    newRole,
-                  },
-            ],
-            batchBlockchainRef
-          );
+          const encryptionGrant = needsEncryptionGrant
+            ? await SharingService.prepareEncryptionAccessGrant(
+                recordId,
+                targetUserId,
+                currentUser.uid
+              )
+            : null;
+
+          const eventData = await preparePermissionChangeEventData(recordId, currentUser.uid, [
+            roleOrder[newRole] > roleOrder[existingRole]
+              ? {
+                  userId: targetUserId,
+                  action: 'upgraded' as const,
+                  previousRole: existingRole,
+                  newRole,
+                }
+              : {
+                  userId: targetUserId,
+                  action: 'downgraded' as const,
+                  previousRole: existingRole,
+                  newRole,
+                },
+          ]);
 
           const update: Record<string, unknown> = {};
           if (newRole === 'owner') {
@@ -2089,14 +2390,75 @@ export class PermissionsService {
             update.administrators = arrayRemove(targetUserId);
             update.sharers = arrayRemove(targetUserId);
           }
-          await updateDoc(doc(db, 'records', recordId), update);
 
-          console.log(`✅ Role changed on record ${recordId}: ${existingRole} → ${newRole}`);
+          const batch = writeBatch(db);
+          batch.update(recordRef, update);
+          batch.set(historyRef, eventData);
+          if (encryptionGrant) {
+            if (encryptionGrant.isReactivation) {
+              batch.update(encryptionGrant.ref, encryptionGrant.data);
+            } else {
+              batch.set(encryptionGrant.ref, encryptionGrant.data);
+            }
+          }
+          await batch.commit();
+
+          succeeded.push({ recordId, existingRole, newRole, historyRef });
+          console.log(`✅ Firestore updated for record ${recordId}: ${existingRole} → ${newRole}`);
         } catch (err) {
-          console.error(`❌ Post-blockchain update failed for record ${recordId}:`, err);
+          Sentry.captureException(err, {
+            tags: { feature: 'permissions', action: 'changeRoleBatch', recordId },
+          });
+          console.error(`❌ Firestore update failed for record ${recordId}:`, err);
+          // Don't throw — other records in the batch still proceed independently.
         }
       })
     );
+
+    if (succeeded.length === 0) {
+      console.log('ℹ️ No records were successfully updated in Firestore');
+      return;
+    }
+
+    // ── Step 2: Single blockchain transaction covering only the records that actually
+    // got the Firestore write — best-effort, does not revert any of the Firestore writes
+    // above. The permission changes already stand regardless of what happens here.
+    const syncRef = await BlockchainSyncQueueService.startAttempt({
+      contract: 'MemberRoleManager',
+      action: 'changeRoleBatch',
+      userId: currentUser.uid,
+      userWalletAddress,
+      permissionHistoryPath: succeeded.map(s => s.historyRef.path),
+      context: {
+        type: 'permission',
+        targetUserId,
+        targetWalletAddress,
+        role: succeeded.map(s => s.newRole),
+        recordId: succeeded.map(s => s.recordId),
+        recordIdHash: succeeded.map(s => id(s.recordId)),
+      },
+    });
+
+    try {
+      const tx = await BlockchainRoleManagerService.changeRoleBatch(
+        succeeded.map(s => s.recordId),
+        targetWalletAddress,
+        succeeded.map(s => s.newRole)
+      );
+
+      const blockchainRef: BlockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
+      await Promise.all(succeeded.map(s => updateDoc(s.historyRef, { blockchainRef })));
+      await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
+
+      console.log(`✅ Blockchain: batch change complete (${succeeded.length} records)`);
+    } catch (blockchainError) {
+      console.error('⚠️ Blockchain batch update failed:', blockchainError);
+
+      const errorMessage =
+        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+
+      await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
+    }
 
     console.log(`✅ Batch role change complete`);
   }
