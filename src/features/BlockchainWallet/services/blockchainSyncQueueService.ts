@@ -10,11 +10,31 @@ import {
   DisputeSeverityOptions,
   VerificationLevelOptions,
   TimestampLike,
+  NETWORK_CORE,
+  CONTRACT_ADDRESSES,
 } from '@belrose/shared';
-import { collection, addDoc, serverTimestamp, getFirestore } from 'firebase/firestore';
+import {
+  collection,
+  addDoc,
+  doc,
+  setDoc,
+  updateDoc,
+  serverTimestamp,
+  getFirestore,
+  DocumentReference,
+} from 'firebase/firestore';
 
 // The contract being written to
 export type BlockchainContract = 'MemberRoleManager' | 'HealthRecordCore' | 'BelrosePaymaster';
+
+// chainId/contractAddress are known before a chain call is ever attempted (they're static
+// config, not outcome data), so startAttempt stamps them on every entry — pending, confirmed,
+// or failed — rather than each of recordSuccess/recordFailure re-deriving them separately.
+const CONTRACT_ADDRESS_BY_NAME: Record<BlockchainContract, string> = {
+  MemberRoleManager: CONTRACT_ADDRESSES.memberRoleManager,
+  HealthRecordCore: CONTRACT_ADDRESSES.healthRecordCore,
+  BelrosePaymaster: CONTRACT_ADDRESSES.paymaster,
+};
 
 // Base interface - always required
 interface BaseSyncFailure {
@@ -110,14 +130,34 @@ export interface BlockchainSyncFailure extends BaseSyncFailure {
   context: SyncContext;
 }
 
-// Shape of a BlockchainSyncFailure document as read from Firestore —
-// extends the write type with the fields added at write time.
-export type SyncQueueRecord = BlockchainSyncFailure & {
+// Attempt logged before the chain call is made (Firestore-first flows only — see
+// PermissionsService.grantAdmin). Distinct from BlockchainSyncFailure: this is opened
+// as 'pending' regardless of outcome, not just on failure, so a client crash mid-transaction
+// still leaves a durable record for reconciliation to find. No `error` field — that's only
+// known once the attempt resolves, via recordFailure.
+export interface BlockchainSyncAttempt extends Omit<BaseSyncFailure, 'error'> {
+  context: SyncContext;
+  // Path back to the records/{id}/permissionHistory event this attempt corresponds to,
+  // so its blockchainRef can be filled in once the chain call resolves.
+  permissionHistoryPath?: string;
+}
+
+// Shape of a blockchainSyncQueue document as read from Firestore — extends the write type
+// (either a failure-only legacy entry or a startAttempt-opened entry) with the fields added
+// at write time.
+export type SyncQueueRecord = (BlockchainSyncFailure | BlockchainSyncAttempt) & {
   id: string;
-  status?: string;
+  status?: 'pending' | 'confirmed' | 'failed' | string;
   retryCount?: number;
   createdAt?: TimestampLike;
   lastAttemptAt?: TimestampLike;
+  // Stamped by startAttempt on every entry — known upfront, not outcome data.
+  chainId?: number;
+  contractAddress?: string;
+  // Only present once recordSuccess has run.
+  txHash?: string;
+  blockNumber?: number;
+  error?: string;
 };
 
 // Decodes a standard Error(string) ABI revert: selector 0x08c379a0 + ABI-encoded string.
@@ -168,6 +208,49 @@ export class BlockchainSyncQueueService {
       console.log(`📝 Logged ${failure.contract}.${failure.action} failure for retry`);
     } catch (logError) {
       console.error('❌ Failed to log blockchain sync failure:', logError);
+    }
+  }
+
+  /**
+   * Open a durable 'pending' record before attempting a chain write, for Firestore-first
+   * flows where the chain call is best-effort and must not revert the Firestore write that
+   * already succeeded. Call recordSuccess/recordFailure once the attempt resolves.
+   */
+  static async startAttempt(attempt: BlockchainSyncAttempt): Promise<DocumentReference> {
+    const db = getFirestore();
+    const ref = doc(collection(db, 'blockchainSyncQueue'));
+    await setDoc(ref, {
+      ...attempt,
+      chainId: NETWORK_CORE.chainId,
+      contractAddress: CONTRACT_ADDRESS_BY_NAME[attempt.contract],
+      status: 'pending',
+      retryCount: 0,
+      createdAt: serverTimestamp(),
+      lastAttemptAt: serverTimestamp(),
+    });
+    return ref;
+  }
+
+  static async recordSuccess(
+    ref: DocumentReference,
+    tx: { txHash: string; blockNumber: number }
+  ): Promise<void> {
+    await updateDoc(ref, {
+      status: 'confirmed',
+      ...tx,
+      lastAttemptAt: serverTimestamp(),
+    });
+  }
+
+  static async recordFailure(ref: DocumentReference, error: string): Promise<void> {
+    try {
+      await updateDoc(ref, {
+        status: 'failed',
+        error,
+        lastAttemptAt: serverTimestamp(),
+      });
+    } catch (updateError) {
+      console.error('❌ Failed to record blockchain sync attempt failure:', updateError);
     }
   }
 }
