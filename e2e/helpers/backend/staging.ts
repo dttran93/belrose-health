@@ -156,15 +156,29 @@ export async function waitForViewerStatus(
   expected: 'present' | 'absent',
   timeoutMs = 120_000
 ): Promise<void> {
+  return waitForRoleArrayStatus(recordId, userId, 'viewers', expected, timeoutMs);
+}
+
+// Generalization of waitForViewerStatus for the other three role arrays — same rationale
+// (usePermissionFlow's confirmGrant/confirmRevoke fire their PermissionsService call without
+// awaiting it, so polling the real records/{recordId} doc directly is the only unambiguous
+// way to know the real on-chain confirmation + Firestore write has actually finished).
+export async function waitForRoleArrayStatus(
+  recordId: string,
+  userId: string,
+  field: 'owners' | 'administrators' | 'sharers' | 'viewers',
+  expected: 'present' | 'absent',
+  timeoutMs = 120_000
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const snap = await db().doc(`records/${recordId}`).get();
-    const viewers: string[] = snap.data()?.viewers ?? [];
-    if (viewers.includes(userId) === (expected === 'present')) return;
+    const arr: string[] = snap.data()?.[field] ?? [];
+    if (arr.includes(userId) === (expected === 'present')) return;
     await new Promise(resolve => setTimeout(resolve, 2000));
   }
   throw new Error(
-    `Timed out waiting for records/${recordId}'s viewers array to ${
+    `Timed out waiting for records/${recordId}'s ${field} array to ${
       expected === 'present' ? 'include' : 'exclude'
     } ${userId}`
   );

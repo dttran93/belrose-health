@@ -39,6 +39,7 @@ vi.mock('@/features/Sharing/services/sharingService', () => ({
   SharingService: {
     grantEncryptionAccess: vi.fn(),
     revokeEncryptionAccess: vi.fn(),
+    prepareEncryptionAccessGrant: vi.fn(),
   },
 }));
 
@@ -66,6 +67,10 @@ describe('PermissionsService.changeRoleBatch (orchestration)', () => {
       txHash: '0xdefault',
       blockNumber: 0,
     });
+    // Encryption grants are tested in sharingService's own suite — default to "no-op" (as if
+    // the receiver already has active access) so these tests can focus on role/history/chain
+    // behavior without needing real key material.
+    vi.mocked(SharingService.prepareEncryptionAccessGrant).mockResolvedValue(null);
     await seedUser(db, OWNER, '0xOwnerWallet');
     await seedUser(db, ADMIN, '0xAdminCallerWallet');
     await seedUser(db, TARGET, '0xTargetWallet');
@@ -116,7 +121,11 @@ describe('PermissionsService.changeRoleBatch (orchestration)', () => {
 
     await PermissionsService.changeRoleBatch([RECORD_A], TARGET, ['administrator']);
 
-    expect(SharingService.grantEncryptionAccess).toHaveBeenCalledWith(RECORD_A, TARGET, OWNER);
+    expect(SharingService.prepareEncryptionAccessGrant).toHaveBeenCalledWith(
+      RECORD_A,
+      TARGET,
+      OWNER
+    );
   });
 
   it('does not re-grant encryption access when moving between viewer and sharer', async () => {
@@ -125,7 +134,7 @@ describe('PermissionsService.changeRoleBatch (orchestration)', () => {
 
     await PermissionsService.changeRoleBatch([RECORD_A], TARGET, ['sharer']);
 
-    expect(SharingService.grantEncryptionAccess).not.toHaveBeenCalled();
+    expect(SharingService.prepareEncryptionAccessGrant).not.toHaveBeenCalled();
   });
 
   it('skips a record the caller has no permission on', async () => {
@@ -173,7 +182,7 @@ describe('PermissionsService.changeRoleBatch (orchestration)', () => {
     expect(BlockchainRoleManagerService.changeRoleBatch).not.toHaveBeenCalled();
   });
 
-  it('leaves Firestore untouched and logs a sync-queue failure when the blockchain batch call rejects', async () => {
+  it('keeps the Firestore role change when the blockchain batch call rejects, and logs it for reconciliation', async () => {
     await seedRecord(db, RECORD_A, { owners: [OWNER], viewers: [TARGET] });
     setCaller(OWNER);
 
@@ -181,16 +190,31 @@ describe('PermissionsService.changeRoleBatch (orchestration)', () => {
       new Error('transaction reverted')
     );
 
+    // Firestore-first: the chain call is best-effort and does not revert the change that
+    // already succeeded.
     await expect(
       PermissionsService.changeRoleBatch([RECORD_A], TARGET, ['sharer'])
-    ).rejects.toThrow('transaction reverted');
+    ).resolves.toBeUndefined();
 
     const recordA = await getDoc(doc(db, 'records', RECORD_A));
-    expect(recordA.data()?.viewers).toEqual([TARGET]);
+    expect(recordA.data()?.sharers).toEqual([TARGET]);
+    expect(recordA.data()?.viewers).toEqual([]);
 
-    const failures = await getDocs(collection(db, 'blockchainSyncQueue'));
-    expect(failures.size).toBe(1);
-    expect(failures.docs[0]!.data().action).toBe('changeRoleBatch');
+    const events = await getDocs(collection(db, 'records', RECORD_A, 'permissionHistory'));
+    expect(events.docs[0]!.data().changes).toEqual([
+      { userId: TARGET, action: 'upgraded', previousRole: 'viewer', newRole: 'sharer' },
+    ]);
+    // No confirmed tx to cite — the audit event still exists, just without a chain reference yet.
+    expect(events.docs[0]!.data().blockchainRef).toBeNull();
+
+    const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+    expect(syncDocs.size).toBe(1);
+    expect(syncDocs.docs[0]!.data()).toMatchObject({
+      status: 'failed',
+      action: 'changeRoleBatch',
+      error: 'transaction reverted',
+      permissionHistoryPath: [`records/${RECORD_A}/permissionHistory/${events.docs[0]!.id}`],
+    });
   });
 
   // ── Suspected drifts from the single-record methods' permission rules ────────────────

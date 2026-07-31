@@ -95,14 +95,29 @@ describe('firestore.rules — permissionHistory subcollection', () => {
     );
   });
 
-  it('never allows update or delete — immutable audit log', async () => {
-    const recordId = 'history-immutable';
+  it('never allows delete — immutable audit log', async () => {
+    const recordId = 'history-immutable-delete';
     await seedRecord(recordId);
     await testEnv.withSecurityRulesDisabled(async ctx => {
       await ctx
         .firestore()
         .doc(`records/${recordId}/permissionHistory/event-1`)
-        .set({ changedBy: SHARER, changes: [] });
+        .set({ changedBy: SHARER, changes: [], blockchainRef: null });
+    });
+
+    await assertFails(
+      testEnv.authenticatedContext(OWNER).firestore().doc(`records/${recordId}/permissionHistory/event-1`).delete()
+    );
+  });
+
+  it('never allows updating anything other than blockchainRef — the rest of the event stays immutable', async () => {
+    const recordId = 'history-immutable-fields';
+    await seedRecord(recordId);
+    await testEnv.withSecurityRulesDisabled(async ctx => {
+      await ctx
+        .firestore()
+        .doc(`records/${recordId}/permissionHistory/event-1`)
+        .set({ changedBy: SHARER, changes: [], blockchainRef: null });
     });
 
     await assertFails(
@@ -112,8 +127,112 @@ describe('firestore.rules — permissionHistory subcollection', () => {
         .doc(`records/${recordId}/permissionHistory/event-1`)
         .update({ changes: [1] })
     );
-    await assertFails(
-      testEnv.authenticatedContext(OWNER).firestore().doc(`records/${recordId}/permissionHistory/event-1`).delete()
-    );
+  });
+
+  describe('completing a deferred blockchainRef (Firestore-first grant/remove flows)', () => {
+    it('lets the original changedBy fill in blockchainRef while it is still null', async () => {
+      const recordId = 'history-blockchainref-fill-in';
+      await seedRecord(recordId);
+      await testEnv.withSecurityRulesDisabled(async ctx => {
+        await ctx
+          .firestore()
+          .doc(`records/${recordId}/permissionHistory/event-1`)
+          .set({ changedBy: SHARER, changes: [], blockchainRef: null });
+      });
+
+      await assertSucceeds(
+        testEnv
+          .authenticatedContext(SHARER)
+          .firestore()
+          .doc(`records/${recordId}/permissionHistory/event-1`)
+          .update({ blockchainRef: { txHash: '0xabc', chainId: 84532, blockNumber: 1, contractAddress: '0x1' } })
+      );
+    });
+
+    it('still lets changedBy complete it even after that same event stripped their own role (self-removal)', async () => {
+      // The exact scenario that broke: a self-demotion/self-removal writes the history event
+      // and its own role-array change in the same atomic batch, so by the time the deferred
+      // blockchainRef update runs, the caller may no longer hasRoleOnRecord() at all.
+      const recordId = 'history-blockchainref-fill-in-after-self-removal';
+      await testEnv.withSecurityRulesDisabled(async ctx => {
+        await ctx.firestore().doc(`records/${recordId}`).set(baseRecord({ owners: [OWNER] })); // SHARER has no role
+        await ctx
+          .firestore()
+          .doc(`records/${recordId}/permissionHistory/event-1`)
+          .set({ changedBy: SHARER, changes: [], blockchainRef: null });
+      });
+
+      await assertSucceeds(
+        testEnv
+          .authenticatedContext(SHARER)
+          .firestore()
+          .doc(`records/${recordId}/permissionHistory/event-1`)
+          .update({ blockchainRef: { txHash: '0xabc', chainId: 84532, blockNumber: 1, contractAddress: '0x1' } })
+      );
+    });
+
+    it('denies a different user from filling in blockchainRef, even one with a role on the record', async () => {
+      const recordId = 'history-blockchainref-fill-in-wrong-user';
+      await seedRecord(recordId);
+      await testEnv.withSecurityRulesDisabled(async ctx => {
+        await ctx
+          .firestore()
+          .doc(`records/${recordId}/permissionHistory/event-1`)
+          .set({ changedBy: SHARER, changes: [], blockchainRef: null });
+      });
+
+      await assertFails(
+        testEnv
+          .authenticatedContext(OWNER)
+          .firestore()
+          .doc(`records/${recordId}/permissionHistory/event-1`)
+          .update({ blockchainRef: { txHash: '0xabc', chainId: 84532, blockNumber: 1, contractAddress: '0x1' } })
+      );
+    });
+
+    it('denies overwriting an already-set blockchainRef', async () => {
+      const recordId = 'history-blockchainref-already-set';
+      await seedRecord(recordId);
+      await testEnv.withSecurityRulesDisabled(async ctx => {
+        await ctx
+          .firestore()
+          .doc(`records/${recordId}/permissionHistory/event-1`)
+          .set({
+            changedBy: SHARER,
+            changes: [],
+            blockchainRef: { txHash: '0xoriginal', chainId: 84532, blockNumber: 1, contractAddress: '0x1' },
+          });
+      });
+
+      await assertFails(
+        testEnv
+          .authenticatedContext(SHARER)
+          .firestore()
+          .doc(`records/${recordId}/permissionHistory/event-1`)
+          .update({ blockchainRef: { txHash: '0xreplaced', chainId: 84532, blockNumber: 2, contractAddress: '0x1' } })
+      );
+    });
+
+    it('denies sneaking a change to another field into the same update as blockchainRef', async () => {
+      const recordId = 'history-blockchainref-sneak-other-field';
+      await seedRecord(recordId);
+      await testEnv.withSecurityRulesDisabled(async ctx => {
+        await ctx
+          .firestore()
+          .doc(`records/${recordId}/permissionHistory/event-1`)
+          .set({ changedBy: SHARER, changes: [], blockchainRef: null });
+      });
+
+      await assertFails(
+        testEnv
+          .authenticatedContext(SHARER)
+          .firestore()
+          .doc(`records/${recordId}/permissionHistory/event-1`)
+          .update({
+            blockchainRef: { txHash: '0xabc', chainId: 84532, blockNumber: 1, contractAddress: '0x1' },
+            changes: [1],
+          })
+      );
+    });
   });
 });

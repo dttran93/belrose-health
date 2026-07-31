@@ -33,6 +33,7 @@ vi.mock('@/features/Sharing/services/sharingService', () => ({
   SharingService: {
     grantEncryptionAccess: vi.fn(),
     revokeEncryptionAccess: vi.fn(),
+    prepareEncryptionAccessRevoke: vi.fn(),
   },
 }));
 
@@ -60,6 +61,10 @@ describe('PermissionsService.removeViewer (orchestration)', () => {
     await seedUser(db, VIEWER, '0xViewerWallet');
     await seedUser(db, STRANGER, '0xStrangerWallet');
     await seedUser(db, SUBJECT_VIEWER, '0xSubjectViewerWallet');
+    // Encryption revokes are tested in sharingService's own suite — default to "no-op" (as if
+    // there's no wrappedKey to deactivate) so these tests can focus on role/history/chain
+    // behavior without needing real key material.
+    vi.mocked(SharingService.prepareEncryptionAccessRevoke).mockResolvedValue(null);
   });
 
   afterAll(() => {
@@ -78,7 +83,11 @@ describe('PermissionsService.removeViewer (orchestration)', () => {
     await PermissionsService.removeViewer(RECORD_ID, VIEWER);
 
     expect(BlockchainRoleManagerService.revokeRole).toHaveBeenCalledWith(RECORD_ID, '0xViewerWallet');
-    expect(SharingService.revokeEncryptionAccess).toHaveBeenCalledWith(RECORD_ID, VIEWER, OWNER);
+    expect(SharingService.prepareEncryptionAccessRevoke).toHaveBeenCalledWith(
+      RECORD_ID,
+      VIEWER,
+      OWNER
+    );
 
     const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
     expect(recordSnap.data()?.viewers).toEqual([]);
@@ -170,7 +179,7 @@ describe('PermissionsService.removeViewer (orchestration)', () => {
     expect(BlockchainRoleManagerService.revokeRole).not.toHaveBeenCalled();
   });
 
-  it('leaves Firestore untouched and logs a sync-queue failure when the blockchain call rejects', async () => {
+  it('keeps the Firestore removal when the blockchain call rejects, and logs it for reconciliation', async () => {
     await seedRecord(db, RECORD_ID, { owners: [OWNER], viewers: [VIEWER] });
     setCaller(OWNER);
 
@@ -178,16 +187,33 @@ describe('PermissionsService.removeViewer (orchestration)', () => {
       new Error('transaction reverted')
     );
 
-    await expect(PermissionsService.removeViewer(RECORD_ID, VIEWER)).rejects.toThrow(
-      'transaction reverted'
+    // Firestore-first: the chain call is best-effort and does not revert the removal that
+    // already succeeded, so this resolves rather than throwing.
+    await expect(PermissionsService.removeViewer(RECORD_ID, VIEWER)).resolves.toBeUndefined();
+
+    expect(SharingService.prepareEncryptionAccessRevoke).toHaveBeenCalledWith(
+      RECORD_ID,
+      VIEWER,
+      OWNER
     );
 
-    expect(SharingService.revokeEncryptionAccess).not.toHaveBeenCalled();
     const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
-    expect(recordSnap.data()?.viewers).toEqual([VIEWER]);
+    expect(recordSnap.data()?.viewers).toEqual([]);
 
-    const failures = await getDocs(collection(db, 'blockchainSyncQueue'));
-    expect(failures.size).toBe(1);
-    expect(failures.docs[0]!.data().action).toBe('revokeRole');
+    const events = await getDocs(collection(db, 'records', RECORD_ID, 'permissionHistory'));
+    expect(events.docs[0]!.data().changes).toEqual([
+      { userId: VIEWER, action: 'revoked', previousRole: 'viewer', newRole: null },
+    ]);
+    // No confirmed tx to cite — the audit event still exists, just without a chain reference yet.
+    expect(events.docs[0]!.data().blockchainRef).toBeNull();
+
+    const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+    expect(syncDocs.size).toBe(1);
+    expect(syncDocs.docs[0]!.data()).toMatchObject({
+      status: 'failed',
+      action: 'revokeRole',
+      error: 'transaction reverted',
+      permissionHistoryPath: `records/${RECORD_ID}/permissionHistory/${events.docs[0]!.id}`,
+    });
   });
 });

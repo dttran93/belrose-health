@@ -414,8 +414,21 @@ service cloud.firestore {
           && request.resource.data.changedBy == request.auth.uid
           && hasRoleOnRecord(recordId);
 
-        // Immutable audit log
-        allow update, delete: if false;
+        // Update: the only legitimate update is filling in blockchainRef once a deferred
+        // chain call resolves — Firestore-first grant/remove flows write this doc with
+        // blockchainRef: null, then complete it later (see PermissionsService.grantAdmin and
+        // every method that followed it). Scoped tightly so the rest of the event stays a true
+        // immutable audit log: only the same person who created it (changedBy) can complete
+        // it — deliberately NOT hasRoleOnRecord(), since the whole point is this may run after
+        // that same event stripped the caller's own role (self-removal/self-demotion) — only
+        // while blockchainRef is still null (can't overwrite an already-set value), and only
+        // that one field may change.
+        allow update: if request.auth != null
+          && resource.data.changedBy == request.auth.uid
+          && resource.data.blockchainRef == null
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['blockchainRef']);
+
+        allow delete: if false;
       }
     }
 

@@ -37,6 +37,7 @@ vi.mock('@/features/Sharing/services/sharingService', () => ({
   SharingService: {
     grantEncryptionAccess: vi.fn(),
     revokeEncryptionAccess: vi.fn(),
+    prepareEncryptionAccessRevoke: vi.fn(),
   },
 }));
 
@@ -64,6 +65,10 @@ describe('PermissionsService.removeAdmin (orchestration)', () => {
     await seedUser(db, ADMIN, '0xAdminWallet');
     await seedUser(db, OTHER_ADMIN, '0xOtherAdminWallet');
     await seedUser(db, STRANGER, '0xStrangerWallet');
+    // Encryption revokes are tested in sharingService's own suite — default to "no-op" (as if
+    // there's no wrappedKey to deactivate) so these tests can focus on role/history/chain
+    // behavior without needing real key material.
+    vi.mocked(SharingService.prepareEncryptionAccessRevoke).mockResolvedValue(null);
   });
 
   afterAll(() => {
@@ -82,7 +87,11 @@ describe('PermissionsService.removeAdmin (orchestration)', () => {
     await PermissionsService.removeAdmin(RECORD_ID, ADMIN);
 
     expect(BlockchainRoleManagerService.revokeRole).toHaveBeenCalledWith(RECORD_ID, '0xAdminWallet');
-    expect(SharingService.revokeEncryptionAccess).toHaveBeenCalledWith(RECORD_ID, ADMIN, OWNER);
+    expect(SharingService.prepareEncryptionAccessRevoke).toHaveBeenCalledWith(
+      RECORD_ID,
+      ADMIN,
+      OWNER
+    );
 
     const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
     expect(recordSnap.data()?.administrators).toEqual([]);
@@ -109,7 +118,7 @@ describe('PermissionsService.removeAdmin (orchestration)', () => {
       '0xAdminWallet',
       'sharer'
     );
-    expect(SharingService.revokeEncryptionAccess).not.toHaveBeenCalled();
+    expect(SharingService.prepareEncryptionAccessRevoke).not.toHaveBeenCalled();
 
     const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
     expect(recordSnap.data()?.administrators).toEqual([]);
@@ -266,7 +275,7 @@ describe('PermissionsService.removeAdmin (orchestration)', () => {
     expect(recordSnap.data()?.administrators).toEqual([ADMIN]);
   });
 
-  it('leaves Firestore untouched and logs a sync-queue failure when the blockchain call rejects', async () => {
+  it('keeps the Firestore removal when the blockchain call rejects, and logs it for reconciliation', async () => {
     await seedRecord(db, RECORD_ID, { owners: [OWNER], administrators: [ADMIN] });
     setCaller(OWNER);
 
@@ -274,16 +283,33 @@ describe('PermissionsService.removeAdmin (orchestration)', () => {
       new Error('transaction reverted')
     );
 
-    await expect(PermissionsService.removeAdmin(RECORD_ID, ADMIN)).rejects.toThrow(
-      'transaction reverted'
+    // Firestore-first: the chain call is best-effort and does not revert the removal that
+    // already succeeded, so this resolves rather than throwing.
+    await expect(PermissionsService.removeAdmin(RECORD_ID, ADMIN)).resolves.toBeUndefined();
+
+    expect(SharingService.prepareEncryptionAccessRevoke).toHaveBeenCalledWith(
+      RECORD_ID,
+      ADMIN,
+      OWNER
     );
 
-    expect(SharingService.revokeEncryptionAccess).not.toHaveBeenCalled();
     const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
-    expect(recordSnap.data()?.administrators).toEqual([ADMIN]);
+    expect(recordSnap.data()?.administrators).toEqual([]);
 
-    const failures = await getDocs(collection(db, 'blockchainSyncQueue'));
-    expect(failures.size).toBe(1);
-    expect(failures.docs[0]!.data().action).toBe('revokeRole');
+    const events = await getDocs(collection(db, 'records', RECORD_ID, 'permissionHistory'));
+    expect(events.docs[0]!.data().changes).toEqual([
+      { userId: ADMIN, action: 'revoked', previousRole: 'administrator', newRole: null },
+    ]);
+    // No confirmed tx to cite — the audit event still exists, just without a chain reference yet.
+    expect(events.docs[0]!.data().blockchainRef).toBeNull();
+
+    const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+    expect(syncDocs.size).toBe(1);
+    expect(syncDocs.docs[0]!.data()).toMatchObject({
+      status: 'failed',
+      action: 'revokeRole',
+      error: 'transaction reverted',
+      permissionHistoryPath: `records/${RECORD_ID}/permissionHistory/${events.docs[0]!.id}`,
+    });
   });
 });

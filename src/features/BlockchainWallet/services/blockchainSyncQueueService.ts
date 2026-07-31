@@ -137,9 +137,10 @@ export interface BlockchainSyncFailure extends BaseSyncFailure {
 // known once the attempt resolves, via recordFailure.
 export interface BlockchainSyncAttempt extends Omit<BaseSyncFailure, 'error'> {
   context: SyncContext;
-  // Path back to the records/{id}/permissionHistory event this attempt corresponds to,
-  // so its blockchainRef can be filled in once the chain call resolves.
-  permissionHistoryPath?: string;
+  // Path(s) back to the records/{id}/permissionHistory event(s) this attempt corresponds
+  // to, so blockchainRef can be filled in once the chain call resolves. An array for batch
+  // methods (grantRoleBatch etc.) — one chain transaction covers many records at once.
+  permissionHistoryPath?: string | string[];
 }
 
 // Shape of a blockchainSyncQueue document as read from Firestore — extends the write type
