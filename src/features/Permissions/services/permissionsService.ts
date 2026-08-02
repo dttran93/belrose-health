@@ -23,6 +23,7 @@ import { SharingService } from '@/features/Sharing/services/sharingService';
 import { BlockchainRoleManagerService } from './blockchainRoleManagerService';
 import { getUserProfile } from '@/features/Users/services/userProfileService';
 import { BlockchainSyncQueueService } from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
+import { WalletService } from '@/features/BlockchainWallet/services/walletService';
 import {
   preparePermissionChangeEventData,
   buildPermissionHistoryDocId,
@@ -113,26 +114,24 @@ export class PermissionsService {
   };
 
   /**
-   * Get a user's wallet address from Firestore
+   * Get a user's wallet address from Firestore, with Permissions-specific error messages that
+   * distinguish "this user has never signed up" from "this user exists but hasn't linked a
+   * wallet yet" — the underlying Firestore read is shared via WalletService.getUserWalletStatus.
    */
   private static async getUserWalletAddress(userId: string): Promise<string> {
-    const db = getFirestore();
-    const userDoc = await getDoc(doc(db, 'users', userId));
+    const { profileExists, wallet } = await WalletService.getUserWalletStatus(userId);
 
-    if (!userDoc.exists()) {
+    if (!profileExists) {
       throw new Error('User not found');
     }
 
-    const userData = userDoc.data();
-    const walletAddress = userData.wallet?.address;
-
-    if (!walletAddress) {
+    if (!wallet?.address) {
       throw new Error(
         `${userId} has no distributed network account. They must set up on the distributed network before managing permissions.`
       );
     }
 
-    return walletAddress;
+    return wallet.address;
   }
 
   /**

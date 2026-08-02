@@ -44,7 +44,7 @@ import {
   deleteDoc,
   writeBatch,
 } from 'firebase/firestore';
-import { TrusteeBlockchainService } from './trusteeBlockchainService';
+import { WalletService } from '@/features/BlockchainWallet/services/walletService';
 import { TrustLevel } from './trusteeRelationshipService';
 import { Role } from '@/features/Permissions/services/permissionsService';
 import { BlockchainRoleManagerService } from '@/features/Permissions/services/blockchainRoleManagerService';
@@ -609,7 +609,7 @@ export class TrusteePermissionService {
 
       try {
         // Trustor grants role from their own wallet (msg.sender = trustor, which holds the role)
-        const trusteeWallet = await TrusteeBlockchainService.getUserWalletAddress(trusteeId);
+        const trusteeWallet = await WalletService.getUserWalletAddress(trusteeId);
         if (!trusteeWallet) {
           console.error(`⚠️ No wallet found for trustee ${trusteeId} — skipping`);
           continue;
@@ -773,7 +773,7 @@ export class TrusteePermissionService {
       if (!previousRole) continue;
 
       try {
-        const trusteeWallet = await TrusteeBlockchainService.getUserWalletAddress(trusteeId);
+        const trusteeWallet = await WalletService.getUserWalletAddress(trusteeId);
         if (!trusteeWallet) {
           console.error(`⚠️ No wallet found for trustee ${trusteeId} — skipping`);
           continue;

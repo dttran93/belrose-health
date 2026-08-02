@@ -1,41 +1,56 @@
 // test/orchestration/subjectService.test.ts
 //
 // Layer 3 (orchestration) — SubjectService, the big orchestrator for every subject operation.
-// Real Firestore emulator, and real SubjectMembershipService/SubjectPermissionService/
-// SubjectConsentService/SubjectRejectionService/SubjectRemovalService underneath (all already
-// unit/orchestration-tested on their own) — only the cross-feature/blockchain edges are mocked:
-// SubjectBlockchainService (blockchain), TrusteePermissionService (Trustee fan-out, untested as
-// its own feature), verificationService (Credibility), and firebase/auth.
+// Real Firestore emulator, and real SubjectPermissionService/SubjectConsentService/
+// SubjectRejectionService/SubjectRemovalService underneath (all already unit/orchestration-tested
+// on their own) — only the cross-feature/blockchain edges are mocked:
+// WalletService (wallet lookup only — SubjectBlockchainService was retired, its two wallet
+// helpers moved into WalletService since that's the canonical place for wallet lookups),
+// blockchainHealthRecordService (the actual chain calls — every SubjectService method is
+// Firestore-first and calls this directly, owning its own BlockchainSyncQueueService lifecycle
+// inline), TrusteePermissionService (Trustee fan-out, untested as its own feature),
+// verificationService (Credibility), and firebase/auth.
 
 import { beforeEach, afterAll, describe, it, expect, vi } from 'vitest';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, getDocs, collection, setDoc } from 'firebase/firestore';
 import { deleteApp, getApps } from 'firebase/app';
 import { connectTestFirestore, clearTestFirestore, seedRecord } from './helpers/testFirestore';
 
-const { mockCurrentUser, blockchainMocks, trusteeMocks, verificationMocks } = vi.hoisted(() => ({
-  mockCurrentUser: { uid: null as string | null },
-  blockchainMocks: {
-    anchorSubject: vi.fn(),
-    anchorSubjectAsController: vi.fn(),
-    unanchorSubject: vi.fn(),
-  },
-  trusteeMocks: {
-    grantAccessForNewRecord: vi.fn(),
-    revokeAccessForRemovedRecord: vi.fn(),
-  },
-  verificationMocks: {
-    createVerification: vi.fn(),
-    recordSelfVerification: vi.fn(),
-  },
-}));
+const { mockCurrentUser, walletMocks, healthRecordMocks, trusteeMocks, verificationMocks } =
+  vi.hoisted(() => ({
+    mockCurrentUser: { uid: null as string | null },
+    walletMocks: {
+      requireUserWalletAddress: vi.fn(),
+    },
+    // Every SubjectService method is Firestore-first now — each calls
+    // blockchainHealthRecordService directly and owns the sync-queue lifecycle itself, rather
+    // than going through a wrapper (see SubjectService.setSubjectAsSelf/rejectSubjectStatus/etc.).
+    healthRecordMocks: {
+      anchorRecord: vi.fn(),
+      anchorRecordAsController: vi.fn(),
+      unanchorRecord: vi.fn(),
+    },
+    trusteeMocks: {
+      grantAccessForNewRecord: vi.fn(),
+      revokeAccessForRemovedRecord: vi.fn(),
+    },
+    verificationMocks: {
+      createVerification: vi.fn(),
+      recordSelfVerification: vi.fn(),
+    },
+  }));
 
 vi.mock('firebase/auth', () => ({
   getAuth: () => ({ currentUser: mockCurrentUser.uid ? { uid: mockCurrentUser.uid } : null }),
 }));
 
-vi.mock('../../src/features/Subject/services/subjectBlockchainService', () => ({
-  SubjectBlockchainService: blockchainMocks,
-  default: blockchainMocks,
+vi.mock('@/features/BlockchainWallet/services/walletService', () => ({
+  WalletService: walletMocks,
+}));
+
+vi.mock('@/features/Credibility/services/blockchainHealthRecordService', () => ({
+  blockchainHealthRecordService: healthRecordMocks,
+  VerificationLevel: { None: 0, Provenance: 1, Full: 2 },
 }));
 
 vi.mock('@/features/Trustee/services/trusteePermissionService', () => ({
@@ -68,9 +83,10 @@ describe('SubjectService (orchestration)', () => {
   beforeEach(async () => {
     await clearTestFirestore();
     vi.resetAllMocks();
-    blockchainMocks.anchorSubject.mockResolvedValue({ txHash: '0xabc', blockNumber: 1 });
-    blockchainMocks.anchorSubjectAsController.mockResolvedValue({ txHash: '0xabc2', blockNumber: 2 });
-    blockchainMocks.unanchorSubject.mockResolvedValue({ txHash: '0xdef', blockNumber: 3 });
+    healthRecordMocks.anchorRecord.mockResolvedValue({ txHash: '0xabc', blockNumber: 1 });
+    healthRecordMocks.anchorRecordAsController.mockResolvedValue({ txHash: '0xabc2', blockNumber: 2 });
+    walletMocks.requireUserWalletAddress.mockResolvedValue('0xWallet');
+    healthRecordMocks.unanchorRecord.mockResolvedValue({ txHash: '0xdef', blockNumber: 3 });
     trusteeMocks.grantAccessForNewRecord.mockResolvedValue(undefined);
     trusteeMocks.revokeAccessForRemovedRecord.mockResolvedValue(undefined);
     verificationMocks.createVerification.mockResolvedValue(undefined);
@@ -114,7 +130,7 @@ describe('SubjectService (orchestration)', () => {
         subjectId: OWNER,
         blockchainAnchored: true,
       });
-      expect(blockchainMocks.anchorSubject).not.toHaveBeenCalled();
+      expect(healthRecordMocks.anchorRecord).not.toHaveBeenCalled();
     });
 
     it('throws when the record has no recordHash', async () => {
@@ -155,6 +171,19 @@ describe('SubjectService (orchestration)', () => {
       expect(consentSnap.data()?.requestedSubjectRole).toBe('owner');
 
       expect(verificationMocks.recordSelfVerification).toHaveBeenCalled();
+
+      const events = await getDocs(collection(db, 'records', RECORD_ID, 'subjectHistory'));
+      expect(events.size).toBe(1);
+      expect(events.docs[0]!.data()).toMatchObject({
+        action: 'anchored',
+        subjectId: OWNER,
+        changedBy: OWNER,
+      });
+      expect(events.docs[0]!.data().blockchainRef).toMatchObject({ txHash: '0xabc', blockNumber: 1 });
+
+      const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+      expect(syncDocs.size).toBe(1);
+      expect(syncDocs.docs[0]!.data()).toMatchObject({ status: 'confirmed', action: 'anchorRecord' });
     });
 
     it('does not call recordSelfVerification when selfVerifyLevel is None', async () => {
@@ -180,18 +209,49 @@ describe('SubjectService (orchestration)', () => {
       expect(recordSnap.data()?.subjects).toEqual([OWNER]);
     });
 
-    it('still updates Firestore even when the blockchain anchor call returns null (failure already logged upstream)', async () => {
+    it('keeps the Firestore addition when the blockchain anchor call rejects, and logs it for reconciliation', async () => {
       await seedRecord(db, RECORD_ID, { owners: [OWNER] });
       await setDoc(doc(db, 'records', RECORD_ID), { recordHash: '0xhash' }, { merge: true });
       setCaller(OWNER);
-      blockchainMocks.anchorSubject.mockResolvedValue(null);
+      healthRecordMocks.anchorRecord.mockRejectedValue(new Error('transaction reverted'));
 
+      // Firestore-first: the chain call is best-effort and does not revert the addition that
+      // already succeeded, so this resolves rather than throwing.
       const result = await SubjectService.setSubjectAsSelf(RECORD_ID);
 
       expect(result.blockchainAnchored).toBe(false);
       const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
       expect(recordSnap.data()?.subjects).toEqual([OWNER]);
       expect(verificationMocks.recordSelfVerification).not.toHaveBeenCalled();
+
+      const events = await getDocs(collection(db, 'records', RECORD_ID, 'subjectHistory'));
+      expect(events.size).toBe(1);
+      // No confirmed tx to cite — the audit event still exists, just without a chain reference yet.
+      expect(events.docs[0]!.data().blockchainRef).toBeNull();
+
+      const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+      expect(syncDocs.size).toBe(1);
+      expect(syncDocs.docs[0]!.data()).toMatchObject({
+        status: 'failed',
+        action: 'anchorRecord',
+        error: 'transaction reverted',
+        permissionHistoryPath: `records/${RECORD_ID}/subjectHistory/${events.docs[0]!.id}`,
+      });
+    });
+
+    it('throws before any write when the caller has no linked wallet', async () => {
+      await seedRecord(db, RECORD_ID, { owners: [OWNER] });
+      await setDoc(doc(db, 'records', RECORD_ID), { recordHash: '0xhash' }, { merge: true });
+      setCaller(OWNER);
+      walletMocks.requireUserWalletAddress.mockRejectedValue(
+        new Error('You must have a linked wallet to perform blockchain actions')
+      );
+
+      await expect(SubjectService.setSubjectAsSelf(RECORD_ID)).rejects.toThrow(
+        'You must have a linked wallet to perform blockchain actions'
+      );
+      const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
+      expect(recordSnap.data()?.subjects).toEqual([]);
     });
   });
 
@@ -223,7 +283,7 @@ describe('SubjectService (orchestration)', () => {
       setCaller(OWNER);
 
       await SubjectService.anchorSubjectAsController(RECORD_ID, TRUSTOR);
-      expect(blockchainMocks.anchorSubjectAsController).not.toHaveBeenCalled();
+      expect(healthRecordMocks.anchorRecordAsController).not.toHaveBeenCalled();
     });
 
     it('anchors the trustor as subject and credits the controller as verifier', async () => {
@@ -256,6 +316,29 @@ describe('SubjectService (orchestration)', () => {
         expect.anything(),
         expect.anything()
       );
+
+      // changedBy is the controller, subjectId is the trustor — the labeling bug this
+      // refactor fixed (previously the sync-queue context mislabeled the trustor as the
+      // controller).
+      const events = await getDocs(collection(db, 'records', RECORD_ID, 'subjectHistory'));
+      expect(events.size).toBe(1);
+      expect(events.docs[0]!.data()).toMatchObject({
+        action: 'anchored_as_controller',
+        subjectId: TRUSTOR,
+        changedBy: OWNER,
+      });
+      expect(events.docs[0]!.data().blockchainRef).toMatchObject({ txHash: '0xabc2', blockNumber: 2 });
+
+      const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+      expect(syncDocs.size).toBe(1);
+      expect(syncDocs.docs[0]!.data()).toMatchObject({
+        status: 'confirmed',
+        action: 'anchorRecord',
+        context: expect.objectContaining({ subjectId: TRUSTOR }),
+      });
+
+      // The transient proof field is cleaned up after the batch.
+      expect(recordSnap.data()?.controllerAnchorFor).toBeUndefined();
     });
 
     it('does not fail when trustee fan-out rejects', async () => {
@@ -267,6 +350,43 @@ describe('SubjectService (orchestration)', () => {
       await expect(
         SubjectService.anchorSubjectAsController(RECORD_ID, TRUSTOR)
       ).resolves.toBeUndefined();
+    });
+
+    it('keeps the Firestore addition when the blockchain anchor call rejects, and logs it for reconciliation', async () => {
+      await seedRecord(db, RECORD_ID, { owners: [OWNER] });
+      await setDoc(doc(db, 'records', RECORD_ID), { recordHash: '0xhash' }, { merge: true });
+      setCaller(OWNER);
+      healthRecordMocks.anchorRecordAsController.mockRejectedValue(new Error('transaction reverted'));
+
+      await expect(
+        SubjectService.anchorSubjectAsController(RECORD_ID, TRUSTOR)
+      ).resolves.toBeUndefined();
+
+      const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
+      expect(recordSnap.data()?.subjects).toEqual([TRUSTOR]);
+
+      const events = await getDocs(collection(db, 'records', RECORD_ID, 'subjectHistory'));
+      expect(events.size).toBe(1);
+      expect(events.docs[0]!.data().blockchainRef).toBeNull();
+
+      const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+      expect(syncDocs.size).toBe(1);
+      expect(syncDocs.docs[0]!.data()).toMatchObject({ status: 'failed', action: 'anchorRecord' });
+    });
+
+    it('throws before any write when the controller has no linked wallet', async () => {
+      await seedRecord(db, RECORD_ID, { owners: [OWNER] });
+      await setDoc(doc(db, 'records', RECORD_ID), { recordHash: '0xhash' }, { merge: true });
+      setCaller(OWNER);
+      walletMocks.requireUserWalletAddress.mockRejectedValue(
+        new Error('You must have a linked wallet to perform blockchain actions')
+      );
+
+      await expect(
+        SubjectService.anchorSubjectAsController(RECORD_ID, TRUSTOR)
+      ).rejects.toThrow('You must have a linked wallet to perform blockchain actions');
+      const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
+      expect(recordSnap.data()?.subjects).toEqual([]);
     });
   });
 
@@ -518,6 +638,72 @@ describe('SubjectService (orchestration)', () => {
         txHash: '0xabc',
         blockNumber: 1,
       });
+
+      const events = await getDocs(collection(db, 'records', RECORD_ID, 'subjectHistory'));
+      expect(events.size).toBe(1);
+      expect(events.docs[0]!.data()).toMatchObject({
+        action: 'anchored',
+        subjectId: SUBJECT,
+        changedBy: SUBJECT,
+        viaConsent: true,
+      });
+      expect(events.docs[0]!.data().blockchainRef).toMatchObject({ txHash: '0xabc', blockNumber: 1 });
+    });
+
+    it('throws before any write when the caller has no linked wallet', async () => {
+      await seedRecord(db, RECORD_ID, { owners: [OWNER] });
+      await setDoc(doc(db, 'records', RECORD_ID), { recordHash: '0xhash' }, { merge: true });
+      await setDoc(doc(db, 'subjectConsentRequests', getConsentRequestId(RECORD_ID, SUBJECT)), {
+        recordId: RECORD_ID,
+        subjectId: SUBJECT,
+        status: 'pending',
+      });
+      setCaller(SUBJECT);
+      walletMocks.requireUserWalletAddress.mockRejectedValue(
+        new Error('You must have a linked wallet to perform blockchain actions')
+      );
+
+      await expect(SubjectService.acceptSubjectRequest(RECORD_ID)).rejects.toThrow(
+        'You must have a linked wallet to perform blockchain actions'
+      );
+      const consentSnap = await getDoc(
+        doc(db, 'subjectConsentRequests', getConsentRequestId(RECORD_ID, SUBJECT))
+      );
+      expect(consentSnap.data()?.status).toBe('pending');
+      const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
+      expect(recordSnap.data()?.subjects).toEqual([]);
+    });
+
+    it('keeps the Firestore accept + subject addition when the blockchain anchor call rejects, and logs it for reconciliation', async () => {
+      await seedRecord(db, RECORD_ID, { owners: [OWNER] });
+      await setDoc(doc(db, 'records', RECORD_ID), { recordHash: '0xhash' }, { merge: true });
+      await setDoc(doc(db, 'subjectConsentRequests', getConsentRequestId(RECORD_ID, SUBJECT)), {
+        recordId: RECORD_ID,
+        subjectId: SUBJECT,
+        status: 'pending',
+      });
+      setCaller(SUBJECT);
+      healthRecordMocks.anchorRecord.mockRejectedValue(new Error('transaction reverted'));
+
+      await expect(SubjectService.acceptSubjectRequest(RECORD_ID)).resolves.toEqual({
+        success: true,
+      });
+
+      const consentSnap = await getDoc(
+        doc(db, 'subjectConsentRequests', getConsentRequestId(RECORD_ID, SUBJECT))
+      );
+      expect(consentSnap.data()?.status).toBe('accepted');
+
+      const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
+      expect(recordSnap.data()?.subjects).toEqual([SUBJECT]);
+
+      const events = await getDocs(collection(db, 'records', RECORD_ID, 'subjectHistory'));
+      expect(events.size).toBe(1);
+      expect(events.docs[0]!.data().blockchainRef).toBeNull();
+
+      const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+      expect(syncDocs.size).toBe(1);
+      expect(syncDocs.docs[0]!.data()).toMatchObject({ status: 'failed', action: 'anchorRecord' });
     });
   });
 
@@ -576,6 +762,20 @@ describe('SubjectService (orchestration)', () => {
       );
     });
 
+    it('throws before any write when the caller has no linked wallet', async () => {
+      await seedRecord(db, RECORD_ID, { owners: [OWNER], subjects: [SUBJECT] });
+      setCaller(SUBJECT);
+      walletMocks.requireUserWalletAddress.mockRejectedValue(
+        new Error('You must have a linked wallet to perform blockchain actions')
+      );
+
+      await expect(SubjectService.rejectSubjectStatus(RECORD_ID, 'privacy')).rejects.toThrow(
+        'You must have a linked wallet to perform blockchain actions'
+      );
+      const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
+      expect(recordSnap.data()?.subjects).toEqual([SUBJECT]);
+    });
+
     it('FLOW 1 — self-removal with no prior consent flow: unanchors and removes, no pending creator decision', async () => {
       await seedRecord(db, RECORD_ID, { owners: [OWNER], subjects: [SUBJECT] });
       setCaller(SUBJECT);
@@ -590,6 +790,19 @@ describe('SubjectService (orchestration)', () => {
         RECORD_ID,
         { txHash: '0xdef', blockNumber: 3 }
       );
+
+      const events = await getDocs(collection(db, 'records', RECORD_ID, 'subjectHistory'));
+      expect(events.size).toBe(1);
+      expect(events.docs[0]!.data()).toMatchObject({
+        action: 'unanchored',
+        subjectId: SUBJECT,
+        changedBy: SUBJECT,
+      });
+      expect(events.docs[0]!.data().blockchainRef).toMatchObject({ txHash: '0xdef', blockNumber: 3 });
+
+      const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+      expect(syncDocs.size).toBe(1);
+      expect(syncDocs.docs[0]!.data()).toMatchObject({ status: 'confirmed', action: 'unanchorRecord' });
     });
 
     it('FLOW 2 — removal after an accepted consent flow: captures the rejection and flags pending creator decision', async () => {
@@ -608,6 +821,10 @@ describe('SubjectService (orchestration)', () => {
         doc(db, 'subjectConsentRequests', getConsentRequestId(RECORD_ID, SUBJECT))
       );
       expect(consentSnap.data()?.rejection.rejectionType).toBe('removed_after_acceptance');
+
+      const events = await getDocs(collection(db, 'records', RECORD_ID, 'subjectHistory'));
+      expect(events.size).toBe(1);
+      expect(events.docs[0]!.data().action).toBe('unanchored');
     });
 
     it('does not fail when revoking trustee access rejects', async () => {
@@ -619,6 +836,43 @@ describe('SubjectService (orchestration)', () => {
         success: true,
         pendingCreatorDecision: false,
       });
+    });
+
+    it('keeps the Firestore removal when the blockchain unanchor call rejects, and logs it for reconciliation', async () => {
+      await seedRecord(db, RECORD_ID, { owners: [OWNER], subjects: [SUBJECT] });
+      setCaller(SUBJECT);
+      healthRecordMocks.unanchorRecord.mockRejectedValue(new Error('transaction reverted'));
+
+      // Firestore-first: the chain call is best-effort and does not revert the removal that
+      // already succeeded, so this resolves rather than throwing.
+      await expect(SubjectService.rejectSubjectStatus(RECORD_ID, 'privacy')).resolves.toEqual({
+        success: true,
+        pendingCreatorDecision: false,
+      });
+
+      const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
+      expect(recordSnap.data()?.subjects).toEqual([]);
+
+      const events = await getDocs(collection(db, 'records', RECORD_ID, 'subjectHistory'));
+      expect(events.size).toBe(1);
+      // No confirmed tx to cite — the audit event still exists, just without a chain reference yet.
+      expect(events.docs[0]!.data().blockchainRef).toBeNull();
+
+      const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+      expect(syncDocs.size).toBe(1);
+      expect(syncDocs.docs[0]!.data()).toMatchObject({
+        status: 'failed',
+        action: 'unanchorRecord',
+        error: 'transaction reverted',
+        permissionHistoryPath: `records/${RECORD_ID}/subjectHistory/${events.docs[0]!.id}`,
+      });
+
+      // Trustee revoke fan-out still runs afterward, consuming a null tx result.
+      expect(trusteeMocks.revokeAccessForRemovedRecord).toHaveBeenCalledWith(
+        SUBJECT,
+        RECORD_ID,
+        null
+      );
     });
   });
 

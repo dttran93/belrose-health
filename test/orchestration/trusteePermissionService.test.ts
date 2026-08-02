@@ -4,7 +4,7 @@
 // trustee relationship is created, activated, rolled back, revoked, or edited. Real Firestore
 // emulator for records/wrappedKeys/trusteeRelationships (all read/written directly by this
 // service); cross-feature/blockchain edges are mocked: SharingService (encryption fan-out,
-// tested on its own in sharingService.test.ts), TrusteeBlockchainService.getUserWalletAddress,
+// tested on its own in sharingService.test.ts), WalletService.getUserWalletAddress,
 // BlockchainRoleManagerService (on-chain role read/write), writePermissionChangeEvent (audit
 // log), and firebase/auth.
 
@@ -14,11 +14,11 @@ import { deleteApp, getApps } from 'firebase/app';
 import { connectTestFirestore, clearTestFirestore, seedRecord } from './helpers/testFirestore';
 import { buildMemberRegistryRef } from '@belrose/shared';
 
-const { mockCurrentUser, sharingMocks, trusteeBlockchainMocks, roleManagerMocks, writeChangeMock } =
+const { mockCurrentUser, sharingMocks, walletMocks, roleManagerMocks, writeChangeMock } =
   vi.hoisted(() => ({
     mockCurrentUser: { uid: null as string | null },
     sharingMocks: { grantEncryptionAccess: vi.fn() },
-    trusteeBlockchainMocks: { getUserWalletAddress: vi.fn() },
+    walletMocks: { getUserWalletAddress: vi.fn() },
     roleManagerMocks: {
       getRoleDetails: vi.fn(),
       grantRole: vi.fn(),
@@ -36,8 +36,8 @@ vi.mock('@/features/Sharing/services/sharingService', () => ({
   SharingService: sharingMocks,
 }));
 
-vi.mock('../../src/features/Trustee/services/trusteeBlockchainService', () => ({
-  TrusteeBlockchainService: trusteeBlockchainMocks,
+vi.mock('@/features/BlockchainWallet/services/walletService', () => ({
+  WalletService: walletMocks,
 }));
 
 vi.mock('@/features/Permissions/services/blockchainRoleManagerService', () => ({
@@ -101,7 +101,7 @@ describe('TrusteePermissionService (orchestration)', () => {
     vi.resetAllMocks();
     setCaller(TRUSTOR);
     sharingMocks.grantEncryptionAccess.mockResolvedValue(undefined);
-    trusteeBlockchainMocks.getUserWalletAddress.mockResolvedValue('0xTrusteeWallet');
+    walletMocks.getUserWalletAddress.mockResolvedValue('0xTrusteeWallet');
     roleManagerMocks.getRoleDetails.mockResolvedValue({ role: '', isActive: false });
     roleManagerMocks.grantRole.mockResolvedValue({ txHash: '0xgrant', blockNumber: 10 });
     roleManagerMocks.changeRole.mockResolvedValue({ txHash: '0xchange', blockNumber: 11 });
@@ -524,7 +524,7 @@ describe('TrusteePermissionService (orchestration)', () => {
     it('skips a trustee with no linked wallet', async () => {
       await seedRecord(db, RECORD_A, { owners: [TRUSTOR] });
       await seedTrusteeRelationship(TRUSTOR, TRUSTEE);
-      trusteeBlockchainMocks.getUserWalletAddress.mockResolvedValue(null);
+      walletMocks.getUserWalletAddress.mockResolvedValue(null);
 
       await TrusteePermissionService.grantAccessForNewRecord(TRUSTOR, RECORD_A);
 

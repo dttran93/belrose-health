@@ -56,10 +56,10 @@ describe('SubjectRejectionService (orchestration)', () => {
     getApps().forEach(app => deleteApp(app));
   });
 
-  describe('rejectAfterAcceptance', () => {
+  describe('prepareRejectAfterAcceptance', () => {
     it('throws when no consent request exists', async () => {
       await expect(
-        SubjectRejectionService.rejectAfterAcceptance({
+        SubjectRejectionService.prepareRejectAfterAcceptance({
           recordId: RECORD_ID,
           subjectId: SUBJECT,
           reason: 'privacy',
@@ -71,7 +71,7 @@ describe('SubjectRejectionService (orchestration)', () => {
       await seedConsentRequest('pending');
 
       await expect(
-        SubjectRejectionService.rejectAfterAcceptance({
+        SubjectRejectionService.prepareRejectAfterAcceptance({
           recordId: RECORD_ID,
           subjectId: SUBJECT,
           reason: 'privacy',
@@ -79,28 +79,28 @@ describe('SubjectRejectionService (orchestration)', () => {
       ).rejects.toThrow('Rejection is only allowed after acceptance');
     });
 
-    it('records a rejection with a pending creator decision', async () => {
+    it('returns the rejection write without performing it', async () => {
       await seedConsentRequest('accepted');
 
-      const result = await SubjectRejectionService.rejectAfterAcceptance({
+      const result = await SubjectRejectionService.prepareRejectAfterAcceptance({
         recordId: RECORD_ID,
         subjectId: SUBJECT,
         reason: 'privacy',
       });
 
-      expect(result.rejectionType).toBe('removed_after_acceptance');
-      expect(result.reason).toBe('privacy');
-      expect(result.creatorResponse?.status).toBe('pending_creator_decision');
+      expect(result.rejectionData.rejectionType).toBe('removed_after_acceptance');
+      expect(result.rejectionData.reason).toBe('privacy');
+      expect(result.rejectionData.creatorResponse?.status).toBe('pending_creator_decision');
+      expect(result.data).toEqual({ rejection: result.rejectionData });
+      expect(result.ref.path).toBe(
+        `subjectConsentRequests/${getConsentRequestId(RECORD_ID, SUBJECT)}`
+      );
 
+      // Confirms it really is unwritten — nothing happened to the doc yet.
       const snap = await getDoc(
         doc(db, 'subjectConsentRequests', getConsentRequestId(RECORD_ID, SUBJECT))
       );
-      expect(snap.data()?.rejection).toEqual(
-        expect.objectContaining({
-          rejectionType: 'removed_after_acceptance',
-          reason: 'privacy',
-        })
-      );
+      expect(snap.data()?.rejection).toBeUndefined();
     });
   });
 

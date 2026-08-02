@@ -87,7 +87,7 @@ const LearnMoreHub: React.FC = () => {
             icon={<Github size={18} className="text-gray-500" />}
             title="GitHub"
             description="The Belrose Health web app — built with Vite, React, and Firebase. Browse the source or follow along as we build."
-            externalUrl="https://github.com/dttran93/belrose-health-website"
+            externalUrl="https://github.com/dttran93/belrose-health"
             externalLabel="View repository"
           />
         </div>

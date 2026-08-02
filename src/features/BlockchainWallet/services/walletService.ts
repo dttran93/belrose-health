@@ -1,4 +1,4 @@
-// src/features/BlockchainVerification/services/walletService.ts
+// src/features/BlockchainWallet/services/walletService.ts
 //
 // wallet service that handles:
 // - MetaMask browser connections
@@ -285,6 +285,24 @@ export class WalletService {
   }
 
   /**
+   * Like getUserWallet, but also reports whether the user profile document exists at all —
+   * for callers (e.g. PermissionsService) that give a different error message for "this user
+   * has never signed up" versus "this user exists but hasn't linked a wallet yet".
+   */
+  static async getUserWalletStatus(
+    userId: string
+  ): Promise<{ profileExists: boolean; wallet: UserWallet | null }> {
+    const db = getFirestore();
+    const userDoc = await getDoc(doc(db, 'users', userId));
+
+    if (!userDoc.exists()) {
+      return { profileExists: false, wallet: null };
+    }
+
+    return { profileExists: true, wallet: userDoc.data()?.wallet || null };
+  }
+
+  /**
    * Get current authenticated user's wallet
    */
   static async getCurrentUserWallet(): Promise<UserWallet | null> {
@@ -300,6 +318,21 @@ export class WalletService {
   static async hasWallet(userId: string): Promise<boolean> {
     const wallet = await this.getUserWallet(userId);
     return !!wallet?.address;
+  }
+
+  /**
+   * Get user's wallet address, throwing if none is linked. Convenience for Firestore-first
+   * flows that need to fail fast (before writing anything) when a chain-write step further
+   * down will need a wallet — see e.g. SubjectService's anchor/unanchor methods.
+   */
+  static async requireUserWalletAddress(userId: string): Promise<string> {
+    const walletAddress = await this.getUserWalletAddress(userId);
+
+    if (!walletAddress) {
+      throw new Error('You must have a linked wallet to perform blockchain actions');
+    }
+
+    return walletAddress;
   }
 
   /**

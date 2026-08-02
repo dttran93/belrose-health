@@ -10,7 +10,7 @@ import {
   decodeRevertReason,
   SyncContext,
 } from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
-import { doc, getDoc, getFirestore } from 'firebase/firestore';
+import { WalletService } from '@/features/BlockchainWallet/services/walletService';
 import { BlockchainRef, buildMemberRegistryRef } from '@belrose/shared';
 
 interface TrusteeResult {
@@ -28,26 +28,6 @@ type TrusteeAction =
 
 export class TrusteeBlockchainService {
   // ==========================================================================
-  // PRIVATE HELPERS
-  // ==========================================================================
-
-  static async getUserWalletAddress(userId: string): Promise<string | null> {
-    const db = getFirestore();
-    const userDoc = await getDoc(doc(db, 'users', userId));
-    if (!userDoc.exists()) return null;
-    const userData = userDoc.data();
-    return userData.wallet?.address || null;
-  }
-
-  static async requireUserWalletAddress(userId: string): Promise<string> {
-    const walletAddress = await this.getUserWalletAddress(userId);
-    if (!walletAddress) {
-      throw new Error('You must have a linked wallet to perform blockchain actions');
-    }
-    return walletAddress;
-  }
-
-  // ==========================================================================
   // TRUSTEE FUNCTIONS
   // ==========================================================================
 
@@ -61,7 +41,7 @@ export class TrusteeBlockchainService {
     level: TrusteeLevel,
     recordIds: string[]
   ): Promise<TrusteeResult> {
-    const walletAddress = await this.requireUserWalletAddress(trustorId);
+    const walletAddress = await WalletService.requireUserWalletAddress(trustorId);
 
     try {
       console.log('⛓️ Proposing trustee on blockchain...', { trustorId, trusteeId, level, recordCount: recordIds.length });
@@ -88,7 +68,7 @@ export class TrusteeBlockchainService {
    * msg.sender = trustee's wallet via PaymasterService
    */
   static async acceptTrustee(trustorId: string, trusteeId: string): Promise<TrusteeResult> {
-    const walletAddress = await this.requireUserWalletAddress(trusteeId);
+    const walletAddress = await WalletService.requireUserWalletAddress(trusteeId);
 
     try {
       console.log('⛓️ Accepting trustee proposal on blockchain...', { trustorId, trusteeId });
@@ -133,7 +113,7 @@ export class TrusteeBlockchainService {
    * msg.sender = trustee's wallet
    */
   static async declineTrustee(trustorId: string, trusteeId: string): Promise<TrusteeResult> {
-    const walletAddress = await this.requireUserWalletAddress(trusteeId);
+    const walletAddress = await WalletService.requireUserWalletAddress(trusteeId);
 
     try {
       console.log('⛓️ Declining trustee proposal on blockchain...', { trustorId, trusteeId });
@@ -163,7 +143,7 @@ export class TrusteeBlockchainService {
     trusteeId: string,
     callerId: string
   ): Promise<TrusteeResult> {
-    const walletAddress = await this.requireUserWalletAddress(callerId);
+    const walletAddress = await WalletService.requireUserWalletAddress(callerId);
 
     try {
       console.log('⛓️ Revoking trustee on blockchain...', { trustorId, trusteeId });
@@ -203,7 +183,7 @@ export class TrusteeBlockchainService {
     trusteeId: string,
     newLevel: TrusteeLevel
   ): Promise<TrusteeResult> {
-    const walletAddress = await this.requireUserWalletAddress(trusteeId);
+    const walletAddress = await WalletService.requireUserWalletAddress(trusteeId);
 
     try {
       console.log('⛓️ Downgrading trustee level on blockchain...', {
@@ -233,7 +213,7 @@ export class TrusteeBlockchainService {
     trusteeId: string,
     newLevel: TrusteeLevel
   ): Promise<TrusteeResult> {
-    const walletAddress = await this.requireUserWalletAddress(trustorId);
+    const walletAddress = await WalletService.requireUserWalletAddress(trustorId);
 
     try {
       console.log('⛓️ Updating trustee level on blockchain...', { trustorId, trusteeId, newLevel });
