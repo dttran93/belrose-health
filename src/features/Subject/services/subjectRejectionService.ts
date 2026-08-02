@@ -6,7 +6,7 @@
  * - Manage response from creator
  */
 
-import { doc, getDoc, getFirestore, Timestamp, updateDoc } from 'firebase/firestore';
+import { doc, DocumentReference, getDoc, getFirestore, Timestamp, updateDoc } from 'firebase/firestore';
 import { RespondToRejectionResult } from './subjectService';
 import { getAuth } from 'firebase/auth';
 import {
@@ -35,15 +35,19 @@ export class SubjectRejectionService {
   // ============================================================================
 
   /**
-   * Handle a subject removing themselves after previously accepting consent
+   * Validates and prepares the rejection-data write for a subject removing themselves after
+   * previously accepting consent, without performing it — so
+   * SubjectService.rejectSubjectStatus can include it in the same atomic writeBatch as the
+   * subjects[] removal and subjectHistory event. A failure here after the subject was already
+   * removed would otherwise silently leave the creator's pending_creator_decision
+   * notification path never triggered.
    */
-  static async rejectAfterAcceptance(params: {
+  static async prepareRejectAfterAcceptance(params: {
     recordId: string;
     subjectId: string;
     reason: RejectionReasons;
-    signature?: string;
-  }): Promise<SubjectRejectionData> {
-    const { recordId, subjectId, reason, signature } = params;
+  }): Promise<{ ref: DocumentReference; data: { rejection: SubjectRejectionData }; rejectionData: SubjectRejectionData }> {
+    const { recordId, subjectId, reason } = params;
     const db = getFirestore();
 
     const requestId = `${recordId}_${subjectId}`;
@@ -69,11 +73,7 @@ export class SubjectRejectionService {
       },
     };
 
-    await updateDoc(requestRef, {
-      rejection: rejectionData,
-    });
-
-    return rejectionData;
+    return { ref: requestRef, data: { rejection: rejectionData }, rejectionData };
   }
 
   // ============================================================================
