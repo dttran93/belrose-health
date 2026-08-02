@@ -1,11 +1,12 @@
 // test/orchestration/trusteeBlockchainService.test.ts
 //
-// Layer 3 (orchestration) — TrusteeBlockchainService: wallet lookups (real Firestore) plus the
-// propose/accept/decline/revoke/downgrade/update wrappers around BlockchainRoleManagerService,
-// whose job is specifically to normalize failures into a logged sync-queue entry + a
-// `{ success: false, blockchainRef: null }` return rather than throwing. The underlying
-// blockchain call and BlockchainSyncQueueService are mocked — this is about
-// TrusteeBlockchainService's own wrapping behavior, not the chain call itself.
+// Layer 3 (orchestration) — TrusteeBlockchainService: the propose/accept/decline/revoke/
+// downgrade/update wrappers around BlockchainRoleManagerService, whose job is specifically to
+// normalize failures into a logged sync-queue entry + a `{ success: false, blockchainRef: null }`
+// return rather than throwing. The underlying blockchain call and BlockchainSyncQueueService are
+// mocked — this is about TrusteeBlockchainService's own wrapping behavior, not the chain call
+// itself. Wallet lookups now live on WalletService (real, unmocked here, backed by the same
+// Firestore emulator) — see test/orchestration/walletService.test.ts for that coverage.
 
 import { beforeEach, afterAll, describe, it, expect, vi } from 'vitest';
 import { doc, setDoc } from 'firebase/firestore';
@@ -59,34 +60,6 @@ describe('TrusteeBlockchainService (orchestration)', () => {
 
   afterAll(() => {
     getApps().forEach(app => deleteApp(app));
-  });
-
-  describe('getUserWalletAddress / requireUserWalletAddress', () => {
-    it('returns null when the user profile does not exist', async () => {
-      await expect(TrusteeBlockchainService.getUserWalletAddress('nonexistent')).resolves.toBeNull();
-    });
-
-    it('returns null when the user has no wallet', async () => {
-      await expect(TrusteeBlockchainService.getUserWalletAddress(NO_WALLET_USER)).resolves.toBeNull();
-    });
-
-    it('returns the wallet address when present', async () => {
-      await expect(TrusteeBlockchainService.getUserWalletAddress(TRUSTOR)).resolves.toBe(
-        '0xTrustorWallet'
-      );
-    });
-
-    it('requireUserWalletAddress throws when there is no wallet', async () => {
-      await expect(
-        TrusteeBlockchainService.requireUserWalletAddress(NO_WALLET_USER)
-      ).rejects.toThrow('You must have a linked wallet to perform blockchain actions');
-    });
-
-    it('requireUserWalletAddress returns the address when present', async () => {
-      await expect(TrusteeBlockchainService.requireUserWalletAddress(TRUSTOR)).resolves.toBe(
-        '0xTrustorWallet'
-      );
-    });
   });
 
   describe('proposeTrustee', () => {
