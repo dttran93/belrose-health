@@ -3,12 +3,19 @@
 /**
  * SubjectService is an orchestrator for all subject-related operations
  *
- * Calls on Subject - Blockchain, Rejection, Consent, Membership, Permission services to orchestrate
+ * Calls on Subject - Blockchain (wallet lookup), Rejection, Consent, Permission services to
+ * orchestrate:
  * - Setting yourself as subject
  * - Requesting someone else to be subject
  * - Rejecting/removing subject status
  * - Creator response to rejections
  * - Related blockchain anchoring/unanchoring
+ *
+ * Firestore-first: every blockchain-touching method (setSubjectAsSelf, anchorSubjectAsController,
+ * acceptSubjectRequest, rejectSubjectStatus) commits its subjects[] array change and a
+ * records/{id}/subjectHistory audit event atomically via writeBatch first, then attempts the
+ * blockchain anchor/unanchor as a separate, best-effort step tracked by
+ * BlockchainSyncQueueService — matching PermissionsService's pattern.
  *
  * Notifications are handled with functions/notifications/triggers -->
  * automatically send notifications for any updates within the records collections
@@ -17,21 +24,39 @@
  * Access is handled in the useSubjectFlow with imports from PermissionService
  */
 
-import { getFirestore, doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
+import {
+  getFirestore,
+  doc,
+  collection,
+  deleteField,
+  getDoc,
+  setDoc,
+  updateDoc,
+  writeBatch,
+  arrayUnion,
+  arrayRemove,
+  serverTimestamp,
+  Timestamp,
+} from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
-import SubjectBlockchainService from './subjectBlockchainService';
-import { VerificationLevel } from '@/features/Credibility/services/blockchainHealthRecordService';
+import * as Sentry from '@sentry/react';
+import { WalletService } from '@/features/BlockchainWallet/services/walletService';
+import {
+  blockchainHealthRecordService,
+  VerificationLevel,
+} from '@/features/Credibility/services/blockchainHealthRecordService';
 import {
   createVerification,
   recordSelfVerification,
 } from '@/features/Credibility/services/verificationService';
 import { SubjectRejectionService } from './subjectRejectionService';
 import { getConsentRequestId, SubjectConsentService } from './subjectConsentService';
-import SubjectMembershipService from './subjectMembershipService';
 import SubjectPermissionService from './subjectPermissionService';
+import { buildSubjectHistoryDocId, prepareSubjectHistoryEventData } from './writeSubjectHistoryEvent';
 import { FileObject } from '@/types/core';
 import SubjectRemovalService from './subjectRemovalService';
 import { TrusteePermissionService } from '@/features/Trustee/services/trusteePermissionService';
+import { BlockchainSyncQueueService } from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
 import {
   buildHealthRecordRef,
   CreatorResponseStatus,
@@ -112,7 +137,9 @@ export class SubjectService {
    * This is immediate - no consent flow needed when you're claiming
    * a record is about yourself.
    *
-   * Also anchors the subject on the blockchain.
+   * Firestore-first: the subjects[] addition and the subjectHistory event commit atomically
+   * in one batch. The blockchain anchor is a separate, best-effort step afterward — it does
+   * not gate or revert the Firestore write, matching PermissionsService.grantAdmin's pattern.
    *
    * @param recordId - The Firestore document ID of the record
    */
@@ -124,105 +151,161 @@ export class SubjectService {
 
     console.log('👤 Setting subject as self for record:', recordId);
 
+    // Check if already a subject
+    if (recordData.subjects?.includes(user.uid)) {
+      return { success: true, recordId, subjectId: user.uid, blockchainAnchored: true };
+    }
+
+    if (!recordData.recordHash) {
+      throw new Error('Record does not have a hash for blockchain anchoring');
+    }
+
+    // Fails before any write if the caller has no wallet linked.
+    const userWalletAddress = await WalletService.requireUserWalletAddress(user.uid);
+
+    const db = getFirestore();
+    const recordRef = doc(db, 'records', recordId);
+    const historyRef = doc(
+      collection(db, 'records', recordId, 'subjectHistory'),
+      buildSubjectHistoryDocId(user.uid)
+    );
+    const eventData = prepareSubjectHistoryEventData(recordId, user.uid, user.uid, 'anchored');
+
+    // Step 1: Atomic Firestore write — subjects[] addition + subjectHistory event, both or
+    // neither. blockchainRef starts null; it's filled in below once the chain call resolves.
     try {
-      // Check if already a subject
-      if (recordData.subjects?.includes(user.uid)) {
-        return { success: true, recordId, subjectId: user.uid, blockchainAnchored: true };
-      }
+      const batch = writeBatch(db);
+      batch.update(recordRef, {
+        subjects: arrayUnion(user.uid),
+        lastModified: serverTimestamp(),
+      });
+      batch.set(historyRef, eventData);
+      await batch.commit();
+    } catch (firestoreError) {
+      Sentry.captureException(firestoreError, {
+        tags: { feature: 'subjects', action: 'setSubjectAsSelf', recordId },
+      });
+      throw firestoreError;
+    }
+    console.log('✅ Firestore: Subject added');
 
-      if (!recordData.recordHash) {
-        throw new Error('Record does not have a hash for blockchain anchoring');
-      }
+    // Step 2: Blockchain — best-effort, does not revert the Firestore write above. The
+    // subject addition already stands regardless of what happens here.
+    const syncRef = await BlockchainSyncQueueService.startAttempt({
+      contract: 'HealthRecordCore',
+      action: 'anchorRecord',
+      userId: user.uid,
+      userWalletAddress,
+      permissionHistoryPath: historyRef.path,
+      context: {
+        type: 'anchorRecord',
+        recordId,
+        recordHash: recordData.recordHash,
+        subjectId: user.uid,
+      },
+    });
 
-      // Step 1: Anchor on blockchain (requires wallet signature)
+    let txResult: { txHash: string; blockNumber: number } | null = null;
+    try {
       console.log('🔗 Anchoring subject on blockchain...');
-      const txResult = await SubjectBlockchainService.anchorSubject(
+      const tx = await blockchainHealthRecordService.anchorRecord(
         recordId,
         recordData.recordHash,
-        user.uid,
         selfVerifyLevel
       );
+      txResult = tx;
+
+      const blockchainRef = buildHealthRecordRef(tx.txHash, tx.blockNumber);
+      await updateDoc(historyRef, { blockchainRef });
+      await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
+
       console.log('✅ Blockchain: Subject anchored');
+    } catch (blockchainError) {
+      console.error('⚠️ Blockchain anchor failed:', blockchainError);
 
-      // Step 2: Update Firestore
-      await SubjectMembershipService.addSubject(recordId, user.uid);
-      console.log('✅ Firestore: Subject added');
+      const errorMessage =
+        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
 
-      // Step 3: Grant access to any trustees of the subject
-      try {
-        await TrusteePermissionService.grantAccessForNewRecord(user.uid, recordId, txResult);
-        console.log('✅ Access granted to subject trustees');
-      } catch (trusteeError) {
-        // Non-fatal — subject was successfully added
-        console.error('⚠️ Failed to grant trustee access for new record:', trusteeError);
-      }
+      await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
+    }
 
-      const blockchainRef = txResult
-        ? buildHealthRecordRef(txResult.txHash, txResult.blockNumber)
-        : undefined;
+    // Step 3: Grant access to any trustees of the subject (non-fatal, consumes whatever the
+    // blockchain attempt above produced — a confirmed tx, or null).
+    try {
+      await TrusteePermissionService.grantAccessForNewRecord(user.uid, recordId, txResult);
+      console.log('✅ Access granted to subject trustees');
+    } catch (trusteeError) {
+      // Non-fatal — subject was successfully added
+      console.error('⚠️ Failed to grant trustee access for new record:', trusteeError);
+    }
 
-      // Step 4: Create audit consent request doc with blockchain ref (non-fatal)
-      try {
-        const db = getFirestore();
-        const requestId = getConsentRequestId(recordId, user.uid);
-        const now = Timestamp.now();
-        const role: SubjectConsentRequest['requestedSubjectRole'] = recordData.owners?.includes(
-          user.uid
-        )
-          ? 'owner'
-          : recordData.administrators?.includes(user.uid)
-            ? 'administrator'
-            : 'sharer';
-        await setDoc(doc(db, 'subjectConsentRequests', requestId), {
-          recordId,
-          subjectId: user.uid,
-          requestedBy: user.uid,
-          requestedSubjectRole: role,
-          status: 'self_consented',
-          createdAt: now,
-          respondedAt: now,
-          grantedAccessOnSubjectRequest: false,
-          ...(blockchainRef ? { blockchainRef } : {}),
-        } satisfies SubjectConsentRequest);
-      } catch (consentError) {
-        console.warn('⚠️ Failed to create self-add consent record:', consentError);
-      }
+    const blockchainRef = txResult
+      ? buildHealthRecordRef(txResult.txHash, txResult.blockNumber)
+      : undefined;
 
-      // Step 5: Mirror the anchor tx's self-verify into Firestore (non-fatal)
-      // anchorRecord defaults selfVerifyLevel to Full when omitted, so mirror that same default.
-      const appliedVerifyLevel = selfVerifyLevel ?? VerificationLevel.Full;
-      if (blockchainRef && appliedVerifyLevel !== VerificationLevel.None) {
-        try {
-          await recordSelfVerification(
-            recordId,
-            recordData.recordHash,
-            user.uid,
-            appliedVerifyLevel as VerificationLevelOptions,
-            blockchainRef
-          );
-          console.log('✅ Self-verification mirrored');
-        } catch (verifyError) {
-          console.warn('⚠️ Failed to mirror self-verification:', verifyError);
-        }
-      }
-
-      console.log('✅ Subject set as self successfully');
-      return {
-        success: true,
+    // Step 4: Create audit consent request doc with blockchain ref (non-fatal)
+    try {
+      const requestId = getConsentRequestId(recordId, user.uid);
+      const now = Timestamp.now();
+      const role: SubjectConsentRequest['requestedSubjectRole'] = recordData.owners?.includes(
+        user.uid
+      )
+        ? 'owner'
+        : recordData.administrators?.includes(user.uid)
+          ? 'administrator'
+          : 'sharer';
+      await setDoc(doc(db, 'subjectConsentRequests', requestId), {
         recordId,
         subjectId: user.uid,
-        blockchainAnchored: txResult !== null,
-      };
-    } catch (error) {
-      console.error('❌ Error setting subject as self:', error);
-      throw error;
+        requestedBy: user.uid,
+        requestedSubjectRole: role,
+        status: 'self_consented',
+        createdAt: now,
+        respondedAt: now,
+        grantedAccessOnSubjectRequest: false,
+        ...(blockchainRef ? { blockchainRef } : {}),
+      } satisfies SubjectConsentRequest);
+    } catch (consentError) {
+      console.warn('⚠️ Failed to create self-add consent record:', consentError);
     }
+
+    // Step 5: Mirror the anchor tx's self-verify into Firestore (non-fatal)
+    // anchorRecord defaults selfVerifyLevel to Full when omitted, so mirror that same default.
+    const appliedVerifyLevel = selfVerifyLevel ?? VerificationLevel.Full;
+    if (blockchainRef && appliedVerifyLevel !== VerificationLevel.None) {
+      try {
+        await recordSelfVerification(
+          recordId,
+          recordData.recordHash,
+          user.uid,
+          appliedVerifyLevel as VerificationLevelOptions,
+          blockchainRef
+        );
+        console.log('✅ Self-verification mirrored');
+      } catch (verifyError) {
+        console.warn('⚠️ Failed to mirror self-verification:', verifyError);
+      }
+    }
+
+    console.log('✅ Subject set as self successfully');
+    return {
+      success: true,
+      recordId,
+      subjectId: user.uid,
+      blockchainAnchored: txResult !== null,
+    };
   }
 
   /**
    * Anchor a trustor as the subject of a record on behalf of a controller trustee.
    * The caller must be an active controller trustee of trustorId (verified on-chain by isControllerOf).
    * No consent request is needed — controller authority is sufficient.
+   *
+   * Firestore-first: the subjects[] addition, the transient controllerAnchorFor proof field
+   * (see firestore.rules BRANCH 7), and the subjectHistory event commit atomically in one
+   * batch. The controllerAnchorFor cleanup stays a separate, second, non-fatal write (BRANCH 8
+   * needs to see the field present, then absent, on two distinct writes). The blockchain
+   * anchor is a separate, best-effort step after that.
    */
   static async anchorSubjectAsController(
     recordId: string,
@@ -250,21 +333,90 @@ export class SubjectService {
 
     console.log('👤 Controller anchoring trustor as subject:', { recordId, trustorId });
 
-    // Step 1: Anchor on blockchain — passes trustorId hash as subjectIdHash
-    const txResult = await SubjectBlockchainService.anchorSubjectAsController(
+    // Fails before any write if the controller has no wallet linked.
+    const userWalletAddress = await WalletService.requireUserWalletAddress(user.uid);
+
+    const historyRef = doc(
+      collection(db, 'records', recordId, 'subjectHistory'),
+      buildSubjectHistoryDocId(trustorId)
+    );
+    const eventData = prepareSubjectHistoryEventData(
       recordId,
-      recordData.recordHash,
       user.uid,
       trustorId,
-      selfVerifyLevel
+      'anchored_as_controller'
     );
-    console.log('✅ Blockchain: Subject anchored as controller');
 
-    // Step 2: Update Firestore
-    await SubjectMembershipService.addSubjectAsController(recordId, trustorId);
+    // Step 1: Atomic Firestore write — subjects[] addition + controllerAnchorFor proof field +
+    // subjectHistory event, all three or none. blockchainRef starts null; it's filled in below
+    // once the chain call resolves.
+    try {
+      const batch = writeBatch(db);
+      batch.update(recordRef, {
+        subjects: arrayUnion(trustorId),
+        controllerAnchorFor: trustorId,
+        lastModified: serverTimestamp(),
+      });
+      batch.set(historyRef, eventData);
+      await batch.commit();
+    } catch (firestoreError) {
+      Sentry.captureException(firestoreError, {
+        tags: { feature: 'subjects', action: 'anchorSubjectAsController', recordId },
+      });
+      throw firestoreError;
+    }
     console.log('✅ Firestore: Subject added');
 
-    // Step 3: Fan out access to the trustor's own trustees (non-fatal)
+    // Cleanup of the transient proof field — a separate, second write, not folded into the
+    // batch above (see BRANCH 7/8 in firestore.rules). Non-fatal: if it fails, the field
+    // persists harmlessly as benign metadata.
+    try {
+      await updateDoc(recordRef, { controllerAnchorFor: deleteField() });
+    } catch {
+      // Non-fatal — field persists as benign metadata
+    }
+
+    // Step 2: Blockchain — best-effort, does not revert the Firestore write above.
+    const syncRef = await BlockchainSyncQueueService.startAttempt({
+      contract: 'HealthRecordCore',
+      action: 'anchorRecord',
+      userId: user.uid,
+      userWalletAddress,
+      permissionHistoryPath: historyRef.path,
+      context: {
+        type: 'anchorRecord',
+        recordId,
+        recordHash: recordData.recordHash,
+        subjectId: trustorId,
+      },
+    });
+
+    let txResult: { txHash: string; blockNumber: number } | null = null;
+    try {
+      const tx = await blockchainHealthRecordService.anchorRecordAsController(
+        recordId,
+        recordData.recordHash,
+        trustorId,
+        selfVerifyLevel
+      );
+      txResult = tx;
+
+      const blockchainRef = buildHealthRecordRef(tx.txHash, tx.blockNumber);
+      await updateDoc(historyRef, { blockchainRef });
+      await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
+
+      console.log('✅ Blockchain: Subject anchored as controller');
+    } catch (blockchainError) {
+      console.error('⚠️ Blockchain anchor failed:', blockchainError);
+
+      const errorMessage =
+        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+
+      await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
+    }
+
+    // Step 3: Fan out access to the trustor's own trustees (non-fatal, consumes whatever the
+    // blockchain attempt above produced — a confirmed tx, or null).
     try {
       await TrusteePermissionService.grantAccessForNewRecord(trustorId, recordId, txResult);
       console.log("✅ Access granted to trustor's trustees");
@@ -278,7 +430,6 @@ export class SubjectService {
 
     // Step 4: Create audit consent request doc with blockchain ref (non-fatal)
     try {
-      const db = getFirestore();
       const requestId = getConsentRequestId(recordId, trustorId);
       const now = Timestamp.now();
       await setDoc(doc(db, 'subjectConsentRequests', requestId), {
@@ -454,7 +605,11 @@ export class SubjectService {
    * Called by the proposed subject to confirm they are indeed
    * the subject of the record.
    *
-   * Also anchors the subject on the blockchain.
+   * Firestore-first: the subjects[] addition, the consent request's pending → accepted
+   * transition, and the subjectHistory event all commit atomically in one batch — a failure
+   * between the consent-accept flip and the subjects[] addition would otherwise silently leave
+   * a request marked 'accepted' for a user never actually added to the record. The blockchain
+   * anchor is a separate, best-effort step afterward.
    *
    * @param recordId - The Firestore document ID of the record
    * @param signature - Optional wallet signature for blockchain verification
@@ -503,25 +658,82 @@ export class SubjectService {
       throw new Error('Record does not have a hash for blockchain anchoring');
     }
 
-    // Step 1: Anchor on blockchain
-    console.log('🔗 Anchoring subject on blockchain...');
-    const txResult = await SubjectBlockchainService.anchorSubject(
-      recordId,
-      recordHash,
-      user.uid,
-      selfVerifyLevel
+    // Fails before any write if the caller has no wallet linked.
+    const userWalletAddress = await WalletService.requireUserWalletAddress(user.uid);
+
+    // Validate + prepare the accept-transition write without performing it, so it can be
+    // folded into the same atomic batch below.
+    const acceptPrep = await SubjectConsentService.prepareAcceptConsent(recordId, user.uid);
+
+    const historyRef = doc(
+      collection(db, 'records', recordId, 'subjectHistory'),
+      buildSubjectHistoryDocId(user.uid)
     );
-    console.log('✅ Blockchain: Subject anchored');
+    const eventData = prepareSubjectHistoryEventData(recordId, user.uid, user.uid, 'anchored', {
+      viaConsent: true,
+    });
 
-    // Step 2: Update Firestore Subject Consent
-    await SubjectConsentService.acceptConsent(recordId, user.uid);
-    console.log('✅ Firestore: Consent accepted');
+    // Step 1: Atomic Firestore write — subjects[] addition + consent accept-transition +
+    // subjectHistory event, all three or none. blockchainRef starts null; it's filled in below
+    // once the chain call resolves.
+    try {
+      const batch = writeBatch(db);
+      batch.update(recordRef, {
+        subjects: arrayUnion(user.uid),
+        lastModified: serverTimestamp(),
+      });
+      batch.update(acceptPrep.ref, acceptPrep.data);
+      batch.set(historyRef, eventData);
+      await batch.commit();
+    } catch (firestoreError) {
+      Sentry.captureException(firestoreError, {
+        tags: { feature: 'subjects', action: 'acceptSubjectRequest', recordId },
+      });
+      throw firestoreError;
+    }
+    console.log('✅ Firestore: Consent accepted and subject added to record');
 
-    // Step 3: Update record's subject array
-    await SubjectMembershipService.addSubject(recordId, user.uid);
-    console.log('✅ Firestore: Subject added to record');
+    // Step 2: Blockchain — best-effort, does not revert the Firestore write above.
+    const syncRef = await BlockchainSyncQueueService.startAttempt({
+      contract: 'HealthRecordCore',
+      action: 'anchorRecord',
+      userId: user.uid,
+      userWalletAddress,
+      permissionHistoryPath: historyRef.path,
+      context: {
+        type: 'anchorRecord',
+        recordId,
+        recordHash,
+        subjectId: user.uid,
+      },
+    });
 
-    // Step 4: Grant access to subject's trustees
+    let txResult: { txHash: string; blockNumber: number } | null = null;
+    try {
+      console.log('🔗 Anchoring subject on blockchain...');
+      const tx = await blockchainHealthRecordService.anchorRecord(
+        recordId,
+        recordHash,
+        selfVerifyLevel
+      );
+      txResult = tx;
+
+      const blockchainRef = buildHealthRecordRef(tx.txHash, tx.blockNumber);
+      await updateDoc(historyRef, { blockchainRef });
+      await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
+
+      console.log('✅ Blockchain: Subject anchored');
+    } catch (blockchainError) {
+      console.error('⚠️ Blockchain anchor failed:', blockchainError);
+
+      const errorMessage =
+        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+
+      await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
+    }
+
+    // Step 3: Grant access to subject's trustees (non-fatal, consumes whatever the blockchain
+    // attempt above produced — a confirmed tx, or null).
     try {
       await TrusteePermissionService.grantAccessForNewRecord(user.uid, recordId, txResult);
       console.log('✅ Access granted to subject trustees');
@@ -587,7 +799,10 @@ export class SubjectService {
    * 2. The SubjectConsentRequest is updated with rejection data
    * 3. Creator is notified and must decide whether to escalate
    *
-   * Atomic operation: blockchain first, then Firestore.
+   * Firestore-first: the subjects[] removal, subjectHistory event, and (if a consent flow
+   * existed) the rejection-data update all commit atomically in one batch. The blockchain
+   * unanchor is a separate, best-effort step afterward — it does not gate or revert the
+   * Firestore write, matching PermissionsService.removeViewer's pattern.
    *
    * @param recordId - The Firestore document ID of the record
    * @param reason - Reason for rejection
@@ -606,78 +821,126 @@ export class SubjectService {
 
     console.log('🚫 Rejecting/removing subject status for record:', recordId);
 
-    try {
-      const recordRef = doc(db, 'records', recordId);
-      const recordDoc = await getDoc(recordRef);
+    const recordRef = doc(db, 'records', recordId);
+    const recordDoc = await getDoc(recordRef);
 
-      if (!recordDoc.exists()) {
-        throw new Error('Record not found');
-      }
+    if (!recordDoc.exists()) {
+      throw new Error('Record not found');
+    }
 
-      const recordData = recordDoc.data();
-      const subjects: string[] = recordData.subjects || [];
+    const recordData = recordDoc.data();
+    const subjects: string[] = recordData.subjects || [];
 
-      // Check if user is currently a subject
-      if (!subjects.includes(user.uid)) {
-        throw new Error('You are not a subject of this record');
-      }
+    // Check if user is currently a subject
+    if (!subjects.includes(user.uid)) {
+      throw new Error('You are not a subject of this record');
+    }
 
-      // Check if there was a consent flow by looking up the consent request
-      const requestId = getConsentRequestId(recordId, user.uid);
-      const requestRef = doc(db, 'subjectConsentRequests', requestId);
-      const requestDoc = await getDoc(requestRef);
+    // Fails before any write if the caller has no wallet linked.
+    const userWalletAddress = await WalletService.requireUserWalletAddress(user.uid);
 
-      const hadConsentFlow = requestDoc.exists() && requestDoc.data()?.status === 'accepted';
+    // Check if there was a consent flow by looking up the consent request
+    const requestId = getConsentRequestId(recordId, user.uid);
+    const requestRef = doc(db, 'subjectConsentRequests', requestId);
+    const requestDoc = await getDoc(requestRef);
 
-      // Step 1: Unanchor from blockchain
-      console.log('🔗 Unanchoring subject from blockchain...');
-      const unanchorTxResult = await SubjectBlockchainService.unanchorSubject(recordId, user.uid);
-      console.log('✅ Blockchain: Subject unanchored');
+    const hadConsentFlow = requestDoc.exists() && requestDoc.data()?.status === 'accepted';
 
-      // Step 2: Update Firestore (only if blockchain succeeded)
-      await SubjectMembershipService.removeSubject(recordId, user.uid);
-      console.log('✅ Firestore: Subject removed from record');
-
-      let pendingCreatorDecision = false;
-
-      // FLOW 1: SELF REMOVAL - No consent flow existed
-      if (!hadConsentFlow) {
-        console.log('✅ Self-removal complete (no consent flow existed)');
-      } else {
-        // FLOW 2: Consent flow existed, capture the rejection data
-        const rejectionData = await SubjectRejectionService.rejectAfterAcceptance({
+    // FLOW 2 only: validate + prepare the rejection-data write without performing it, so it
+    // can be folded into the same atomic batch below.
+    const rejectionPrep = hadConsentFlow
+      ? await SubjectRejectionService.prepareRejectAfterAcceptance({
           recordId,
           subjectId: user.uid,
           reason,
-        });
+        })
+      : null;
 
-        pendingCreatorDecision =
-          rejectionData.creatorResponse?.status === 'pending_creator_decision';
-        console.log('✅ Subject status rejected after acceptance');
+    const historyRef = doc(
+      collection(db, 'records', recordId, 'subjectHistory'),
+      buildSubjectHistoryDocId(user.uid)
+    );
+    const eventData = prepareSubjectHistoryEventData(recordId, user.uid, user.uid, 'unanchored');
+
+    // Step 1: Atomic Firestore write — subjects[] removal + subjectHistory event + (FLOW 2)
+    // the rejection-data update, all three or none. blockchainRef starts null; it's filled in
+    // below once the chain call resolves.
+    try {
+      const batch = writeBatch(db);
+      batch.update(recordRef, {
+        subjects: arrayRemove(user.uid),
+        lastModified: serverTimestamp(),
+      });
+      batch.set(historyRef, eventData);
+      if (rejectionPrep) {
+        batch.update(rejectionPrep.ref, rejectionPrep.data);
       }
-
-      // Step 3: Remove any trustees that have access through the removed subject
-      try {
-        await TrusteePermissionService.revokeAccessForRemovedRecord(
-          user.uid,
-          recordId,
-          unanchorTxResult
-        );
-        console.log('✅ Subject trustees removed from record');
-      } catch (trusteeError) {
-        // Non-fatal — subject removal already succeeded
-        console.error('⚠️ Failed to revoke trustee access on subject removal:', trusteeError);
-      }
-
-      console.log('✅ Subject status rejection complete');
-      return {
-        success: true,
-        pendingCreatorDecision,
-      };
-    } catch (error) {
-      console.error('❌ Error rejecting subject status:', error);
-      throw error;
+      await batch.commit();
+    } catch (firestoreError) {
+      Sentry.captureException(firestoreError, {
+        tags: { feature: 'subjects', action: 'rejectSubjectStatus', recordId },
+      });
+      throw firestoreError;
     }
+    console.log('✅ Firestore: Subject removed from record');
+
+    // Step 2: Blockchain — best-effort, does not revert the Firestore write above. The
+    // subject removal already stands regardless of what happens here.
+    const syncRef = await BlockchainSyncQueueService.startAttempt({
+      contract: 'HealthRecordCore',
+      action: 'unanchorRecord',
+      userId: user.uid,
+      userWalletAddress,
+      permissionHistoryPath: historyRef.path,
+      context: {
+        type: 'unanchorRecord',
+        recordId,
+        subjectId: user.uid,
+      },
+    });
+
+    let unanchorTxResult: { txHash: string; blockNumber: number } | null = null;
+    try {
+      console.log('🔗 Unanchoring subject on blockchain...');
+      const tx = await blockchainHealthRecordService.unanchorRecord(recordId);
+      unanchorTxResult = tx;
+
+      const blockchainRef = buildHealthRecordRef(tx.txHash, tx.blockNumber);
+      await updateDoc(historyRef, { blockchainRef });
+      await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
+
+      console.log('✅ Blockchain: Subject unanchored');
+    } catch (blockchainError) {
+      console.error('⚠️ Blockchain unanchor failed:', blockchainError);
+
+      const errorMessage =
+        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+
+      await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
+    }
+
+    const pendingCreatorDecision =
+      rejectionPrep?.rejectionData.creatorResponse?.status === 'pending_creator_decision';
+
+    // Step 3: Remove any trustees that have access through the removed subject (non-fatal,
+    // consumes whatever the blockchain attempt above produced — a confirmed tx, or null).
+    try {
+      await TrusteePermissionService.revokeAccessForRemovedRecord(
+        user.uid,
+        recordId,
+        unanchorTxResult
+      );
+      console.log('✅ Subject trustees removed from record');
+    } catch (trusteeError) {
+      // Non-fatal — subject removal already succeeded
+      console.error('⚠️ Failed to revoke trustee access on subject removal:', trusteeError);
+    }
+
+    console.log('✅ Subject status rejection complete');
+    return {
+      success: true,
+      pendingCreatorDecision: !!pendingCreatorDecision,
+    };
   }
 
   /**

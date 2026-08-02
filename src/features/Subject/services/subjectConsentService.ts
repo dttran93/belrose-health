@@ -19,6 +19,7 @@ import {
 import {
   deleteDoc,
   doc,
+  DocumentReference,
   getDoc,
   getFirestore,
   setDoc,
@@ -87,7 +88,16 @@ export class SubjectConsentService {
   // ACCEPT
   // ============================================================================
 
-  static async acceptConsent(recordId: string, subjectId: string): Promise<void> {
+  /**
+   * Validates and prepares the pending → accepted transition without performing it — so
+   * SubjectService.acceptSubjectRequest can include it in the same atomic writeBatch as the
+   * subjects[] addition and subjectHistory event. A failure here after the subject was already
+   * added would otherwise silently leave this request stuck at 'pending' forever.
+   */
+  static async prepareAcceptConsent(
+    recordId: string,
+    subjectId: string
+  ): Promise<{ ref: DocumentReference; data: { status: 'accepted'; respondedAt: Timestamp } }> {
     const db = getFirestore();
     const requestRef = doc(db, 'subjectConsentRequests', getConsentRequestId(recordId, subjectId));
     const requestDoc = await getDoc(requestRef);
@@ -102,10 +112,7 @@ export class SubjectConsentService {
       throw new Error(`Cannot accept consent in status: ${data.status}`);
     }
 
-    await updateDoc(requestRef, {
-      status: 'accepted',
-      respondedAt: Timestamp.now(),
-    });
+    return { ref: requestRef, data: { status: 'accepted', respondedAt: Timestamp.now() } };
   }
 
   // ============================================================================

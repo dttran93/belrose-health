@@ -127,29 +127,35 @@ describe('SubjectConsentService (orchestration)', () => {
     });
   });
 
-  describe('acceptConsent', () => {
+  describe('prepareAcceptConsent', () => {
     it('throws when no request exists', async () => {
-      await expect(SubjectConsentService.acceptConsent(RECORD_ID, SUBJECT)).rejects.toThrow(
-        'Consent request not found'
-      );
+      await expect(
+        SubjectConsentService.prepareAcceptConsent(RECORD_ID, SUBJECT)
+      ).rejects.toThrow('Consent request not found');
     });
 
     it('throws when the request is not pending', async () => {
       await seedRequest('accepted');
-      await expect(SubjectConsentService.acceptConsent(RECORD_ID, SUBJECT)).rejects.toThrow(
-        'Cannot accept consent in status: accepted'
-      );
+      await expect(
+        SubjectConsentService.prepareAcceptConsent(RECORD_ID, SUBJECT)
+      ).rejects.toThrow('Cannot accept consent in status: accepted');
     });
 
-    it('accepts a pending request', async () => {
+    it('returns the accept-transition write without performing it', async () => {
       await seedRequest('pending');
-      await SubjectConsentService.acceptConsent(RECORD_ID, SUBJECT);
+      const result = await SubjectConsentService.prepareAcceptConsent(RECORD_ID, SUBJECT);
 
+      expect(result.data.status).toBe('accepted');
+      expect(result.data.respondedAt).toBeDefined();
+      expect(result.ref.path).toBe(
+        `subjectConsentRequests/${getConsentRequestId(RECORD_ID, SUBJECT)}`
+      );
+
+      // Confirms it really is unwritten — nothing happened to the doc yet.
       const snap = await getDoc(
         doc(db, 'subjectConsentRequests', getConsentRequestId(RECORD_ID, SUBJECT))
       );
-      expect(snap.data()?.status).toBe('accepted');
-      expect(snap.data()?.respondedAt).toBeDefined();
+      expect(snap.data()?.status).toBe('pending');
     });
   });
 

@@ -1,4 +1,4 @@
-//src/features/Subject/services/subjectMembershipService.ts
+//src/features/Subject/services/subjectQueryService.ts
 
 /**
  * SubjectQueryService

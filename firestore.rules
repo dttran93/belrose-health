@@ -435,6 +435,36 @@ service cloud.firestore {
 
         allow delete: if false;
       }
+
+      // --- SUBJECT HISTORY SUBCOLLECTION ---
+      // Parallel to permissionHistory above, but for anchor/unanchor state changes on the
+      // subjects[] array — a separate, orthogonal membership axis from the owner/admin/
+      // sharer/viewer role ladder, so it gets its own ledger rather than being folded into
+      // permissionHistory's PermissionChange shape. See SubjectService.
+      match /subjectHistory/{eventId} {
+        allow read: if request.auth != null && (isPlatformAdmin() || hasRoleOnRecord(recordId));
+
+        // Create: must have a role and must be the one making the change. changedBy is
+        // usually the subject themselves (self-anchor/self-unanchor); for controller-anchor
+        // it's the controller acting on behalf of a trustor, who (per BRANCH 7) is already
+        // required to be owner/administrator of this record — so hasRoleOnRecord() holds there
+        // too.
+        allow create: if request.auth != null
+          && request.resource.data.changedBy == request.auth.uid
+          && hasRoleOnRecord(recordId);
+
+        // Update: same deferred-blockchainRef pattern as permissionHistory, and for the same
+        // reason — deliberately NOT hasRoleOnRecord(), since a self-unanchor event (BRANCH 3)
+        // strips the caller's own subjects[] membership in the same batch that creates this
+        // event, so by the time this fill-in runs, hasRoleOnRecord() may already be false for
+        // that same user.
+        allow update: if request.auth != null
+          && resource.data.changedBy == request.auth.uid
+          && resource.data.blockchainRef == null
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['blockchainRef']);
+
+        allow delete: if false;
+      }
     }
 
     // ============================================

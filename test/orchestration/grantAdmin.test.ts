@@ -10,7 +10,7 @@
 // caller now gets denied cleanly at Check 2 instead of falling through unreachable logic.
 
 import { beforeEach, afterAll, describe, it, expect, vi } from 'vitest';
-import { doc, getDoc, getDocs, collection } from 'firebase/firestore';
+import { doc, getDoc, getDocs, collection, setDoc } from 'firebase/firestore';
 import { deleteApp, getApps } from 'firebase/app';
 import { connectTestFirestore, clearTestFirestore, seedUser, seedRecord } from './helpers/testFirestore';
 
@@ -242,6 +242,23 @@ describe('PermissionsService.grantAdmin (orchestration)', () => {
 
     await expect(PermissionsService.grantAdmin(RECORD_ID, TARGET)).rejects.toThrow(
       'User is already an administrator'
+    );
+    expect(BlockchainRoleManagerService.grantRole).not.toHaveBeenCalled();
+  });
+
+  // Regression: PermissionsService.getUserWalletAddress gives a Permissions-specific message
+  // ("has no distributed network account") for a target whose profile exists but has no wallet
+  // linked — distinct from "Target user does not exist or has no profile" (Check 3, which
+  // already guarantees the profile itself exists by the time this fires). The underlying
+  // Firestore read is shared with WalletService.getUserWalletStatus, but this message is
+  // Permissions' own and must survive that consolidation.
+  it('gives a Permissions-specific message when the target has a profile but no linked wallet', async () => {
+    await seedRecord(db, RECORD_ID, { owners: [OWNER] });
+    await setDoc(doc(db, 'users', TARGET), {}); // profile exists, no wallet field
+    setCaller(OWNER);
+
+    await expect(PermissionsService.grantAdmin(RECORD_ID, TARGET)).rejects.toThrow(
+      `${TARGET} has no distributed network account`
     );
     expect(BlockchainRoleManagerService.grantRole).not.toHaveBeenCalled();
   });

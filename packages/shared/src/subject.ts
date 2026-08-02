@@ -56,3 +56,31 @@ export type RejectionReasons =
   | 'privacy'
   | 'duplicate'
   | 'other';
+
+/**
+ * Document structure for the records/{recordId}/subjectHistory subcollection — an
+ * append-only audit ledger for changes to the subjects[] array, parallel to
+ * permissionHistory but kept separate since "subject" is an orthogonal membership axis,
+ * not a rung on the owner/administrator/sharer/viewer role ladder.
+ *
+ * changedBy is normally the subject themselves (self-anchor, self-unanchor, accept via
+ * consent), except 'anchored_as_controller' where it's the controller acting on behalf
+ * of a trustor (subjectId).
+ */
+export type SubjectHistoryAction = 'anchored' | 'anchored_as_controller' | 'unanchored';
+
+export interface SubjectHistoryEvent {
+  recordId: string;
+  recordIdHash: string;
+  subjectId: string;
+  subjectIdHash: string;
+  action: SubjectHistoryAction;
+  changedBy: string;
+  changedByIdHash: string;
+  changedAt: TimestampLike;
+  // null until the deferred blockchain call resolves — see writeSubjectHistoryEvent.ts
+  blockchainRef: BlockchainRef | null;
+  // True when this event came from acceptSubjectRequest (accepting a pending consent
+  // request) rather than an immediate self-anchor/controller-anchor.
+  viaConsent?: boolean;
+}
