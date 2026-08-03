@@ -9,7 +9,7 @@ import type { IntegrityStatus } from '../lib/types';
 import type { TrusteeIntegrityItem } from '../services/trusteeIntegrityService';
 import { CHAIN_STATUS_LABEL, CHAIN_LEVEL_LABEL } from '../services/trusteeIntegrityService';
 import { NETWORK } from '@belrose/shared';
-import type { OnChainTrusteeEvent } from '@/features/Trustee/services/trusteeRelationshipService';
+import { TrusteeHistoryEvent } from '@/features/Trustee/services/writeTrusteeHistoryEvent';
 
 const BASESCAN_TX_URL = `${NETWORK.explorerUrl}/tx/`;
 
@@ -56,7 +56,7 @@ const ACTION_STYLE: Record<string, string> = {
   'level-update': 'bg-purple-50 text-purple-700',
 };
 
-function EventLog({ events }: { events: OnChainTrusteeEvent[] }) {
+function EventLog({ events }: { events: TrusteeHistoryEvent[] }) {
   if (events.length === 0) {
     return <p className="text-xs text-gray-400 italic">No on-chain events recorded</p>;
   }
@@ -72,23 +72,29 @@ function EventLog({ events }: { events: OnChainTrusteeEvent[] }) {
           {event.trustLevel && (
             <span className="text-gray-400 capitalize">· {event.trustLevel}</span>
           )}
-          <CopyableHash
-            value={event.blockchainRef.txHash}
-            chars={8}
-            className="font-mono text-gray-600"
-          />
-          <a
-            href={`${BASESCAN_TX_URL}${event.blockchainRef.txHash}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-500 hover:text-blue-700"
-          >
-            <ExternalLink className="w-3 h-3" />
-          </a>
-          {event.recordedAt && (
+          {event.blockchainRef ? (
+            <>
+              <CopyableHash
+                value={event.blockchainRef.txHash}
+                chars={8}
+                className="font-mono text-gray-600"
+              />
+              <a
+                href={`${BASESCAN_TX_URL}${event.blockchainRef.txHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-500 hover:text-blue-700"
+              >
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </>
+          ) : (
+            <span className="text-gray-400 italic">pending confirmation</span>
+          )}
+          {event.changedAt && (
             <span className="text-gray-400">
               {formatTimestamp(
-                event.recordedAt as unknown as import('@belrose/shared').TimestampLike
+                event.changedAt as unknown as import('@belrose/shared').TimestampLike
               )}
             </span>
           )}
@@ -201,9 +207,10 @@ export const TrusteesIntegrityTable: React.FC<TrusteesIntegrityTableProps> = ({
         <tbody className="divide-y text-left divide-gray-100">
           {filtered.map(item => {
             const isExpanded = expandedRows.has(item.id);
-            const proposeEvent = [...item.onChainEvents]
+            const proposeEvent = [...item.trusteeHistory]
               .reverse()
-              .find(e => e.action === 'propose');
+              .find(e => e.action === 'propose' && e.blockchainRef);
+            const proposeTxHash = proposeEvent?.blockchainRef?.txHash;
 
             return (
               <React.Fragment key={item.id}>
@@ -284,15 +291,15 @@ export const TrusteesIntegrityTable: React.FC<TrusteesIntegrityTableProps> = ({
 
                   {/* Invite Tx */}
                   <td className="px-4 py-3">
-                    {proposeEvent ? (
+                    {proposeTxHash ? (
                       <div className="flex items-center gap-1">
                         <CopyableHash
-                          value={proposeEvent.blockchainRef.txHash}
+                          value={proposeTxHash}
                           chars={8}
                           className="font-mono text-xs text-gray-500"
                         />
                         <a
-                          href={`${BASESCAN_TX_URL}${proposeEvent.blockchainRef.txHash}`}
+                          href={`${BASESCAN_TX_URL}${proposeTxHash}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-blue-500 hover:text-blue-700"
@@ -314,7 +321,7 @@ export const TrusteesIntegrityTable: React.FC<TrusteesIntegrityTableProps> = ({
                         {/* On-Chain Event Log */}
                         <div className="flex-1 min-w-48">
                           <p className="text-xs font-medium text-gray-500 mb-2">On-Chain Events</p>
-                          <EventLog events={item.onChainEvents} />
+                          <EventLog events={item.trusteeHistory} />
                         </div>
 
                         {/* Timeline */}

@@ -22,7 +22,7 @@
  * DECLINE / REVOKE (rollback):
  *  - Removes trustee from role arrays + trustees[]
  *  - Deletes inactive wrappedKeys
- *  - Blockchain revocation handled upstream by TrusteeBlockchainService
+ *  - Blockchain revocation handled upstream by TrusteeRelationshipService
  *
  * Trust level → role resolution (mirrors MemberRoleManager.sol):
  *  - Observer   → always viewer
@@ -41,17 +41,26 @@ import {
   doc,
   getDoc,
   arrayRemove,
-  deleteDoc,
   writeBatch,
+  DocumentReference,
 } from 'firebase/firestore';
+import { id } from 'ethers';
+import * as Sentry from '@sentry/react';
 import { WalletService } from '@/features/BlockchainWallet/services/walletService';
+import {
+  BlockchainSyncQueueService,
+  getUserFacingErrorMessage,
+} from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
 import { TrustLevel } from './trusteeRelationshipService';
 import { Role } from '@/features/Permissions/services/permissionsService';
 import { BlockchainRoleManagerService } from '@/features/Permissions/services/blockchainRoleManagerService';
 import { SharingService } from '@/features/Sharing/services/sharingService';
 import { getAuth } from 'firebase/auth';
-import writePermissionChangeEvent from '@/features/Permissions/services/writePermissionChangeEvent';
-import { BlockchainRef, PermissionChange, buildMemberRegistryRef } from '@belrose/shared';
+import {
+  preparePermissionChangeEventData,
+  buildPermissionHistoryDocId,
+} from '@/features/Permissions/services/writePermissionChangeEvent';
+import { PermissionChange, buildMemberRegistryRef } from '@belrose/shared';
 import { WrappedKeyHistoryEvent } from '@/types/core';
 
 interface TrusteeRecordAccess {
@@ -187,7 +196,10 @@ export class TrusteePermissionService {
    * file (activate/revoke) — mirrors SharingService's own historyEvent helper, since those are the
    * two other places (grant/revoke/reactivate) that stamp the same wrappedKeys.history array.
    */
-  private static historyEvent(action: WrappedKeyHistoryEvent['action'], by: string): WrappedKeyHistoryEvent {
+  private static historyEvent(
+    action: WrappedKeyHistoryEvent['action'],
+    by: string
+  ): WrappedKeyHistoryEvent {
     return { action, by, at: new Date() };
   }
 
@@ -199,26 +211,17 @@ export class TrusteePermissionService {
    * Fan out access to all trustor records at INVITE time.
    * Called by TrusteeRelationshipService.inviteTrustee — runs on the TRUSTOR's client.
    *
-   * Creates all permissions in a pending state:
-   *  - Blockchain role granted
-   *  - wrappedKeys created with isActive: false
-   *  - Trustee added to role arrays + trustees[] on each record
-   *
-   * Everything is live in Firestore but the wrappedKey is inactive,
-   * so the trustee can't decrypt anything until they accept.
-   *
-   * Flow:
-   *  1. Query all records where trustor is a subject
-   *  2. Resolve role per record
-   *  3. Batch grant blockchain roles
-   *  4. Create inactive wrappedKeys via SharingService
-   *  5. Update Firestore role arrays + trustees[]
+   * Creates all permissions in a pending state — role arrays + an inactive wrappedKey +
+   * permissionHistory event, atomically per record — so the trustee has record-level access
+   * but can't decrypt anything until they accept. Firestore-first: this runs BEFORE the
+   * blockchain proposal, so blockchainRef starts null on each event; the caller fills it in
+   * once the chain call resolves. Returns the records actually written to (mirroring
+   * PermissionsService.grantRoleBatch's succeeded-list pattern), non-fatal per record.
    */
   static async grantPendingTrusteeAccess(
     trusteeId: string,
-    trustLevel: TrustLevel,
-    blockchainRef: BlockchainRef
-  ): Promise<void> {
+    trustLevel: TrustLevel
+  ): Promise<{ recordId: string; role: Role; historyRef: DocumentReference }[]> {
     const auth = getAuth();
     const trustorId = auth.currentUser?.uid;
     if (!trustorId) throw new Error('User not authenticated');
@@ -230,7 +233,7 @@ export class TrusteePermissionService {
 
     if (records.length === 0) {
       console.log('ℹ️ No records found for trustor — nothing to fan out');
-      return;
+      return [];
     }
 
     const accessList = records
@@ -246,18 +249,20 @@ export class TrusteePermissionService {
 
     if (accessList.length === 0) {
       console.log('ℹ️ Trustor has no roles on any records — nothing to grant');
-      return;
+      return [];
     }
 
-    // Create inactive wrappedKeys + update Firestore arrays per record
-    // We do these together so the record stays consistent even if we crash partway through
     const db = getFirestore();
+    const succeeded: { recordId: string; role: Role; historyRef: DocumentReference }[] = [];
 
     for (const { recordId, role, hadPriorAccess, previousRole, trustorRole } of accessList) {
       try {
-        await SharingService.grantEncryptionAccess(recordId, trusteeId, trustorId, {
-          isActive: false,
-        });
+        const encryptionGrant = await SharingService.prepareEncryptionAccessGrant(
+          recordId,
+          trusteeId,
+          trustorId,
+          { isActive: false }
+        );
 
         const roleArray = this.roleToArray(role);
         const trustorIsAdminOrOwner = trustorRole === 'owner' || trustorRole === 'administrator';
@@ -274,8 +279,6 @@ export class TrusteePermissionService {
           if (roleArray !== 'viewers') update.viewers = arrayRemove(trusteeId);
         }
 
-        await updateDoc(doc(db, 'records', recordId), update);
-
         const change: PermissionChange = hadPriorAccess
           ? {
               userId: trusteeId,
@@ -285,22 +288,42 @@ export class TrusteePermissionService {
             }
           : { userId: trusteeId, action: 'granted', previousRole: null, newRole: role };
 
-        await writePermissionChangeEvent(
+        const historyRef = doc(
+          collection(db, 'records', recordId, 'permissionHistory'),
+          buildPermissionHistoryDocId(trusteeId)
+        );
+        const eventData = await preparePermissionChangeEventData(
           recordId,
           trustorId,
           [change],
-          blockchainRef,
           undefined,
           'trustee_grant'
         );
 
+        const batch = writeBatch(db);
+        batch.update(doc(db, 'records', recordId), update);
+        batch.set(historyRef, eventData);
+        if (encryptionGrant) {
+          if (encryptionGrant.isReactivation) {
+            batch.update(encryptionGrant.ref, encryptionGrant.data);
+          } else {
+            batch.set(encryptionGrant.ref, encryptionGrant.data);
+          }
+        }
+        await batch.commit();
+
+        succeeded.push({ recordId, role, historyRef });
         console.log(`✅ Pending access granted: ${trusteeId} as ${role} on record ${recordId}`);
       } catch (err) {
+        Sentry.captureException(err, {
+          tags: { feature: 'trustee', action: 'grantPendingTrusteeAccess', recordId },
+        });
         console.error(`⚠️ Failed to grant pending access on record ${recordId}:`, err);
       }
     }
 
-    console.log(`✅ Pending trustee access fan-out complete: ${accessList.length} records`);
+    console.log(`✅ Pending trustee access fan-out complete: ${succeeded.length} records`);
+    return succeeded;
   }
 
   /**
@@ -362,17 +385,16 @@ export class TrusteePermissionService {
   }
 
   /**
-   * Rollback all pending access when the trustee DECLINES an invite.
-   * Called by TrusteeRelationshipService.declineInvite — runs on the TRUSTEE's client.
-   *
-   * Removes trustee from role arrays + trustees[], deletes inactive wrappedKeys.
-   * Blockchain revocation is handled upstream by TrusteeBlockchainService.
+   * Rollback all pending access when the trustee DECLINES an invite (or the trustor revokes
+   * one). Firestore-first: each record's role-array removal, wrappedKey deletion, and
+   * permissionHistory event commit atomically together. The blockchain revocation is a
+   * separate, best-effort step the caller owns — this returns the records it actually touched
+   * so the caller can fill in blockchainRef once the chain call resolves.
    */
   static async rollbackPendingTrusteeAccess(
     trustorId: string,
-    trusteeId: string,
-    blockchainRef: BlockchainRef | null
-  ): Promise<void> {
+    trusteeId: string
+  ): Promise<{ recordId: string; historyRef: DocumentReference }[]> {
     const auth = getAuth();
     const currentUserId = auth.currentUser?.uid;
     if (!currentUserId) throw new Error('User not authenticated');
@@ -393,6 +415,7 @@ export class TrusteePermissionService {
     );
 
     const snapshot = await getDocs(q);
+    const succeeded: { recordId: string; historyRef: DocumentReference }[] = [];
 
     for (const wrappedKeyDoc of snapshot.docs) {
       const { recordId } = wrappedKeyDoc.data();
@@ -417,54 +440,65 @@ export class TrusteePermissionService {
 
         const previousRole = getRoleFromRecordData(recordData, trusteeId);
 
-        // Write the audit event BEFORE stripping the role below — permissionHistory's create
-        // rule requires the writer to currently hold a role on the record, which they're about
-        // to lose. blockchainRef may be null (no new on-chain tx — see
-        // TrusteeBlockchainService's self-heal paths); the record of who/what/when is still
-        // worth keeping either way.
-        if (previousRole) {
-          await writePermissionChangeEvent(
-            recordId,
-            currentUserId,
-            [{ userId: trusteeId, action: 'revoked', previousRole, newRole: null }],
-            blockchainRef,
-            undefined,
-            'trustee_revoke'
-          );
-        }
-
-        // Remove from role arrays + trustees[] — we check all four role arrays
-        // since we don't know which role they were granted without re-querying
-        await updateDoc(recordRef, {
+        const batch = writeBatch(db);
+        batch.update(recordRef, {
           owners: arrayRemove(trusteeId),
           administrators: arrayRemove(trusteeId),
           sharers: arrayRemove(trusteeId),
           viewers: arrayRemove(trusteeId),
           trustees: arrayRemove(trusteeId),
         });
+        batch.delete(wrappedKeyDoc.ref);
 
-        // Delete the inactive wrappedKey
-        await deleteDoc(wrappedKeyDoc.ref);
+        // Only write the audit event when there was actually a role to revoke — mirrors the
+        // original defensive guard. blockchainRef starts null; the caller fills it in once the
+        // chain call resolves.
+        let historyRef: DocumentReference | undefined;
+        if (previousRole) {
+          historyRef = doc(
+            collection(db, 'records', recordId, 'permissionHistory'),
+            buildPermissionHistoryDocId(trusteeId)
+          );
+          const eventData = await preparePermissionChangeEventData(
+            recordId,
+            currentUserId,
+            [{ userId: trusteeId, action: 'revoked', previousRole, newRole: null }],
+            undefined,
+            'trustee_revoke'
+          );
+          batch.set(historyRef, eventData);
+        }
 
+        await batch.commit();
+
+        if (historyRef) succeeded.push({ recordId, historyRef });
         console.log(`✅ Rolled back pending access on record ${recordId}`);
       } catch (err) {
+        Sentry.captureException(err, {
+          tags: { feature: 'trustee', action: 'rollbackPendingTrusteeAccess', recordId },
+        });
         console.error(`⚠️ Failed to rollback access on record ${recordId}:`, err);
       }
     }
 
     console.log('✅ Pending trustee access rollback complete');
+    return succeeded;
   }
 
   /**
    * Revoke all active trustee access when the trustor REVOKES or trustee RESIGNS.
-   * Called by TrusteeRelationshipService on revoke or resign.
-   * Blockchain revocation is handled upstream — this handles Firestore + wrappedKeys only.
+   * Called by TrusteeRelationshipService on revoke or resign — Firestore-first: each record's
+   * role-array removal, wrappedKey deactivation, and permissionHistory event commit atomically
+   * together. The blockchain revocation is a separate, best-effort step the caller owns; this
+   * method never gates on it — it returns the records it actually touched so the caller can
+   * fill in blockchainRef on each history event once the chain call resolves.
+   *
+   * One record's failure doesn't block the others — non-fatal per record, same as today.
    */
   static async revokeTrusteeAccess(
     trustorId: string,
-    trusteeId: string,
-    blockchainRef: BlockchainRef | null
-  ): Promise<void> {
+    trusteeId: string
+  ): Promise<{ recordId: string; historyRef: DocumentReference }[]> {
     console.log('🔄 Revoking active trustee access...', { trustorId, trusteeId });
 
     const changedBy = getAuth().currentUser?.uid ?? trustorId;
@@ -479,6 +513,7 @@ export class TrusteePermissionService {
     );
 
     const snapshot = await getDocs(q);
+    const succeeded: { recordId: string; historyRef: DocumentReference }[] = [];
 
     for (const wrappedKeyDoc of snapshot.docs) {
       const { recordId } = wrappedKeyDoc.data();
@@ -505,46 +540,58 @@ export class TrusteePermissionService {
 
         const previousRole = getRoleFromRecordData(recordData, trusteeId);
 
-        // Write the audit event BEFORE stripping the role below — permissionHistory's create
-        // rule requires the writer to currently hold a role on the record, which they're about
-        // to lose. blockchainRef may be null when the on-chain side was already in its end
-        // state before this call (see TrusteeBlockchainService.revokeTrustee) — no fresh tx to
-        // cite, but the record of who/what/when is still worth keeping.
-        if (previousRole) {
-          await writePermissionChangeEvent(
-            recordId,
-            changedBy,
-            [{ userId: trusteeId, action: 'revoked', previousRole, newRole: null }],
-            blockchainRef,
-            undefined,
-            'trustee_revoke'
-          );
-        }
+        const revoke = await SharingService.prepareEncryptionAccessRevoke(
+          recordId,
+          trusteeId,
+          trustorId
+        );
 
-        // Remove from all role arrays + trustees[]
-        await updateDoc(recordRef, {
+        const batch = writeBatch(db);
+        batch.update(recordRef, {
           owners: arrayRemove(trusteeId),
           administrators: arrayRemove(trusteeId),
           sharers: arrayRemove(trusteeId),
           viewers: arrayRemove(trusteeId),
           trustees: arrayRemove(trusteeId),
         });
+        if (revoke) {
+          batch.update(revoke.ref, revoke.data);
+        }
 
-        // Deactivate rather than delete — preserves audit trail
-        await updateDoc(wrappedKeyDoc.ref, {
-          isActive: false,
-          revokedAt: new Date(),
-          revokedBy: trustorId,
-          history: arrayUnion(this.historyEvent('revoked', trustorId)),
-        });
+        // Only write the audit event when there was actually a role to revoke — previousRole
+        // should always be set given the trustees[] check above, but this mirrors the original
+        // defensive guard rather than assuming it. blockchainRef starts null; the caller fills
+        // it in once the chain call resolves.
+        let historyRef: DocumentReference | undefined;
+        if (previousRole) {
+          historyRef = doc(
+            collection(db, 'records', recordId, 'permissionHistory'),
+            buildPermissionHistoryDocId(trusteeId)
+          );
+          const eventData = await preparePermissionChangeEventData(
+            recordId,
+            changedBy,
+            [{ userId: trusteeId, action: 'revoked', previousRole, newRole: null }],
+            undefined,
+            'trustee_revoke'
+          );
+          batch.set(historyRef, eventData);
+        }
 
+        await batch.commit();
+
+        if (historyRef) succeeded.push({ recordId, historyRef });
         console.log(`✅ Revoked access on record ${recordId}`);
       } catch (err) {
+        Sentry.captureException(err, {
+          tags: { feature: 'trustee', action: 'revokeTrusteeAccess', recordId },
+        });
         console.error(`⚠️ Failed to revoke access on record ${recordId}:`, err);
       }
     }
 
     console.log('✅ Trustee access revocation complete');
+    return succeeded;
   }
 
   /**
@@ -599,6 +646,14 @@ export class TrusteePermissionService {
     else if (recordData.sharers?.includes(subjectId)) subjectRole = 'sharer';
     else if (recordData.viewers?.includes(subjectId)) subjectRole = 'viewer';
 
+    // The acting user (whoever triggered this fan-out — the subject themselves, or a
+    // controller trustee anchoring on their behalf) doesn't change per trustee in this loop,
+    // so it's resolved once. Best-effort, non-throwing — this whole method is already a
+    // decoupled, non-fatal step from SubjectService's perspective.
+    const actingUserId = getAuth().currentUser?.uid ?? subjectId;
+    const actingWalletAddress =
+      (await WalletService.getUserWalletAddress(actingUserId)) ?? undefined;
+
     for (const relationshipDoc of snapshot.docs) {
       const { trusteeId, trustLevel } = relationshipDoc.data();
 
@@ -608,7 +663,6 @@ export class TrusteePermissionService {
       const previousBackendRole = getRoleFromRecordData(recordData, trusteeId);
 
       try {
-        // Trustor grants role from their own wallet (msg.sender = trustor, which holds the role)
         const trusteeWallet = await WalletService.getUserWalletAddress(trusteeId);
         if (!trusteeWallet) {
           console.error(`⚠️ No wallet found for trustee ${trusteeId} — skipping`);
@@ -630,48 +684,39 @@ export class TrusteePermissionService {
           subjectRole,
           currentOnChainTrusteeRole
         );
-
-        // The blockchainRef to cite for this trustee's audit-log entry, if any — set below to
-        // whichever transaction actually produced the on-chain role.
-        let roleChangeRef: BlockchainRef | undefined;
-
-        if (desiredRole) {
-          // No active role yet → grantRole; already has a different (lower) role → changeRole.
-          // grantRole reverts if any role exists, changeRole reverts if the role is unchanged,
-          // so which one applies depends entirely on currentOnChainTrusteeRole.
-          const result = currentOnChainTrusteeRole
-            ? await BlockchainRoleManagerService.changeRole(recordId, trusteeWallet, desiredRole)
-            : await BlockchainRoleManagerService.grantRole(recordId, trusteeWallet, desiredRole);
-
-          if (!result.txHash) {
-            console.error(
-              `⚠️ Blockchain ${currentOnChainTrusteeRole ? 'change' : 'grant'} failed for trustee ${trusteeId} on record ${recordId}`
-            );
-            continue;
-          }
-
-          roleChangeRef = buildMemberRegistryRef(result.txHash, result.blockNumber);
-        } else if (anchorTx) {
-          // Nothing to do on-chain — extendTrusteeGrantsOnAnchor already granted this role
-          // automatically inside the anchor transaction itself. Cite that tx as the source,
-          // tagged as a MemberRoleManager event since that's the contract that actually emitted
-          // RoleGranted, even though it ran as an internal call within the anchor tx.
-          roleChangeRef = buildMemberRegistryRef(anchorTx.txHash, anchorTx.blockNumber);
-        }
-
         const finalRole = desiredRole ?? currentOnChainTrusteeRole;
+
         if (!finalRole) {
           console.log(`ℹ️ Skipping trustee ${trusteeId} on record ${recordId} — no role needed`);
           continue;
         }
 
-        // Mirror Firestore + encryption regardless of whether we made a chain call above — both
-        // calls are idempotent/no-op if already up to date, and this is the only way Firestore and
-        // the trustee's wrappedKey learn about a role the auto-grant already set on-chain.
-        await SharingService.grantEncryptionAccess(recordId, trusteeId, subjectId);
+        // desiredRole truthy means we need to make our own grantRole/changeRole call below —
+        // Firestore-first, so the write happens now with blockchainRef: null and gets filled in
+        // once that chain call resolves. Otherwise, either extendTrusteeGrantsOnAnchor already
+        // granted this role automatically inside the anchor transaction (cite it directly, no
+        // deferral needed), or there's nothing new to log at all.
+        const needsOwnChainCall = !!desiredRole;
+        const immediateRef =
+          !needsOwnChainCall && anchorTx
+            ? buildMemberRegistryRef(anchorTx.txHash, anchorTx.blockNumber)
+            : undefined;
+        const shouldLogChange =
+          (needsOwnChainCall || immediateRef) && previousBackendRole !== finalRole;
 
+        // Mirror Firestore + encryption regardless of whether we make a chain call below — both
+        // are idempotent/no-op if already up to date, and this is the only way Firestore and
+        // the trustee's wrappedKey learn about a role the auto-grant already set on-chain.
+        const encryptionGrant = await SharingService.prepareEncryptionAccessGrant(
+          recordId,
+          trusteeId,
+          subjectId
+        );
+
+        let historyRef: DocumentReference | undefined;
+        const batch = writeBatch(db);
         // Only tag as trustee-derived if they didn't already have independent access
-        await updateDoc(doc(db, 'records', recordId), {
+        batch.update(doc(db, 'records', recordId), {
           owners: arrayRemove(trusteeId),
           administrators: arrayRemove(trusteeId),
           sharers: arrayRemove(trusteeId),
@@ -679,11 +724,14 @@ export class TrusteePermissionService {
           [this.roleToArray(finalRole)]: arrayUnion(trusteeId),
           ...(!previousBackendRole && { trustees: arrayUnion(trusteeId) }),
         });
-
-        // Only log when Firestore's role actually changed and we have a tx to cite — skips
-        // both a true no-op (finalRole matches what Firestore already had) and the case where
-        // no anchorTx was passed in and we made no chain call of our own.
-        if (roleChangeRef && previousBackendRole !== finalRole) {
+        if (encryptionGrant) {
+          if (encryptionGrant.isReactivation) {
+            batch.update(encryptionGrant.ref, encryptionGrant.data);
+          } else {
+            batch.set(encryptionGrant.ref, encryptionGrant.data);
+          }
+        }
+        if (shouldLogChange) {
           const change: PermissionChange = previousBackendRole
             ? {
                 userId: trusteeId,
@@ -693,17 +741,79 @@ export class TrusteePermissionService {
               }
             : { userId: trusteeId, action: 'granted', previousRole: null, newRole: finalRole };
 
-          await writePermissionChangeEvent(
+          historyRef = doc(
+            collection(db, 'records', recordId, 'permissionHistory'),
+            buildPermissionHistoryDocId(trusteeId)
+          );
+          const eventData = await preparePermissionChangeEventData(
             recordId,
             subjectId,
             [change],
-            roleChangeRef,
             undefined,
             'trustee_grant'
           );
+          batch.set(historyRef, eventData);
         }
 
-        console.log(`✅ Trustee ${trusteeId} at ${finalRole} on new record ${recordId}`);
+        try {
+          await batch.commit();
+        } catch (firestoreError) {
+          Sentry.captureException(firestoreError, {
+            tags: { feature: 'trustee', action: 'grantAccessForNewRecord', recordId },
+          });
+          throw firestoreError;
+        }
+
+        // No chain call needed from us — either cite the anchor tx directly (no deferral), or
+        // there's nothing further to do for this trustee.
+        if (!needsOwnChainCall) {
+          if (historyRef && immediateRef) {
+            await updateDoc(historyRef, { blockchainRef: immediateRef });
+          }
+          console.log(`✅ Trustee ${trusteeId} at ${finalRole} on new record ${recordId}`);
+          continue;
+        }
+
+        // We need our own grantRole/changeRole call — best-effort, tracked, does not revert
+        // the Firestore write above. No active role yet → grantRole; already has a different
+        // (lower) role → changeRole.
+        const syncRef = await BlockchainSyncQueueService.startAttempt({
+          contract: 'MemberRoleManager',
+          action: currentOnChainTrusteeRole ? 'changeRole' : 'grantRole',
+          userId: actingUserId,
+          userWalletAddress: actingWalletAddress,
+          permissionHistoryPath: historyRef?.path,
+          context: {
+            type: 'permission',
+            targetUserId: trusteeId,
+            targetWalletAddress: trusteeWallet,
+            role: finalRole,
+            recordId,
+            recordIdHash: id(recordId),
+          },
+        });
+
+        try {
+          const result = currentOnChainTrusteeRole
+            ? await BlockchainRoleManagerService.changeRole(recordId, trusteeWallet, desiredRole!)
+            : await BlockchainRoleManagerService.grantRole(recordId, trusteeWallet, desiredRole!);
+
+          const blockchainRef = buildMemberRegistryRef(result.txHash, result.blockNumber);
+          if (historyRef) await updateDoc(historyRef, { blockchainRef });
+          await BlockchainSyncQueueService.recordSuccess(syncRef, result);
+
+          console.log(`✅ Trustee ${trusteeId} at ${finalRole} on new record ${recordId}`);
+        } catch (chainError) {
+          console.error(
+            `⚠️ Blockchain ${currentOnChainTrusteeRole ? 'change' : 'grant'} failed for trustee ${trusteeId} on record ${recordId}:`,
+            chainError
+          );
+          const errorMessage = getUserFacingErrorMessage(
+            chainError,
+            'Blockchain transaction failed'
+          );
+          await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
+        }
       } catch (err) {
         console.error(`⚠️ Failed to grant trustee ${trusteeId} access on record ${recordId}:`, err);
       }
@@ -762,6 +872,11 @@ export class TrusteePermissionService {
     const recordData = recordDoc.data();
     const trusteeDerivedIds: string[] = recordData.trustees ?? [];
 
+    // The acting user doesn't change per trustee in this loop — resolved once, best-effort.
+    const actingUserId = getAuth().currentUser?.uid ?? subjectId;
+    const actingWalletAddress =
+      (await WalletService.getUserWalletAddress(actingUserId)) ?? undefined;
+
     for (const relationshipDoc of snapshot.docs) {
       const { trusteeId } = relationshipDoc.data();
 
@@ -784,60 +899,104 @@ export class TrusteePermissionService {
           trusteeWallet
         );
 
-        // The blockchainRef to cite for this trustee's audit-log entry, if any.
-        let roleChangeRef: BlockchainRef | undefined;
+        // Firestore-first: the role removal + wrappedKey deactivation commit atomically
+        // regardless of on-chain state. If already revoked on-chain (retractTrusteeGrantsOnUnanchor
+        // handled it inside the unanchor tx), no chain call is needed from us — the history
+        // event (if any) cites that tx directly. If still active (Firestore/chain drift), we
+        // need our own revokeRole call below, so the event starts with blockchainRef: null.
+        const alreadyRevokedOnChain = !currentOnChainRoleDetails.isActive;
+        const immediateRef =
+          alreadyRevokedOnChain && unanchorTx
+            ? buildMemberRegistryRef(unanchorTx.txHash, unanchorTx.blockNumber)
+            : undefined;
+        const shouldLogChange = alreadyRevokedOnChain ? !!immediateRef : true;
 
-        if (!currentOnChainRoleDetails.isActive) {
-          // Already revoked — retractTrusteeGrantsOnUnanchor handled it inside the unanchor tx.
-          if (unanchorTx) {
-            roleChangeRef = buildMemberRegistryRef(unanchorTx.txHash, unanchorTx.blockNumber);
-          }
-        } else {
-          // Still active despite being tagged as trustee-derived — Firestore/chain drift.
-          // Revoke it explicitly as a self-healing fallback.
-          const result = await BlockchainRoleManagerService.revokeRole(recordId, trusteeWallet);
-          if (!result.txHash) {
-            console.error(
-              `⚠️ Blockchain revoke failed for trustee ${trusteeId} on record ${recordId}`
-            );
-            continue;
-          }
-          roleChangeRef = buildMemberRegistryRef(result.txHash, result.blockNumber);
-        }
+        const revoke = await SharingService.prepareEncryptionAccessRevoke(
+          recordId,
+          trusteeId,
+          subjectId
+        );
 
-        await updateDoc(recordRef, {
+        let historyRef: DocumentReference | undefined;
+        const batch = writeBatch(db);
+        batch.update(recordRef, {
           owners: arrayRemove(trusteeId),
           administrators: arrayRemove(trusteeId),
           sharers: arrayRemove(trusteeId),
           viewers: arrayRemove(trusteeId),
           trustees: arrayRemove(trusteeId),
         });
-
-        // Deactivate rather than delete — preserves audit trail, mirrors revokeTrusteeAccess.
-        // wrappedKey format: `${recordId}_${trusteeId}` (see SharingService.grantEncryptionAccess).
-        const wrappedKeyRef = doc(db, 'wrappedKeys', `${recordId}_${trusteeId}`);
-        const wrappedKeySnap = await getDoc(wrappedKeyRef);
-        if (wrappedKeySnap.exists()) {
-          await updateDoc(wrappedKeyRef, {
-            isActive: false,
-            revokedAt: new Date(),
-            revokedBy: subjectId,
-            history: arrayUnion(this.historyEvent('revoked', subjectId)),
-          });
+        if (revoke) {
+          batch.update(revoke.ref, revoke.data);
         }
-
-        if (roleChangeRef) {
-          await writePermissionChangeEvent(
+        if (shouldLogChange) {
+          historyRef = doc(
+            collection(db, 'records', recordId, 'permissionHistory'),
+            buildPermissionHistoryDocId(trusteeId)
+          );
+          const eventData = await preparePermissionChangeEventData(
             recordId,
             subjectId,
             [{ userId: trusteeId, action: 'revoked', previousRole, newRole: null }],
-            roleChangeRef,
             undefined,
             'trustee_revoke'
           );
+          batch.set(historyRef, eventData);
         }
 
-        console.log(`✅ Revoked trustee ${trusteeId} access on removed record ${recordId}`);
+        try {
+          await batch.commit();
+        } catch (firestoreError) {
+          Sentry.captureException(firestoreError, {
+            tags: { feature: 'trustee', action: 'revokeAccessForRemovedRecord', recordId },
+          });
+          throw firestoreError;
+        }
+
+        if (alreadyRevokedOnChain) {
+          if (historyRef && immediateRef) {
+            await updateDoc(historyRef, { blockchainRef: immediateRef });
+          }
+          console.log(`✅ Revoked trustee ${trusteeId} access on removed record ${recordId}`);
+          continue;
+        }
+
+        // Still active despite being tagged as trustee-derived — self-healing fallback.
+        // Best-effort, tracked, does not revert the Firestore write above.
+        const syncRef = await BlockchainSyncQueueService.startAttempt({
+          contract: 'MemberRoleManager',
+          action: 'revokeRole',
+          userId: actingUserId,
+          userWalletAddress: actingWalletAddress,
+          permissionHistoryPath: historyRef?.path,
+          context: {
+            type: 'permission',
+            targetUserId: trusteeId,
+            targetWalletAddress: trusteeWallet,
+            role: previousRole,
+            recordId,
+            recordIdHash: id(recordId),
+          },
+        });
+
+        try {
+          const result = await BlockchainRoleManagerService.revokeRole(recordId, trusteeWallet);
+          const blockchainRef = buildMemberRegistryRef(result.txHash, result.blockNumber);
+          if (historyRef) await updateDoc(historyRef, { blockchainRef });
+          await BlockchainSyncQueueService.recordSuccess(syncRef, result);
+
+          console.log(`✅ Revoked trustee ${trusteeId} access on removed record ${recordId}`);
+        } catch (chainError) {
+          console.error(
+            `⚠️ Blockchain revoke failed for trustee ${trusteeId} on record ${recordId}:`,
+            chainError
+          );
+          const errorMessage = getUserFacingErrorMessage(
+            chainError,
+            'Blockchain transaction failed'
+          );
+          await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
+        }
       } catch (err) {
         console.error(
           `⚠️ Failed to revoke trustee ${trusteeId} access on record ${recordId}:`,
@@ -851,14 +1010,16 @@ export class TrusteePermissionService {
 
   /**
    * Update trustee's role across all trustor records when trust level changes.
-   * Called by TrusteeRelationshipService.editTrusteeRelationship.
+   * Called by TrusteeRelationshipService.editTrusteeRelationship/stepDownTrusteeLevel.
+   * Firestore-first: each record's role-array change + permissionHistory event commit
+   * atomically together, non-fatal per record. Returns the records actually touched so the
+   * caller can fill in blockchainRef once the chain call resolves.
    */
   static async updateTrusteeAccess(
     trustorId: string,
     trusteeId: string,
-    newTrustLevel: TrustLevel,
-    blockchainRef: BlockchainRef | null
-  ): Promise<void> {
+    newTrustLevel: TrustLevel
+  ): Promise<{ recordId: string; historyRef: DocumentReference }[]> {
     console.log('🔄 Updating trustee access across records...', {
       trustorId,
       trusteeId,
@@ -884,7 +1045,7 @@ export class TrusteePermissionService {
 
     if (trusteeDerivedRecordIds.size === 0) {
       console.log('ℹ️ No trustee-derived records found — nothing to update');
-      return;
+      return [];
     }
 
     // Fetch only the specific records already identified from wrappedKeys rather than
@@ -924,43 +1085,58 @@ export class TrusteePermissionService {
 
     if (accessList.length === 0) {
       console.log('ℹ️ No trustee-derived records with roles to update');
-      return;
+      return [];
     }
+
+    const succeeded: { recordId: string; historyRef: DocumentReference }[] = [];
 
     for (const { recordId, role, previousRole } of accessList) {
       try {
-        await updateDoc(doc(db, 'records', recordId), {
-          owners: arrayRemove(trusteeId),
-          administrators: arrayRemove(trusteeId),
-          sharers: arrayRemove(trusteeId),
-          viewers: arrayRemove(trusteeId),
-          [this.roleToArray(role)]: arrayUnion(trusteeId),
-        });
+        const recordRef = doc(db, 'records', recordId);
+        const historyRef = doc(
+          collection(db, 'records', recordId, 'permissionHistory'),
+          buildPermissionHistoryDocId(trusteeId)
+        );
 
-        // blockchainRef may be null when the on-chain side was already at this level before
-        // this call (see TrusteeBlockchainService.updateTrusteeLevel) — no fresh tx to cite,
-        // but the record of who/what/when is still worth keeping.
         const change: PermissionChange = !previousRole
           ? { userId: trusteeId, action: 'granted', previousRole: null, newRole: role }
           : ROLE_RANK[previousRole] < ROLE_RANK[role]
             ? { userId: trusteeId, action: 'upgraded', previousRole, newRole: role }
             : { userId: trusteeId, action: 'downgraded', previousRole, newRole: role };
 
-        await writePermissionChangeEvent(
+        // blockchainRef starts null; the caller (TrusteeRelationshipService) fills it in once
+        // the chain call resolves — stays null if that call fails (tracked separately via
+        // BlockchainSyncQueueService), but the record of who/what/when is still worth keeping.
+        const eventData = await preparePermissionChangeEventData(
           recordId,
           changedBy,
           [change],
-          blockchainRef,
           undefined,
           'trustee_grant'
         );
 
+        const batch = writeBatch(db);
+        batch.update(recordRef, {
+          owners: arrayRemove(trusteeId),
+          administrators: arrayRemove(trusteeId),
+          sharers: arrayRemove(trusteeId),
+          viewers: arrayRemove(trusteeId),
+          [this.roleToArray(role)]: arrayUnion(trusteeId),
+        });
+        batch.set(historyRef, eventData);
+        await batch.commit();
+
+        succeeded.push({ recordId, historyRef });
         console.log(`✅ Updated ${trusteeId} to ${role} on record ${recordId}`);
       } catch (err) {
+        Sentry.captureException(err, {
+          tags: { feature: 'trustee', action: 'updateTrusteeAccess', recordId },
+        });
         console.error(`⚠️ Failed to update role on record ${recordId}:`, err);
       }
     }
 
-    console.log(`✅ Trustee access update complete: ${accessList.length} records`);
+    console.log(`✅ Trustee access update complete: ${succeeded.length} records`);
+    return succeeded;
   }
 }

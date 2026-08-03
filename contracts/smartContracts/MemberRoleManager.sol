@@ -1242,6 +1242,12 @@ contract MemberRoleManager is Initializable, UUPSUpgradeable, MemberRoleManagerI
    * not expand the trust surface. Revocation flows through the normal onlyActiveMember
    * revokeTrustee path — no admin involvement after creation.
    *
+   * This must be an admin function because if it was a trustee driven function the trustee (guardian)
+   * would be able to add themselves as the trustee of any account. That could be gated by creating a
+   * MemberStatus of Dependent, but there would be no way to determine that the dependent was actually
+   * created by the guardian without adding multiple other functions and storage to the contract. Admin function
+   * is just easier at this time.
+   *
    * @param trustorIdHash  keccak256 of the dependent's Firebase UID
    * @param trusteeIdHash  keccak256 of the guardian's Firebase UID
    */

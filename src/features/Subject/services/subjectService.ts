@@ -56,7 +56,10 @@ import { buildSubjectHistoryDocId, prepareSubjectHistoryEventData } from './writ
 import { FileObject } from '@/types/core';
 import SubjectRemovalService from './subjectRemovalService';
 import { TrusteePermissionService } from '@/features/Trustee/services/trusteePermissionService';
-import { BlockchainSyncQueueService } from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
+import {
+  BlockchainSyncQueueService,
+  getUserFacingErrorMessage,
+} from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
 import {
   buildHealthRecordRef,
   CreatorResponseStatus,
@@ -223,8 +226,10 @@ export class SubjectService {
     } catch (blockchainError) {
       console.error('⚠️ Blockchain anchor failed:', blockchainError);
 
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+      const errorMessage = getUserFacingErrorMessage(
+        blockchainError,
+        'Blockchain transaction failed'
+      );
 
       await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
@@ -409,8 +414,10 @@ export class SubjectService {
     } catch (blockchainError) {
       console.error('⚠️ Blockchain anchor failed:', blockchainError);
 
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+      const errorMessage = getUserFacingErrorMessage(
+        blockchainError,
+        'Blockchain transaction failed'
+      );
 
       await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
@@ -726,8 +733,10 @@ export class SubjectService {
     } catch (blockchainError) {
       console.error('⚠️ Blockchain anchor failed:', blockchainError);
 
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+      const errorMessage = getUserFacingErrorMessage(
+        blockchainError,
+        'Blockchain transaction failed'
+      );
 
       await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
@@ -913,8 +922,10 @@ export class SubjectService {
     } catch (blockchainError) {
       console.error('⚠️ Blockchain unanchor failed:', blockchainError);
 
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+      const errorMessage = getUserFacingErrorMessage(
+        blockchainError,
+        'Blockchain transaction failed'
+      );
 
       await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }

@@ -4,8 +4,8 @@ import type {
   TrusteeRelationship,
   TrustLevel,
   TrusteeStatus,
-  OnChainTrusteeEvent,
 } from '@/features/Trustee/services/trusteeRelationshipService';
+import type { TrusteeHistoryEvent } from '@/features/Trustee/services/writeTrusteeHistoryEvent';
 import type { TimestampLike } from '@belrose/shared';
 import type { IntegrityStatus } from '../lib/types';
 import { getMemberContract } from '../lib/contracts';
@@ -42,7 +42,7 @@ export interface TrusteeIntegrityItem {
   firestoreStatus: TrusteeStatus;
   firestoreTrustLevel: TrustLevel;
   isDependentRelationship?: boolean;
-  onChainEvents: OnChainTrusteeEvent[];
+  trusteeHistory: TrusteeHistoryEvent[];
   createdAt?: TimestampLike;
   respondedAt?: TimestampLike | null;
   revokedAt?: TimestampLike | null;
@@ -54,7 +54,8 @@ export interface TrusteeIntegrityItem {
 }
 
 export async function checkTrusteeIntegrity(
-  rel: TrusteeRelationship & { id: string }
+  rel: TrusteeRelationship & { id: string },
+  trusteeHistory: TrusteeHistoryEvent[]
 ): Promise<TrusteeIntegrityItem> {
   const trustorIdHash = id(rel.trustorId).toLowerCase();
   const trusteeIdHash = id(rel.trusteeId).toLowerCase();
@@ -68,7 +69,7 @@ export async function checkTrusteeIntegrity(
     firestoreStatus: rel.status,
     firestoreTrustLevel: rel.trustLevel,
     isDependentRelationship: rel.isDependentRelationship,
-    onChainEvents: rel.onChainEvents ?? [],
+    trusteeHistory,
     createdAt: rel.createdAt as unknown as TimestampLike,
     respondedAt: rel.respondedAt as unknown as TimestampLike | null,
     revokedAt: rel.revokedAt as unknown as TimestampLike | null,

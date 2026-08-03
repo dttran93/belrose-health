@@ -50,9 +50,9 @@ async function writePermissionChangeEvent(
   recordId: string,
   changedBy: string,
   changes: PermissionChange[],
-  //blockchain ref is null when there's no new on-chain transaction to cite (e.g. the chain was already in the
-  // target state from an earlier attempt — see TrusteeBlockchainService's self-heal paths or chain failure) —
-  // the record of who changed what and when is still worth keeping even without a tx to point to.
+  // blockchainRef is null when there's no new on-chain transaction to cite (e.g. the chain call
+  // failed) — the record of who changed what and when is still worth keeping even without a tx
+  // to point to.
   blockchainRef: BlockchainRef | null,
   recordTitle?: string,
   context?: 'trustee_grant' | 'trustee_revoke' | 'direct',
