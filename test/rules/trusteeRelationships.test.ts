@@ -234,6 +234,29 @@ describe('firestore.rules — trusteeRelationships — update — BRANCH 2 (trus
     );
   });
 
+  // Regression: TrusteeRelationshipService.declineInvite's real Step 1 write includes
+  // recordIdsGranted: [] in the same atomic batch as the status transition — same rationale as
+  // the equivalent BRANCH 3 (resign) test above.
+  it('lets the trustee decline while also clearing recordIdsGranted in the same write', async () => {
+    await seedRelationship({
+      status: 'pending',
+      isActive: false,
+      recordIdsGranted: [{ recordId: 'record-a', previousRole: null }],
+    });
+    await assertSucceeds(
+      testEnv
+        .authenticatedContext(TRUSTEE)
+        .firestore()
+        .doc(relPath(TRUSTOR, TRUSTEE))
+        .update({
+          status: 'declined',
+          isActive: false,
+          revokedBy: TRUSTEE,
+          recordIdsGranted: [],
+        })
+    );
+  });
+
   it('denies the trustee "re-accepting" a relationship that is already active', async () => {
     await seedRelationship({ status: 'active', isActive: true });
     await assertFails(
@@ -282,6 +305,32 @@ describe('firestore.rules — trusteeRelationships — update — BRANCH 3 (trus
           revokedAt: new Date(),
           revokedBy: TRUSTEE,
           statusUpdateReason: 'trustee_resigned',
+        })
+    );
+  });
+
+  // Regression: TrusteeRelationshipService.resignAsTrustee's real Step 1 write includes
+  // recordIdsGranted: [] in the same atomic batch as the status transition (clearing the
+  // trustee's granted-record list has to land atomically with resign — a separate follow-up
+  // write after status has already changed to 'declined' wouldn't be permitted by any branch).
+  it('lets the trustee resign while also clearing recordIdsGranted in the same write', async () => {
+    await seedRelationship({
+      status: 'active',
+      isActive: true,
+      recordIdsGranted: [{ recordId: 'record-a', previousRole: null }],
+    });
+    await assertSucceeds(
+      testEnv
+        .authenticatedContext(TRUSTEE)
+        .firestore()
+        .doc(relPath(TRUSTOR, TRUSTEE))
+        .update({
+          status: 'declined',
+          isActive: false,
+          revokedAt: new Date(),
+          revokedBy: TRUSTEE,
+          statusUpdateReason: 'trustee_resigned',
+          recordIdsGranted: [],
         })
     );
   });

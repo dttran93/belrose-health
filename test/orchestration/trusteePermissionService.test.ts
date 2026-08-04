@@ -155,6 +155,18 @@ describe('TrusteePermissionService (orchestration)', () => {
   });
 
   describe('grantPendingTrusteeAccess', () => {
+    // grantPendingTrusteeAccess now appends {recordId, previousRole} onto the relationship doc's
+    // recordIdsGranted atomically with each record's own grant — the relationship doc must
+    // already exist (created by TrusteeRelationshipService.inviteTrustee's Step 1 in production;
+    // seeded directly here since these tests call this method in isolation).
+    beforeEach(async () => {
+      await seedTrusteeRelationship(TRUSTOR, TRUSTEE, {
+        status: 'pending',
+        isActive: false,
+        recordIdsGranted: [],
+      });
+    });
+
     it('throws when not authenticated', async () => {
       setCaller(null);
       await expect(
@@ -211,6 +223,11 @@ describe('TrusteePermissionService (orchestration)', () => {
       expect(succeeded).toEqual([
         { recordId: RECORD_A, role: 'viewer', historyRef: expect.anything() },
       ]);
+
+      const relSnap = await getDoc(doc(db, 'trusteeRelationships', `${TRUSTOR}_${TRUSTEE}`));
+      expect(relSnap.data()?.recordIdsGranted).toEqual([
+        { recordId: RECORD_A, previousRole: null },
+      ]);
     });
 
     it('mirrors the trustor role for a custodian-level trustee (capped at administrator for an owner)', async () => {
@@ -241,7 +258,10 @@ describe('TrusteePermissionService (orchestration)', () => {
       expect(snap.data()?.owners).not.toContain(TRUSTEE);
     });
 
-    it('does not tag trustees[] when the trustee already had independent access, and logs an upgrade', async () => {
+    // Regression: trustees[] is now tagged unconditionally (even for upgrades from independent
+    // access) — previousRole (persisted below) is what disambiguates strip-vs-downgrade on
+    // revoke, not trustees[] membership. See TrusteePermissionService.revokeTrusteeAccess.
+    it('tags trustees[] and records the independent baseline role when the trustee already had independent access, and logs an upgrade', async () => {
       await seedRecord(db, RECORD_A, {
         owners: [TRUSTOR],
         viewers: [TRUSTEE],
@@ -253,11 +273,16 @@ describe('TrusteePermissionService (orchestration)', () => {
       const snap = await getDoc(doc(db, 'records', RECORD_A));
       const data = snap.data()!;
       expect(data.owners).toContain(TRUSTEE);
-      expect(data.trustees ?? []).not.toContain(TRUSTEE);
+      expect(data.trustees).toContain(TRUSTEE);
 
       const events = await getPermissionHistory(RECORD_A);
       expect(events[0]!.changes).toEqual([
         { userId: TRUSTEE, action: 'upgraded', previousRole: 'viewer', newRole: 'owner' },
+      ]);
+
+      const relSnap = await getDoc(doc(db, 'trusteeRelationships', `${TRUSTOR}_${TRUSTEE}`));
+      expect(relSnap.data()?.recordIdsGranted).toEqual([
+        { recordId: RECORD_A, previousRole: 'viewer' },
       ]);
     });
 
@@ -294,6 +319,11 @@ describe('TrusteePermissionService (orchestration)', () => {
 
       const snapA = await getDoc(doc(db, 'records', RECORD_A));
       expect(snapA.data()?.viewers ?? []).not.toContain(TRUSTEE);
+
+      const relSnap = await getDoc(doc(db, 'trusteeRelationships', `${TRUSTOR}_${TRUSTEE}`));
+      expect(relSnap.data()?.recordIdsGranted).toEqual([
+        { recordId: RECORD_B, previousRole: null },
+      ]);
     });
   });
 
@@ -305,14 +335,22 @@ describe('TrusteePermissionService (orchestration)', () => {
       );
     });
 
-    it('is a no-op when there are no matching inactive wrappedKeys', async () => {
+    it('is a no-op when there is no relationship doc (recordIdsGranted defaults to empty)', async () => {
       setCaller(TRUSTEE);
       await expect(
         TrusteePermissionService.activateTrusteeAccess(TRUSTOR)
       ).resolves.toBeUndefined();
     });
 
-    it('activates every inactive wrappedKey granted by this trustor to this trustee', async () => {
+    it('activates every inactive wrappedKey in recordIdsGranted', async () => {
+      await seedTrusteeRelationship(TRUSTOR, TRUSTEE, {
+        status: 'pending',
+        isActive: false,
+        recordIdsGranted: [
+          { recordId: RECORD_A, previousRole: null },
+          { recordId: RECORD_B, previousRole: null },
+        ],
+      });
       await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: false, grantedBy: TRUSTOR });
       await seedWrappedKey(RECORD_B, TRUSTEE, { isActive: false, grantedBy: TRUSTOR });
       setCaller(TRUSTEE);
@@ -328,6 +366,11 @@ describe('TrusteePermissionService (orchestration)', () => {
     });
 
     it('does not touch a wrappedKey granted by a different trustor', async () => {
+      await seedTrusteeRelationship(TRUSTOR, TRUSTEE, {
+        status: 'pending',
+        isActive: false,
+        recordIdsGranted: [{ recordId: RECORD_A, previousRole: null }],
+      });
       await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: false, grantedBy: 'someone-else' });
       setCaller(TRUSTEE);
 
@@ -336,38 +379,101 @@ describe('TrusteePermissionService (orchestration)', () => {
       const snap = await getDoc(doc(db, 'wrappedKeys', `${RECORD_A}_${TRUSTEE}`));
       expect(snap.data()?.isActive).toBe(false);
     });
+
+    it('scopes activation to recordIdsGranted, leaving a stale inactive wrappedKey from an earlier revoke-then-reinvite cycle untouched', async () => {
+      // Regression test: RECORD_C was granted in a past invite cycle, then the relationship was
+      // revoked (deactivating, not deleting, its wrappedKey). This new invite cycle only covers
+      // A and B — C must NOT come back to life just because it happens to match
+      // (userId, grantedBy, isActive) like A and B do.
+      const RECORD_C = 'trustee-perm-record-c';
+      await seedTrusteeRelationship(TRUSTOR, TRUSTEE, {
+        status: 'pending',
+        isActive: false,
+        recordIdsGranted: [
+          { recordId: RECORD_A, previousRole: null },
+          { recordId: RECORD_B, previousRole: null },
+        ],
+      });
+      await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: false, grantedBy: TRUSTOR });
+      await seedWrappedKey(RECORD_B, TRUSTEE, { isActive: false, grantedBy: TRUSTOR });
+      await seedWrappedKey(RECORD_C, TRUSTEE, { isActive: false, grantedBy: TRUSTOR });
+      setCaller(TRUSTEE);
+
+      await TrusteePermissionService.activateTrusteeAccess(TRUSTOR);
+
+      const snapA = await getDoc(doc(db, 'wrappedKeys', `${RECORD_A}_${TRUSTEE}`));
+      const snapB = await getDoc(doc(db, 'wrappedKeys', `${RECORD_B}_${TRUSTEE}`));
+      const snapC = await getDoc(doc(db, 'wrappedKeys', `${RECORD_C}_${TRUSTEE}`));
+      expect(snapA.data()?.isActive).toBe(true);
+      expect(snapB.data()?.isActive).toBe(true);
+      expect(snapC.data()?.isActive).toBe(false);
+    });
+
+    it('tolerates a recordId in recordIdsGranted whose wrappedKey was never created (non-fatal per-record fan-out failure)', async () => {
+      await seedTrusteeRelationship(TRUSTOR, TRUSTEE, {
+        status: 'pending',
+        isActive: false,
+        recordIdsGranted: [
+          { recordId: RECORD_A, previousRole: null },
+          { recordId: RECORD_B, previousRole: null },
+        ],
+      });
+      await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: false, grantedBy: TRUSTOR });
+      // RECORD_B's wrappedKey was never created — simulates a fan-out failure for that record.
+      setCaller(TRUSTEE);
+
+      await expect(
+        TrusteePermissionService.activateTrusteeAccess(TRUSTOR)
+      ).resolves.toBeUndefined();
+
+      const snapA = await getDoc(doc(db, 'wrappedKeys', `${RECORD_A}_${TRUSTEE}`));
+      expect(snapA.data()?.isActive).toBe(true);
+    });
+
+    it('is a no-op when recordIdsGranted is empty', async () => {
+      await seedTrusteeRelationship(TRUSTOR, TRUSTEE, {
+        status: 'pending',
+        isActive: false,
+        recordIdsGranted: [],
+      });
+      setCaller(TRUSTEE);
+
+      await expect(
+        TrusteePermissionService.activateTrusteeAccess(TRUSTOR)
+      ).resolves.toBeUndefined();
+    });
   });
 
   describe('rollbackPendingTrusteeAccess', () => {
     it('throws when not authenticated', async () => {
       setCaller(null);
       await expect(
-        TrusteePermissionService.rollbackPendingTrusteeAccess(TRUSTOR, TRUSTEE)
+        TrusteePermissionService.rollbackPendingTrusteeAccess(TRUSTOR, TRUSTEE, [])
       ).rejects.toThrow('User not authenticated');
     });
 
     it('throws when the caller is neither the trustor nor the trustee', async () => {
       setCaller('some-stranger');
       await expect(
-        TrusteePermissionService.rollbackPendingTrusteeAccess(TRUSTOR, TRUSTEE)
+        TrusteePermissionService.rollbackPendingTrusteeAccess(TRUSTOR, TRUSTEE, [])
       ).rejects.toThrow('Unauthorized: you are not a party to this trustee relationship');
     });
 
     it('allows the trustor to roll back', async () => {
       setCaller(TRUSTOR);
       await expect(
-        TrusteePermissionService.rollbackPendingTrusteeAccess(TRUSTOR, TRUSTEE)
+        TrusteePermissionService.rollbackPendingTrusteeAccess(TRUSTOR, TRUSTEE, [])
       ).resolves.toEqual([]);
     });
 
     it('allows the trustee to roll back (declining their own invite)', async () => {
       setCaller(TRUSTEE);
       await expect(
-        TrusteePermissionService.rollbackPendingTrusteeAccess(TRUSTOR, TRUSTEE)
+        TrusteePermissionService.rollbackPendingTrusteeAccess(TRUSTOR, TRUSTEE, [])
       ).resolves.toEqual([]);
     });
 
-    it('removes the trustee from all role arrays, deletes the wrappedKey, and logs the revocation with a deferred blockchainRef', async () => {
+    it('strips role-array access entirely when previousRole is null, deletes the wrappedKey, and logs the revocation with a deferred blockchainRef', async () => {
       await seedRecord(db, RECORD_A, { owners: [TRUSTOR], viewers: [TRUSTEE] });
       await tagTrustee(RECORD_A, TRUSTEE);
       await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: false, grantedBy: TRUSTOR });
@@ -375,7 +481,8 @@ describe('TrusteePermissionService (orchestration)', () => {
 
       const succeeded = await TrusteePermissionService.rollbackPendingTrusteeAccess(
         TRUSTOR,
-        TRUSTEE
+        TRUSTEE,
+        [{ recordId: RECORD_A, previousRole: null }]
       );
 
       const recordSnap = await getDoc(doc(db, 'records', RECORD_A));
@@ -394,32 +501,57 @@ describe('TrusteePermissionService (orchestration)', () => {
       expect(succeeded).toEqual([{ recordId: RECORD_A, historyRef: expect.anything() }]);
     });
 
-    it('does not log a permission change when the trustee had no role on the record', async () => {
-      await seedRecord(db, RECORD_A, { owners: [TRUSTOR] });
-      await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: false, grantedBy: TRUSTOR });
+    // Regression: the trustee already had independent viewer access before being upgraded via
+    // this pending invite (previousRole: 'viewer'). Declining must downgrade them back to
+    // viewer — not strip them to nothing — and the wrappedKey stays untouched either way.
+    it('downgrades back to the independent baseline role when previousRole is set, without touching the wrappedKey', async () => {
+      await seedRecord(db, RECORD_A, { owners: [TRUSTOR], administrators: [TRUSTEE] });
+      await tagTrustee(RECORD_A, TRUSTEE);
+      await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: true, grantedBy: TRUSTOR });
       setCaller(TRUSTOR);
 
       const succeeded = await TrusteePermissionService.rollbackPendingTrusteeAccess(
         TRUSTOR,
-        TRUSTEE
+        TRUSTEE,
+        [{ recordId: RECORD_A, previousRole: 'viewer' }]
+      );
+
+      const recordSnap = await getDoc(doc(db, 'records', RECORD_A));
+      expect(recordSnap.data()?.administrators).not.toContain(TRUSTEE);
+      expect(recordSnap.data()?.viewers).toContain(TRUSTEE);
+      expect(recordSnap.data()?.trustees).not.toContain(TRUSTEE);
+
+      const events = await getPermissionHistory(RECORD_A);
+      expect(events[0]!.changes).toEqual([
+        { userId: TRUSTEE, action: 'downgraded', previousRole: 'administrator', newRole: 'viewer' },
+      ]);
+      expect(succeeded).toEqual([{ recordId: RECORD_A, historyRef: expect.anything() }]);
+
+      const keySnap = await getDoc(doc(db, 'wrappedKeys', `${RECORD_A}_${TRUSTEE}`));
+      expect(keySnap.data()?.isActive).toBe(true);
+    });
+
+    it('does not log a permission change when the trustee had no role on the record', async () => {
+      await seedRecord(db, RECORD_A, { owners: [TRUSTOR] });
+      setCaller(TRUSTOR);
+
+      const succeeded = await TrusteePermissionService.rollbackPendingTrusteeAccess(
+        TRUSTOR,
+        TRUSTEE,
+        [{ recordId: RECORD_A, previousRole: null }]
       );
 
       expect(await getPermissionHistory(RECORD_A)).toEqual([]);
       expect(succeeded).toEqual([]);
     });
 
-    // Regression: grantPendingTrusteeAccess only tags trustees[] when the trustee didn't already
-    // have independent access (hadPriorAccess) — its absence means this role predates/is
-    // independent of the trust relationship and must be left untouched when the invite is
-    // declined/revoked before acceptance. Without this guard, the app would try to strip a role
-    // the trustee has every right to keep, and firestore.rules' trustee-self-adjust branch
-    // (which requires trustees[] membership) would correctly reject the attempt anyway.
-    it('leaves a record alone entirely when the trustee has independent (non-trustee-derived) access', async () => {
-      await seedRecord(db, RECORD_A, { owners: [TRUSTOR], viewers: [TRUSTEE] }); // no tagTrustee
+    it('does not touch a record outside recordIdsGranted', async () => {
+      await seedRecord(db, RECORD_A, { owners: [TRUSTOR], viewers: [TRUSTEE] });
+      await tagTrustee(RECORD_A, TRUSTEE);
       await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: false, grantedBy: TRUSTOR });
       setCaller(TRUSTOR);
 
-      await TrusteePermissionService.rollbackPendingTrusteeAccess(TRUSTOR, TRUSTEE);
+      await TrusteePermissionService.rollbackPendingTrusteeAccess(TRUSTOR, TRUSTEE, []);
 
       const recordSnap = await getDoc(doc(db, 'records', RECORD_A));
       expect(recordSnap.data()?.viewers).toContain(TRUSTEE);
@@ -438,7 +570,9 @@ describe('TrusteePermissionService (orchestration)', () => {
       await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: true, grantedBy: TRUSTOR });
       setCaller(null);
 
-      await TrusteePermissionService.revokeTrusteeAccess(TRUSTOR, TRUSTEE);
+      await TrusteePermissionService.revokeTrusteeAccess(TRUSTOR, TRUSTEE, [
+        { recordId: RECORD_A, previousRole: null },
+      ]);
 
       const events = await getPermissionHistory(RECORD_A);
       expect(events[0]!.changedBy).toBe(TRUSTOR);
@@ -447,16 +581,19 @@ describe('TrusteePermissionService (orchestration)', () => {
       ]);
     });
 
-    it('removes role-array access, calls prepareEncryptionAccessRevoke, and defers blockchainRef', async () => {
+    it('strips role-array access entirely when previousRole is null (fresh grant), calls prepareEncryptionAccessRevoke, and defers blockchainRef', async () => {
       await seedRecord(db, RECORD_A, { owners: [TRUSTOR], administrators: [TRUSTEE] });
       await tagTrustee(RECORD_A, TRUSTEE);
       await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: true, grantedBy: TRUSTOR });
       setCaller(TRUSTOR);
 
-      const succeeded = await TrusteePermissionService.revokeTrusteeAccess(TRUSTOR, TRUSTEE);
+      const succeeded = await TrusteePermissionService.revokeTrusteeAccess(TRUSTOR, TRUSTEE, [
+        { recordId: RECORD_A, previousRole: null },
+      ]);
 
       const recordSnap = await getDoc(doc(db, 'records', RECORD_A));
       expect(recordSnap.data()?.administrators).not.toContain(TRUSTEE);
+      expect(recordSnap.data()?.trustees).not.toContain(TRUSTEE);
 
       expect(sharingMocks.prepareEncryptionAccessRevoke).toHaveBeenCalledWith(
         RECORD_A,
@@ -466,32 +603,93 @@ describe('TrusteePermissionService (orchestration)', () => {
 
       const events = await getPermissionHistory(RECORD_A);
       expect(events[0]!.blockchainRef).toBeNull();
+      expect(events[0]!.changes).toEqual([
+        { userId: TRUSTEE, action: 'revoked', previousRole: 'administrator', newRole: null },
+      ]);
       expect(succeeded).toEqual([{ recordId: RECORD_A, historyRef: expect.anything() }]);
     });
 
-    it('only touches active wrappedKeys granted by this trustor', async () => {
-      await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: false, grantedBy: TRUSTOR });
+    // Regression: the trustee already had independent viewer access before being upgraded to
+    // administrator via this relationship (previousRole: 'viewer'). Revoking the relationship
+    // must downgrade them back to viewer — not strip them to nothing, and not leave them
+    // permanently stuck at administrator (the bug this previousRole tracking exists to fix).
+    it('downgrades back to the independent baseline role when previousRole is set, without touching the wrappedKey', async () => {
+      await seedRecord(db, RECORD_A, { owners: [TRUSTOR], administrators: [TRUSTEE] });
+      await tagTrustee(RECORD_A, TRUSTEE);
+      await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: true, grantedBy: TRUSTOR });
       setCaller(TRUSTOR);
 
-      const succeeded = await TrusteePermissionService.revokeTrusteeAccess(TRUSTOR, TRUSTEE);
+      const succeeded = await TrusteePermissionService.revokeTrusteeAccess(TRUSTOR, TRUSTEE, [
+        { recordId: RECORD_A, previousRole: 'viewer' },
+      ]);
+
+      const recordSnap = await getDoc(doc(db, 'records', RECORD_A));
+      expect(recordSnap.data()?.administrators).not.toContain(TRUSTEE);
+      expect(recordSnap.data()?.viewers).toContain(TRUSTEE);
+      expect(recordSnap.data()?.trustees).not.toContain(TRUSTEE);
+
+      expect(sharingMocks.prepareEncryptionAccessRevoke).not.toHaveBeenCalled();
+
+      const events = await getPermissionHistory(RECORD_A);
+      expect(events[0]!.changes).toEqual([
+        { userId: TRUSTEE, action: 'downgraded', previousRole: 'administrator', newRole: 'viewer' },
+      ]);
+      expect(succeeded).toEqual([{ recordId: RECORD_A, historyRef: expect.anything() }]);
+
+      const keySnap = await getDoc(doc(db, 'wrappedKeys', `${RECORD_A}_${TRUSTEE}`));
+      expect(keySnap.data()?.isActive).toBe(true);
+    });
+
+    it('is a no-op when recordIdsGranted is empty', async () => {
+      setCaller(TRUSTOR);
+
+      const succeeded = await TrusteePermissionService.revokeTrusteeAccess(TRUSTOR, TRUSTEE, []);
 
       expect(sharingMocks.prepareEncryptionAccessRevoke).not.toHaveBeenCalled();
       expect(succeeded).toEqual([]);
     });
 
-    // Regression: same rationale as rollbackPendingTrusteeAccess above — a role that predates
-    // (or is independent of) the trust relationship must survive the relationship ending.
-    it('leaves a record alone entirely when the trustee has independent (non-trustee-derived) access', async () => {
-      await seedRecord(db, RECORD_A, { owners: [TRUSTOR], viewers: [TRUSTEE] }); // no tagTrustee
+    it('does not touch a record outside recordIdsGranted', async () => {
+      await seedRecord(db, RECORD_A, { owners: [TRUSTOR], administrators: [TRUSTEE] });
+      await tagTrustee(RECORD_A, TRUSTEE);
       await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: true, grantedBy: TRUSTOR });
+      // RECORD_B is fully set up as if it were trustee-derived (tagged, active wrappedKey), but
+      // it's not in the list passed in — it must be left alone.
+      await seedRecord(db, RECORD_B, { owners: [TRUSTOR], administrators: [TRUSTEE] });
+      await tagTrustee(RECORD_B, TRUSTEE);
+      await seedWrappedKey(RECORD_B, TRUSTEE, { isActive: true, grantedBy: TRUSTOR });
       setCaller(TRUSTOR);
 
-      await TrusteePermissionService.revokeTrusteeAccess(TRUSTOR, TRUSTEE);
+      const succeeded = await TrusteePermissionService.revokeTrusteeAccess(TRUSTOR, TRUSTEE, [
+        { recordId: RECORD_A, previousRole: null },
+      ]);
 
-      const recordSnap = await getDoc(doc(db, 'records', RECORD_A));
-      expect(recordSnap.data()?.viewers).toContain(TRUSTEE);
+      expect(succeeded).toEqual([{ recordId: RECORD_A, historyRef: expect.anything() }]);
+      const recordBSnap = await getDoc(doc(db, 'records', RECORD_B));
+      expect(recordBSnap.data()?.administrators).toContain(TRUSTEE);
+      expect(await getPermissionHistory(RECORD_B)).toEqual([]);
+    });
+
+    it('skips a record where the trustee no longer has any role', async () => {
+      await seedRecord(db, RECORD_A, { owners: [TRUSTOR] });
+      setCaller(TRUSTOR);
+
+      const succeeded = await TrusteePermissionService.revokeTrusteeAccess(TRUSTOR, TRUSTEE, [
+        { recordId: RECORD_A, previousRole: null },
+      ]);
+
+      expect(succeeded).toEqual([]);
       expect(sharingMocks.prepareEncryptionAccessRevoke).not.toHaveBeenCalled();
-      expect(await getPermissionHistory(RECORD_A)).toEqual([]);
+    });
+
+    it('skips a record that no longer exists', async () => {
+      setCaller(TRUSTOR);
+
+      const succeeded = await TrusteePermissionService.revokeTrusteeAccess(TRUSTOR, TRUSTEE, [
+        { recordId: 'nonexistent-record', previousRole: null },
+      ]);
+
+      expect(succeeded).toEqual([]);
     });
   });
 
@@ -557,6 +755,41 @@ describe('TrusteePermissionService (orchestration)', () => {
 
       expect(roleManagerMocks.changeRole).toHaveBeenCalledWith(RECORD_A, '0xTrusteeWallet', 'owner');
       expect(roleManagerMocks.grantRole).not.toHaveBeenCalled();
+    });
+
+    // Regression: trustees[] is now tagged unconditionally (even for upgrades from independent
+    // access), and recordIdsGranted records the pre-fan-out baseline role so a later revoke can
+    // downgrade back to it instead of stripping outright.
+    it('tags trustees[] and records the independent baseline role when the trustee already had independent access', async () => {
+      await seedRecord(db, RECORD_A, { owners: [TRUSTOR], viewers: [TRUSTEE] });
+      await seedTrusteeRelationship(TRUSTOR, TRUSTEE, { trustLevel: 'controller' });
+      roleManagerMocks.getRoleDetails.mockResolvedValue({ role: 'viewer', isActive: true });
+
+      await TrusteePermissionService.grantAccessForNewRecord(TRUSTOR, RECORD_A);
+
+      const snap = await getDoc(doc(db, 'records', RECORD_A));
+      expect(snap.data()?.trustees).toContain(TRUSTEE);
+
+      const relSnap = await getDoc(doc(db, 'trusteeRelationships', `${TRUSTOR}_${TRUSTEE}`));
+      expect(relSnap.data()?.recordIdsGranted).toEqual([
+        { recordId: RECORD_A, previousRole: 'viewer' },
+      ]);
+    });
+
+    it('does not overwrite an already-tracked recordIdsGranted entry on a re-run', async () => {
+      await seedRecord(db, RECORD_A, { owners: [TRUSTOR], viewers: [TRUSTEE] });
+      await seedTrusteeRelationship(TRUSTOR, TRUSTEE, {
+        trustLevel: 'controller',
+        recordIdsGranted: [{ recordId: RECORD_A, previousRole: 'viewer' }],
+      });
+      roleManagerMocks.getRoleDetails.mockResolvedValue({ role: 'viewer', isActive: true });
+
+      await TrusteePermissionService.grantAccessForNewRecord(TRUSTOR, RECORD_A);
+
+      const relSnap = await getDoc(doc(db, 'trusteeRelationships', `${TRUSTOR}_${TRUSTEE}`));
+      expect(relSnap.data()?.recordIdsGranted).toEqual([
+        { recordId: RECORD_A, previousRole: 'viewer' },
+      ]);
     });
 
     it('keeps the Firestore grant when the on-chain call rejects, and logs it for reconciliation', async () => {
@@ -662,7 +895,7 @@ describe('TrusteePermissionService (orchestration)', () => {
 
     it('leaves a trustee with independent (non-trustee-derived) access untouched', async () => {
       await seedRecord(db, RECORD_A, { owners: [TRUSTOR], viewers: [TRUSTEE] });
-      // Not tagged in trustees[] — independent access predating the trustee relationship.
+      // Not in recordIdsGranted — independent access predating the trustee relationship.
       await seedTrusteeRelationship(TRUSTOR, TRUSTEE);
 
       await TrusteePermissionService.revokeAccessForRemovedRecord(TRUSTOR, RECORD_A);
@@ -672,11 +905,13 @@ describe('TrusteePermissionService (orchestration)', () => {
       expect(roleManagerMocks.revokeRole).not.toHaveBeenCalled();
     });
 
-    it('self-heals by explicitly revoking on-chain when the role is still active despite drift, deferring blockchainRef', async () => {
+    it('self-heals by explicitly revoking on-chain when previousRole is null and the role is still active despite drift, deferring blockchainRef', async () => {
       await seedRecord(db, RECORD_A, { owners: [TRUSTOR], viewers: [TRUSTEE] });
       await tagTrustee(RECORD_A, TRUSTEE);
       await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: true, grantedBy: TRUSTOR });
-      await seedTrusteeRelationship(TRUSTOR, TRUSTEE);
+      await seedTrusteeRelationship(TRUSTOR, TRUSTEE, {
+        recordIdsGranted: [{ recordId: RECORD_A, previousRole: null }],
+      });
       roleManagerMocks.getRoleDetails.mockResolvedValue({ role: 'viewer', isActive: true });
 
       await TrusteePermissionService.revokeAccessForRemovedRecord(TRUSTOR, RECORD_A);
@@ -695,13 +930,18 @@ describe('TrusteePermissionService (orchestration)', () => {
       const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
       expect(syncDocs.size).toBe(1);
       expect(syncDocs.docs[0]!.data()).toMatchObject({ status: 'confirmed', action: 'revokeRole' });
+
+      const relSnap = await getDoc(doc(db, 'trusteeRelationships', `${TRUSTOR}_${TRUSTEE}`));
+      expect(relSnap.data()?.recordIdsGranted).toEqual([]);
     });
 
     it('keeps the Firestore revoke when the self-heal chain call rejects, and logs it for reconciliation', async () => {
       await seedRecord(db, RECORD_A, { owners: [TRUSTOR], viewers: [TRUSTEE] });
       await tagTrustee(RECORD_A, TRUSTEE);
       await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: true, grantedBy: TRUSTOR });
-      await seedTrusteeRelationship(TRUSTOR, TRUSTEE);
+      await seedTrusteeRelationship(TRUSTOR, TRUSTEE, {
+        recordIdsGranted: [{ recordId: RECORD_A, previousRole: null }],
+      });
       roleManagerMocks.getRoleDetails.mockResolvedValue({ role: 'viewer', isActive: true });
       roleManagerMocks.revokeRole.mockRejectedValue(new Error('transaction reverted'));
 
@@ -720,11 +960,13 @@ describe('TrusteePermissionService (orchestration)', () => {
       expect(syncDocs.docs[0]!.data()).toMatchObject({ status: 'failed', action: 'revokeRole' });
     });
 
-    it('cites the unanchor tx directly (without an explicit chain call) when the role was already auto-revoked', async () => {
+    it('cites the unanchor tx directly (without an explicit chain call) when previousRole is null and the role was already auto-revoked', async () => {
       await seedRecord(db, RECORD_A, { owners: [TRUSTOR], viewers: [TRUSTEE] });
       await tagTrustee(RECORD_A, TRUSTEE);
       await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: true, grantedBy: TRUSTOR });
-      await seedTrusteeRelationship(TRUSTOR, TRUSTEE);
+      await seedTrusteeRelationship(TRUSTOR, TRUSTEE, {
+        recordIdsGranted: [{ recordId: RECORD_A, previousRole: null }],
+      });
       roleManagerMocks.getRoleDetails.mockResolvedValue({ role: '', isActive: false });
 
       await TrusteePermissionService.revokeAccessForRemovedRecord(TRUSTOR, RECORD_A, {
@@ -751,7 +993,9 @@ describe('TrusteePermissionService (orchestration)', () => {
       await seedRecord(db, RECORD_A, { owners: [TRUSTOR], viewers: [TRUSTEE] });
       await tagTrustee(RECORD_A, TRUSTEE);
       await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: true, grantedBy: TRUSTOR });
-      await seedTrusteeRelationship(TRUSTOR, TRUSTEE);
+      await seedTrusteeRelationship(TRUSTOR, TRUSTEE, {
+        recordIdsGranted: [{ recordId: RECORD_A, previousRole: null }],
+      });
       roleManagerMocks.getRoleDetails.mockResolvedValue({ role: '', isActive: false });
 
       await TrusteePermissionService.revokeAccessForRemovedRecord(TRUSTOR, RECORD_A);
@@ -760,20 +1004,87 @@ describe('TrusteePermissionService (orchestration)', () => {
       expect(recordSnap.data()?.viewers).not.toContain(TRUSTEE);
       expect(await getPermissionHistory(RECORD_A)).toEqual([]);
     });
+
+    // Regression: the trustee already had independent viewer access before being upgraded to
+    // administrator via this relationship (previousRole: 'viewer'). retractTrusteeGrantsOnUnanchor
+    // downgrades them on-chain instead of fully revoking — this must recognize that as "already
+    // handled" too, not just full inactivity, and never touch the wrappedKey.
+    it('recognizes an on-chain downgrade to the baseline role as already handled, without touching the wrappedKey', async () => {
+      await seedRecord(db, RECORD_A, { owners: [TRUSTOR], administrators: [TRUSTEE] });
+      await tagTrustee(RECORD_A, TRUSTEE);
+      await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: true, grantedBy: TRUSTOR });
+      await seedTrusteeRelationship(TRUSTOR, TRUSTEE, {
+        recordIdsGranted: [{ recordId: RECORD_A, previousRole: 'viewer' }],
+      });
+      roleManagerMocks.getRoleDetails.mockResolvedValue({ role: 'viewer', isActive: true });
+
+      await TrusteePermissionService.revokeAccessForRemovedRecord(TRUSTOR, RECORD_A, {
+        txHash: '0xunanchor',
+        blockNumber: 55,
+      });
+
+      expect(roleManagerMocks.revokeRole).not.toHaveBeenCalled();
+      expect(roleManagerMocks.changeRole).not.toHaveBeenCalled();
+
+      const recordSnap = await getDoc(doc(db, 'records', RECORD_A));
+      expect(recordSnap.data()?.administrators).not.toContain(TRUSTEE);
+      expect(recordSnap.data()?.viewers).toContain(TRUSTEE);
+
+      const events = await getPermissionHistory(RECORD_A);
+      expect(events[0]!.changes).toEqual([
+        { userId: TRUSTEE, action: 'downgraded', previousRole: 'administrator', newRole: 'viewer' },
+      ]);
+      expect(events[0]!.blockchainRef).toMatchObject({ txHash: '0xunanchor', blockNumber: 55 });
+
+      const keySnap = await getDoc(doc(db, 'wrappedKeys', `${RECORD_A}_${TRUSTEE}`));
+      expect(keySnap.data()?.isActive).toBe(true);
+
+      const relSnap = await getDoc(doc(db, 'trusteeRelationships', `${TRUSTOR}_${TRUSTEE}`));
+      expect(relSnap.data()?.recordIdsGranted).toEqual([]);
+    });
+
+    it('calls changeRole to the baseline role as a drift correction when the on-chain state does not match it', async () => {
+      await seedRecord(db, RECORD_A, { owners: [TRUSTOR], administrators: [TRUSTEE] });
+      await tagTrustee(RECORD_A, TRUSTEE);
+      await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: true, grantedBy: TRUSTOR });
+      await seedTrusteeRelationship(TRUSTOR, TRUSTEE, {
+        recordIdsGranted: [{ recordId: RECORD_A, previousRole: 'viewer' }],
+      });
+      // On-chain still shows the upgraded role — retractTrusteeGrantsOnUnanchor hasn't (yet)
+      // corrected it, so this must self-heal via changeRole, not revokeRole.
+      roleManagerMocks.getRoleDetails.mockResolvedValue({ role: 'administrator', isActive: true });
+
+      await TrusteePermissionService.revokeAccessForRemovedRecord(TRUSTOR, RECORD_A);
+
+      expect(roleManagerMocks.changeRole).toHaveBeenCalledWith(
+        RECORD_A,
+        '0xTrusteeWallet',
+        'viewer'
+      );
+      expect(roleManagerMocks.revokeRole).not.toHaveBeenCalled();
+
+      const recordSnap = await getDoc(doc(db, 'records', RECORD_A));
+      expect(recordSnap.data()?.viewers).toContain(TRUSTEE);
+
+      const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+      expect(syncDocs.size).toBe(1);
+      expect(syncDocs.docs[0]!.data()).toMatchObject({ status: 'confirmed', action: 'changeRole' });
+    });
   });
 
   describe('updateTrusteeAccess', () => {
-    it('is a no-op when there are no active trustee-derived wrappedKeys', async () => {
+    it('is a no-op when recordIdsGranted is empty', async () => {
       await expect(
-        TrusteePermissionService.updateTrusteeAccess(TRUSTOR, TRUSTEE, 'controller')
+        TrusteePermissionService.updateTrusteeAccess(TRUSTOR, TRUSTEE, 'controller', [])
       ).resolves.toEqual([]);
     });
 
-    it('ignores a record whose trustees[] does not include this trustee (not trustee-derived)', async () => {
+    it('does not touch a record outside recordIdsGranted', async () => {
       await seedRecord(db, RECORD_A, { owners: [TRUSTOR], viewers: [TRUSTEE] });
+      await tagTrustee(RECORD_A, TRUSTEE);
       await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: true, grantedBy: TRUSTOR });
 
-      await TrusteePermissionService.updateTrusteeAccess(TRUSTOR, TRUSTEE, 'controller');
+      await TrusteePermissionService.updateTrusteeAccess(TRUSTOR, TRUSTEE, 'controller', []);
 
       const snap = await getDoc(doc(db, 'records', RECORD_A));
       expect(snap.data()?.owners).not.toContain(TRUSTEE);
@@ -788,7 +1099,8 @@ describe('TrusteePermissionService (orchestration)', () => {
       const succeeded = await TrusteePermissionService.updateTrusteeAccess(
         TRUSTOR,
         TRUSTEE,
-        'controller'
+        'controller',
+        [{ recordId: RECORD_A, previousRole: null }]
       );
 
       const snap = await getDoc(doc(db, 'records', RECORD_A));
@@ -810,7 +1122,9 @@ describe('TrusteePermissionService (orchestration)', () => {
       await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: true, grantedBy: TRUSTOR });
       setCaller(TRUSTOR);
 
-      await TrusteePermissionService.updateTrusteeAccess(TRUSTOR, TRUSTEE, 'observer');
+      await TrusteePermissionService.updateTrusteeAccess(TRUSTOR, TRUSTEE, 'observer', [
+        { recordId: RECORD_A, previousRole: null },
+      ]);
 
       const snap = await getDoc(doc(db, 'records', RECORD_A));
       expect(snap.data()?.viewers).toContain(TRUSTEE);
@@ -827,7 +1141,9 @@ describe('TrusteePermissionService (orchestration)', () => {
       await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: true, grantedBy: TRUSTOR });
       setCaller(null);
 
-      await TrusteePermissionService.updateTrusteeAccess(TRUSTOR, TRUSTEE, 'controller');
+      await TrusteePermissionService.updateTrusteeAccess(TRUSTOR, TRUSTEE, 'controller', [
+        { recordId: RECORD_A, previousRole: null },
+      ]);
 
       const events = await getPermissionHistory(RECORD_A);
       expect(events[0]!.changedBy).toBe(TRUSTOR);

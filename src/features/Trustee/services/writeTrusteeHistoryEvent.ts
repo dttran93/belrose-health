@@ -19,6 +19,7 @@ export interface TrusteeHistoryEvent {
   trusteeIdHash: string;
   action: TrusteeHistoryAction;
   trustLevel?: TrustLevel; // present on 'propose' and 'level-update'
+  recordIds?: string[]; // present on 'propose' — the record set this invite attempted to grant
   changedBy: string;
   changedByIdHash: string;
   changedAt: Timestamp;
@@ -43,7 +44,8 @@ export function prepareTrusteeHistoryEventData(
   trusteeId: string,
   changedBy: string,
   action: TrusteeHistoryAction,
-  trustLevel?: string
+  trustLevel?: string,
+  recordIds?: string[]
 ) {
   return {
     relationshipId,
@@ -53,6 +55,7 @@ export function prepareTrusteeHistoryEventData(
     trusteeIdHash: id(trusteeId),
     action,
     ...(trustLevel ? { trustLevel } : {}),
+    ...(recordIds ? { recordIds } : {}),
     changedBy,
     changedByIdHash: id(changedBy),
     changedAt: serverTimestamp(),

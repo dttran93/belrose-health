@@ -52,6 +52,7 @@ import { getAuth } from 'firebase/auth';
 import { id } from 'ethers';
 import * as Sentry from '@sentry/react';
 import { getUserProfile } from '@/features/Users/services/userProfileService';
+import { Role } from '@/features/Permissions/services/permissionsService';
 import { BlockchainRoleManagerService } from '@/features/Permissions/services/blockchainRoleManagerService';
 import { WalletService } from '@/features/BlockchainWallet/services/walletService';
 import {
@@ -79,6 +80,17 @@ export type StatusUpdate =
 
 export type TrusteeHistoryAction = 'propose' | 'accept' | 'revoke' | 'decline' | 'level-update';
 
+// One entry per record a trustee relationship's fan-out has actually touched. previousRole is
+// the trustee's role on that record immediately before this relationship touched it — null means
+// the relationship is the sole reason they have any role there at all (strip completely on full
+// revoke); a real Role means they already had independent access at that lower role and were
+// upgraded (downgrade back to it on full revoke, never strip). See
+// TrusteePermissionService.grantPendingTrusteeAccess/revokeTrusteeAccess.
+export interface TrusteeGrantedRecord {
+  recordId: string;
+  previousRole: Role | null;
+}
+
 export interface TrusteeRelationship {
   // Core identifiers
   trustorId: string;
@@ -98,6 +110,18 @@ export interface TrusteeRelationship {
 
   // Set to true for auto-created relationships on dependent accounts
   isDependentRelationship?: boolean;
+
+  // Records this relationship's fan-out has actually granted, one entry per record, appended
+  // incrementally (via arrayUnion, atomically with each record's own grant) by
+  // TrusteePermissionService.grantPendingTrusteeAccess as each record's fan-out succeeds — not
+  // pre-populated at invite time, so a record only ever appears here if it was genuinely
+  // granted, never merely attempted. Reset to [] at the start of every invite/reactivation cycle
+  // and cleared back to [] once TrusteePermissionService.revokeTrusteeAccess finishes tearing
+  // the relationship down. Lets activateTrusteeAccess/revokeTrusteeAccess scope their work to
+  // exactly the records this relationship touched instead of broadly scanning wrappedKeys for
+  // this trustor/trustee pair, which could otherwise pick up a stale key left behind by an
+  // earlier cycle that covered a different record set.
+  recordIdsGranted?: TrusteeGrantedRecord[];
 }
 
 // ============================================================================
@@ -210,7 +234,8 @@ export class TrusteeRelationshipService {
       trusteeId,
       trustorId,
       'propose',
-      trustLevel
+      trustLevel,
+      recordIds
     );
     try {
       const batch = writeBatch(db);
@@ -225,6 +250,7 @@ export class TrusteeRelationshipService {
           revokedAt: null,
           revokedBy: null,
           statusUpdateReason: null,
+          recordIdsGranted: [],
         });
       } else {
         console.log('🔄 Creating new trustee relationship invite');
@@ -239,6 +265,7 @@ export class TrusteeRelationshipService {
           revokedAt: null,
           revokedBy: null,
           statusUpdateReason: null,
+          recordIdsGranted: [],
         } satisfies TrusteeRelationship);
       }
       batch.set(historyRef, historyEventData);
@@ -340,6 +367,10 @@ export class TrusteeRelationshipService {
     const userWalletAddress = await WalletService.requireUserWalletAddress(trustorId);
 
     const previousStatus = data.status;
+    // Captured before Step 1 clears it — Step 2 needs the pre-revoke list, and the clear has to
+    // land atomically with the status transition (same write, same rules branch) rather than as
+    // a follow-up write after status has already changed, which no rules branch would permit.
+    const recordIdsGranted = data.recordIdsGranted ?? [];
 
     // Step 1: Atomic Firestore write — the relationship doc's own state transition plus its
     // trusteeHistory event, both or neither. blockchainRef starts null; filled in below once the
@@ -363,6 +394,7 @@ export class TrusteeRelationshipService {
         revokedAt: Timestamp.now(),
         revokedBy: trustorId,
         statusUpdateReason: 'trustor_revoked',
+        recordIdsGranted: [],
       });
       batch.set(historyRef, historyEventData);
       await batch.commit();
@@ -374,14 +406,18 @@ export class TrusteeRelationshipService {
     }
     console.log('✅ Firestore: Relationship marked revoked');
 
-    // Step 2: Non-fatal per-record access rollback — active relationships deactivate
-    // wrappedKeys + remove role arrays; pending relationships delete inactive wrappedKeys +
-    // remove role arrays. Each record's write is already atomic within these methods.
+    // Step 2: Non-fatal per-record access rollback — active relationships strip/downgrade
+    // wrappedKeys + role arrays; pending relationships delete inactive wrappedKeys + remove role
+    // arrays. Each record's write is already atomic within these methods.
     const succeeded =
       previousStatus === 'active'
-        ? await TrusteePermissionService.revokeTrusteeAccess(trustorId, trusteeId)
+        ? await TrusteePermissionService.revokeTrusteeAccess(trustorId, trusteeId, recordIdsGranted)
         : previousStatus === 'pending'
-          ? await TrusteePermissionService.rollbackPendingTrusteeAccess(trustorId, trusteeId)
+          ? await TrusteePermissionService.rollbackPendingTrusteeAccess(
+              trustorId,
+              trusteeId,
+              recordIdsGranted
+            )
           : [];
 
     // Step 3: Blockchain — best-effort, does not revert the Firestore write above. The
@@ -506,7 +542,8 @@ export class TrusteeRelationshipService {
       succeeded = await TrusteePermissionService.updateTrusteeAccess(
         trustorId,
         trusteeId,
-        newTrustLevel
+        newTrustLevel,
+        data.recordIdsGranted ?? []
       );
     } catch (err) {
       console.error('⚠️ Permission fan-out failed during trust level edit (non-fatal):', err);
@@ -754,7 +791,8 @@ export class TrusteeRelationshipService {
       succeeded = await TrusteePermissionService.updateTrusteeAccess(
         trustorId,
         trusteeId,
-        newTrustLevel
+        newTrustLevel,
+        data.recordIdsGranted ?? []
       );
     } catch (err) {
       console.error('⚠️ Permission fan-out failed during step-down (non-fatal):', err);
@@ -842,6 +880,10 @@ export class TrusteeRelationshipService {
     // Fails before any write if the trustee has no wallet linked.
     const userWalletAddress = await WalletService.requireUserWalletAddress(trusteeId);
 
+    // Captured before Step 1 clears it — see revokeTrustee's identical comment for why the
+    // clear has to land atomically with the status transition rather than as a follow-up write.
+    const recordIdsGranted = data.recordIdsGranted ?? [];
+
     // Step 1: Atomic Firestore write — the relationship doc's own state transition plus its
     // trusteeHistory event, both or neither. blockchainRef starts null; filled in below once the
     // chain call resolves.
@@ -863,6 +905,7 @@ export class TrusteeRelationshipService {
         status: 'declined',
         respondedAt: Timestamp.now(),
         revokedBy: trusteeId,
+        recordIdsGranted: [],
       });
       batch.set(historyRef, historyEventData);
       await batch.commit();
@@ -877,7 +920,8 @@ export class TrusteeRelationshipService {
     // Step 2: Roll back all pending permissions granted at invite time (non-fatal per record).
     const succeeded = await TrusteePermissionService.rollbackPendingTrusteeAccess(
       trustorId,
-      trusteeId
+      trusteeId,
+      recordIdsGranted
     );
 
     // Step 3: Blockchain decline — revokes roles granted at proposal time. Best-effort, does
@@ -952,6 +996,10 @@ export class TrusteeRelationshipService {
     // Fails before any write if the trustee has no wallet linked.
     const userWalletAddress = await WalletService.requireUserWalletAddress(trusteeId);
 
+    // Captured before Step 1 clears it — see revokeTrustee's identical comment for why the
+    // clear has to land atomically with the status transition rather than as a follow-up write.
+    const recordIdsGranted = data.recordIdsGranted ?? [];
+
     // Step 1: Atomic Firestore write — the relationship doc's own state transition plus its
     // trusteeHistory event, both or neither. blockchainRef starts null; filled in below once the
     // chain call resolves.
@@ -974,6 +1022,7 @@ export class TrusteeRelationshipService {
         revokedAt: Timestamp.now(),
         revokedBy: trusteeId,
         statusUpdateReason: 'trustee_resigned',
+        recordIdsGranted: [],
       });
       batch.set(historyRef, historyEventData);
       await batch.commit();
@@ -986,7 +1035,11 @@ export class TrusteeRelationshipService {
     console.log('✅ Firestore: Relationship marked resigned');
 
     // Step 2: Non-fatal per-record access revocation.
-    const succeeded = await TrusteePermissionService.revokeTrusteeAccess(trustorId, trusteeId);
+    const succeeded = await TrusteePermissionService.revokeTrusteeAccess(
+      trustorId,
+      trusteeId,
+      recordIdsGranted
+    );
 
     // Step 3: Blockchain — best-effort, does not revert the Firestore write above.
     const syncRef = await BlockchainSyncQueueService.startAttempt({

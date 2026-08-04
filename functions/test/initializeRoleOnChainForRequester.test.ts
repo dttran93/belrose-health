@@ -13,8 +13,7 @@ import { clearFirestore } from './helpers/testAdmin';
 
 const { mockContract, connectMock } = vi.hoisted(() => {
   const mockContract = {
-    getRecordOwners: vi.fn(),
-    getRecordAdmins: vi.fn(),
+    getAllRecordParticipants: vi.fn(),
     initializeRecordRole: vi.fn(),
   };
   return { mockContract, connectMock: vi.fn(() => mockContract) };
@@ -60,8 +59,12 @@ beforeEach(async () => {
   await clearFirestore();
   vi.clearAllMocks();
 
-  mockContract.getRecordOwners.mockResolvedValue([]);
-  mockContract.getRecordAdmins.mockResolvedValue([]);
+  mockContract.getAllRecordParticipants.mockResolvedValue({
+    owners: [],
+    admins: [],
+    sharers: [],
+    viewers: [],
+  });
   mockContract.initializeRecordRole.mockResolvedValue(fakeTx());
 });
 
@@ -145,7 +148,12 @@ describe('initializeRoleOnChainForRequester — guard clauses', () => {
   it('throws already-exists when the record is already initialized on chain', async () => {
     await seedRecord();
     await seedRequesterWithWallet();
-    mockContract.getRecordOwners.mockResolvedValue(['0xexistingowner']);
+    mockContract.getAllRecordParticipants.mockResolvedValue({
+      owners: ['0xexistingowner'],
+      admins: [],
+      sharers: [],
+      viewers: [],
+    });
 
     await expect(
       initializeRoleOnChainForRequester.run(
@@ -186,7 +194,7 @@ describe('initializeRoleOnChainForRequester — happy path', () => {
       buildRequest({ recordId: RECORD_ID, requesterUserId: REQUESTER, role: 'owner' }, UPLOADER)
     );
 
-    expect(mockContract.getRecordOwners).toHaveBeenCalledWith('0xstoredhash');
+    expect(mockContract.getAllRecordParticipants).toHaveBeenCalledWith('0xstoredhash');
     expect(mockContract.initializeRecordRole).toHaveBeenCalledWith(
       '0xstoredhash',
       WALLET_ADDRESS,

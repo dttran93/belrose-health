@@ -355,7 +355,7 @@ describe('TrusteeRelationshipService (orchestration)', () => {
 
       await TrusteeRelationshipService.revokeTrustee(TRUSTEE);
 
-      expect(permissionMocks.revokeTrusteeAccess).toHaveBeenCalledWith(TRUSTOR, TRUSTEE);
+      expect(permissionMocks.revokeTrusteeAccess).toHaveBeenCalledWith(TRUSTOR, TRUSTEE, []);
       expect(permissionMocks.rollbackPendingTrusteeAccess).not.toHaveBeenCalled();
 
       const snap = await getDoc(
@@ -373,13 +373,40 @@ describe('TrusteeRelationshipService (orchestration)', () => {
       expect(history[0]!.blockchainRef).toMatchObject({ txHash: '0xrevoke', blockNumber: 4 });
     });
 
+    it('passes the pre-revoke recordIdsGranted to revokeTrusteeAccess, then clears it atomically with the status transition', async () => {
+      const grantedRecords = [{ recordId: 'trustee-rel-record-a', previousRole: null }];
+      await seedRelationship(TRUSTOR, TRUSTEE, {
+        status: 'active',
+        isActive: true,
+        recordIdsGranted: grantedRecords,
+      });
+      setCaller(TRUSTOR);
+
+      await TrusteeRelationshipService.revokeTrustee(TRUSTEE);
+
+      expect(permissionMocks.revokeTrusteeAccess).toHaveBeenCalledWith(
+        TRUSTOR,
+        TRUSTEE,
+        grantedRecords
+      );
+
+      const snap = await getDoc(
+        doc(db, 'trusteeRelationships', getTrusteeRelationshipId(TRUSTOR, TRUSTEE))
+      );
+      expect(snap.data()?.recordIdsGranted).toEqual([]);
+    });
+
     it('revokes a pending relationship via rollbackPendingTrusteeAccess instead', async () => {
       await seedRelationship(TRUSTOR, TRUSTEE, { status: 'pending' });
       setCaller(TRUSTOR);
 
       await TrusteeRelationshipService.revokeTrustee(TRUSTEE);
 
-      expect(permissionMocks.rollbackPendingTrusteeAccess).toHaveBeenCalledWith(TRUSTOR, TRUSTEE);
+      expect(permissionMocks.rollbackPendingTrusteeAccess).toHaveBeenCalledWith(
+        TRUSTOR,
+        TRUSTEE,
+        []
+      );
       expect(permissionMocks.revokeTrusteeAccess).not.toHaveBeenCalled();
     });
 
@@ -446,7 +473,12 @@ describe('TrusteeRelationshipService (orchestration)', () => {
       await TrusteeRelationshipService.editTrusteeRelationship(TRUSTEE, 'custodian');
 
       expect(roleManagerMocks.updateTrusteeLevel).toHaveBeenCalledWith(TRUSTEE, 1);
-      expect(permissionMocks.updateTrusteeAccess).toHaveBeenCalledWith(TRUSTOR, TRUSTEE, 'custodian');
+      expect(permissionMocks.updateTrusteeAccess).toHaveBeenCalledWith(
+        TRUSTOR,
+        TRUSTEE,
+        'custodian',
+        []
+      );
 
       const snap = await getDoc(
         doc(db, 'trusteeRelationships', getTrusteeRelationshipId(TRUSTOR, TRUSTEE))
@@ -550,7 +582,12 @@ describe('TrusteeRelationshipService (orchestration)', () => {
       await TrusteeRelationshipService.stepDownTrusteeLevel(TRUSTOR, 'observer');
 
       expect(roleManagerMocks.downgradeTrusteeLevel).toHaveBeenCalledWith(TRUSTOR, 0);
-      expect(permissionMocks.updateTrusteeAccess).toHaveBeenCalledWith(TRUSTOR, TRUSTEE, 'observer');
+      expect(permissionMocks.updateTrusteeAccess).toHaveBeenCalledWith(
+        TRUSTOR,
+        TRUSTEE,
+        'observer',
+        []
+      );
 
       const snap = await getDoc(
         doc(db, 'trusteeRelationships', getTrusteeRelationshipId(TRUSTOR, TRUSTEE))
@@ -715,7 +752,11 @@ describe('TrusteeRelationshipService (orchestration)', () => {
 
       await TrusteeRelationshipService.declineInvite(TRUSTOR);
 
-      expect(permissionMocks.rollbackPendingTrusteeAccess).toHaveBeenCalledWith(TRUSTOR, TRUSTEE);
+      expect(permissionMocks.rollbackPendingTrusteeAccess).toHaveBeenCalledWith(
+        TRUSTOR,
+        TRUSTEE,
+        []
+      );
 
       const snap = await getDoc(
         doc(db, 'trusteeRelationships', getTrusteeRelationshipId(TRUSTOR, TRUSTEE))
@@ -781,7 +822,7 @@ describe('TrusteeRelationshipService (orchestration)', () => {
 
       await TrusteeRelationshipService.resignAsTrustee(TRUSTOR);
 
-      expect(permissionMocks.revokeTrusteeAccess).toHaveBeenCalledWith(TRUSTOR, TRUSTEE);
+      expect(permissionMocks.revokeTrusteeAccess).toHaveBeenCalledWith(TRUSTOR, TRUSTEE, []);
 
       const snap = await getDoc(
         doc(db, 'trusteeRelationships', getTrusteeRelationshipId(TRUSTOR, TRUSTEE))
@@ -797,6 +838,29 @@ describe('TrusteeRelationshipService (orchestration)', () => {
       const history = await getTrusteeHistory(TRUSTOR, TRUSTEE);
       expect(history).toHaveLength(1);
       expect(history[0]!.action).toBe('revoke');
+    });
+
+    it('passes the pre-resign recordIdsGranted to revokeTrusteeAccess, then clears it atomically with the status transition', async () => {
+      const grantedRecords = [{ recordId: 'trustee-rel-record-a', previousRole: 'viewer' }];
+      await seedRelationship(TRUSTOR, TRUSTEE, {
+        status: 'active',
+        isActive: true,
+        recordIdsGranted: grantedRecords,
+      });
+      setCaller(TRUSTEE);
+
+      await TrusteeRelationshipService.resignAsTrustee(TRUSTOR);
+
+      expect(permissionMocks.revokeTrusteeAccess).toHaveBeenCalledWith(
+        TRUSTOR,
+        TRUSTEE,
+        grantedRecords
+      );
+
+      const snap = await getDoc(
+        doc(db, 'trusteeRelationships', getTrusteeRelationshipId(TRUSTOR, TRUSTEE))
+      );
+      expect(snap.data()?.recordIdsGranted).toEqual([]);
     });
 
     it('keeps the Firestore resignation when the blockchain call rejects, and logs it for reconciliation', async () => {

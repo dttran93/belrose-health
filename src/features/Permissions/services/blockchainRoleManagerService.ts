@@ -390,8 +390,9 @@ export class BlockchainRoleManagerService {
     try {
       const recordIdHash = id(recordId);
       const contract = this.getReadOnlyContract();
-      const fn = contract.getFunction('getRecordOwners');
-      return await fn(recordIdHash);
+      const fn = contract.getFunction('getAllRecordParticipants');
+      const result = await fn(recordIdHash);
+      return result.owners;
     } catch (error) {
       console.error('Error getting record owners:', error);
       return [];
@@ -406,8 +407,9 @@ export class BlockchainRoleManagerService {
     try {
       const recordIdHash = id(recordId);
       const contract = this.getReadOnlyContract();
-      const fn = contract.getFunction('getRecordAdmins');
-      return await fn(recordIdHash);
+      const fn = contract.getFunction('getAllRecordParticipants');
+      const result = await fn(recordIdHash);
+      return result.admins;
     } catch (error) {
       console.error('Error getting record admins:', error);
       return [];
@@ -422,8 +424,9 @@ export class BlockchainRoleManagerService {
     try {
       const recordIdHash = id(recordId);
       const contract = this.getReadOnlyContract();
-      const fn = contract.getFunction('getRecordViewers');
-      return await fn(recordIdHash);
+      const fn = contract.getFunction('getAllRecordParticipants');
+      const result = await fn(recordIdHash);
+      return result.viewers;
     } catch (error) {
       console.error('Error getting record viewers:', error);
       return [];
@@ -438,8 +441,9 @@ export class BlockchainRoleManagerService {
     try {
       const recordIdHash = id(recordId);
       const contract = this.getReadOnlyContract();
-      const fn = contract.getFunction('getRecordSharers');
-      return await fn(recordIdHash);
+      const fn = contract.getFunction('getAllRecordParticipants');
+      const result = await fn(recordIdHash);
+      return result.sharers;
     } catch (error) {
       console.error('Error getting record sharers:', error);
       return [];
