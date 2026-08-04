@@ -471,11 +471,15 @@ export class TrusteePermissionService {
             trustees: arrayRemove(trusteeId),
           });
           batch.delete(doc(db, 'wrappedKeys', `${recordId}_${trusteeId}`));
-          change = { userId: trusteeId, action: 'revoked', previousRole: currentRole, newRole: null };
+          change = {
+            userId: trusteeId,
+            action: 'revoked',
+            previousRole: currentRole,
+            newRole: null,
+          };
         } else {
           // Upgrade — downgrade back to the independent baseline role. Never touches the
-          // wrappedKey (it was either already active the whole time, or already inactive and
-          // untouched by the grant — either way there's nothing to undo there).
+          // wrappedKey (it was already active the whole time)
           const update: any = {
             owners: arrayRemove(trusteeId),
             administrators: arrayRemove(trusteeId),
@@ -600,7 +604,12 @@ export class TrusteePermissionService {
           if (revoke) {
             batch.update(revoke.ref, revoke.data);
           }
-          change = { userId: trusteeId, action: 'revoked', previousRole: currentRole, newRole: null };
+          change = {
+            userId: trusteeId,
+            action: 'revoked',
+            previousRole: currentRole,
+            newRole: null,
+          };
         } else {
           // Upgrade — downgrade back to their independent baseline role instead of stripping.
           // Never touches the wrappedKey. If currentRole already equals baselineRole (e.g. a
@@ -801,7 +810,10 @@ export class TrusteePermissionService {
           }
         }
         if (!alreadyTrackedOnRelationship) {
-          const grantedRecord: TrusteeGrantedRecord = { recordId, previousRole: previousBackendRole };
+          const grantedRecord: TrusteeGrantedRecord = {
+            recordId,
+            previousRole: previousBackendRole,
+          };
           batch.update(relationshipDoc.ref, { recordIdsGranted: arrayUnion(grantedRecord) });
         }
         if (shouldLogChange) {
@@ -1013,7 +1025,12 @@ export class TrusteePermissionService {
           if (revoke) {
             batch.update(revoke.ref, revoke.data);
           }
-          change = { userId: trusteeId, action: 'revoked', previousRole: currentRole, newRole: null };
+          change = {
+            userId: trusteeId,
+            action: 'revoked',
+            previousRole: currentRole,
+            newRole: null,
+          };
         } else {
           // Upgrade — downgrade back to the independent baseline role. Never touches the
           // wrappedKey (they keep decrypt access at the lower role regardless).
@@ -1091,7 +1108,11 @@ export class TrusteePermissionService {
           const result =
             baselineRole === null
               ? await BlockchainRoleManagerService.revokeRole(recordId, trusteeWallet)
-              : await BlockchainRoleManagerService.changeRole(recordId, trusteeWallet, baselineRole);
+              : await BlockchainRoleManagerService.changeRole(
+                  recordId,
+                  trusteeWallet,
+                  baselineRole
+                );
           const blockchainRef = buildMemberRegistryRef(result.txHash, result.blockNumber);
           if (historyRef) await updateDoc(historyRef, { blockchainRef });
           await BlockchainSyncQueueService.recordSuccess(syncRef, result);

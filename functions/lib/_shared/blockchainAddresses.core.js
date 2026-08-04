@@ -52,7 +52,7 @@ function buildBundlerURL(pimlicoApiKey) {
 // ============================================================================
 exports.MEMBER_ROLE_MANAGER = {
     proxy: '0x61CcF57C332D32c4d906ac64674BBA4E10CCB07B',
-    implementation: '0x4be0136db69750ccd373fdc9c02ed3b94f34db02',
+    implementation: '0x88a7a3822c8033ae126c762a40c280e89024a1ac',
     deploymentBlock: 43657997,
 };
 // ============================================================================

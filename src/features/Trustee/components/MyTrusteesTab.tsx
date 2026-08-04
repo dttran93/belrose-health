@@ -169,6 +169,7 @@ export const MyTrusteesTab: React.FC<MyTrusteesTabProps> = ({ onRefreshNeeded })
             <button
               onClick={() => setShowUserSearch(true)}
               className="rounded-full hover:bg-gray-300 p-1 transition-colors"
+              data-testid="invite-trustee-button"
             >
               <Plus className="w-5 h-5" />
             </button>

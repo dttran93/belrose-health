@@ -104,8 +104,8 @@ test('guest claims their account after a record is shared with them', async ({ p
   await page.goto(`/invite?code=${inviteCode}#${guestPrivateKeyBase64}`);
 
   // GuestInvitePage runs through loading → bridging → redirecting, landing on either
-  // /app/health-profile/<subjectId> or /app/all-records (our fixture record has no `subjects`,
-  // so it's the latter) — wait for GuestBanner instead of a specific URL, since either is fine.
+  // /app/health-profile/<subjectId> or /app/all-records depending on whether our fixture record
+  // has a subject tagged — wait for GuestBanner instead of a specific URL, since either is fine.
   await expect(page.getByRole('button', { name: 'Create Account' })).toBeVisible({
     timeout: 60_000,
   });
