@@ -68,7 +68,7 @@ async function main() {
   console.log('\n📝 ACTION REQUIRED — update blockchainAddresses.ts:');
   console.log(`   implementation: '${newImplAddress}',`);
   console.log(
-    `\n📝 ACTION REQUIRED — verify on network: npx hardhat verify --network sepolia '${newImplAddress}'`
+    `\n📝 ACTION REQUIRED — verify on network: npx hardhat verify --network baseSepolia '${newImplAddress}'`
   );
 }
 

@@ -59,6 +59,38 @@ describe('Trustee access on anchor/unanchor', function () {
     expect(await memberRoleManager.hasActiveRole(recordIdHash, trustee.address)).to.equal(false);
   });
 
+  it('upgrades a trustee with lower independent access on anchor, and downgrades back to it on unanchor', async function () {
+    const recordIdHash = ethers.id('record-3');
+    const recordHash = ethers.id('content-3');
+
+    // Trustee independently has viewer access, unrelated to the trust relationship — granted
+    // before the subject even anchors this record.
+    await memberRoleManager
+      .connect(admin)
+      .initializeRecordRole(recordIdHash, subject.address, 'owner');
+    await memberRoleManager.connect(subject).grantRole(recordIdHash, trustee.address, 'viewer');
+
+    // Controller level fully mirrors the trustor's role
+    await memberRoleManager.connect(admin).bootstrapDependentTrustee(subjectIdHash, trusteeIdHash);
+
+    expect(await memberRoleManager.hasRole(recordIdHash, trustee.address, 'viewer')).to.equal(true);
+
+    // Anchor triggers extendTrusteeGrantsOnAnchor — trustee should be upgraded from viewer to
+    // owner (their independent viewer role is strictly lower-ranked than the resolved role).
+    await healthRecordCore
+      .connect(subject)
+      .anchorRecord(recordIdHash, recordHash, ethers.ZeroHash, 0);
+
+    expect(await memberRoleManager.hasRole(recordIdHash, trustee.address, 'owner')).to.equal(true);
+
+    // Unanchor triggers retractTrusteeGrantsOnUnanchor — trustee should be downgraded back to
+    // their independent viewer baseline, not stripped to nothing.
+    await healthRecordCore.connect(subject).unanchorRecord(recordIdHash, ethers.ZeroHash);
+
+    expect(await memberRoleManager.hasActiveRole(recordIdHash, trustee.address)).to.equal(true);
+    expect(await memberRoleManager.hasRole(recordIdHash, trustee.address, 'viewer')).to.equal(true);
+  });
+
   it('does not touch a trustee’s independent access when the subject unanchors', async function () {
     const recordIdHash = ethers.id('record-2');
     const recordHash = ethers.id('content-2');

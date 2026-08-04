@@ -479,8 +479,7 @@ export const initializeRoleOnChain = onCall(
     // 3. Authority Check
     try {
       const contract = getAdminContract();
-      const owners = await contract.getRecordOwners(recordIdHash);
-      const admins = await contract.getRecordAdmins(recordIdHash);
+      const { owners, admins } = await contract.getAllRecordParticipants(recordIdHash);
 
       if (owners.length > 0 || admins.length > 0) {
         // Self-heal Firestore if needed
@@ -563,8 +562,7 @@ export const initializeRoleOnChainForRequester = onCall(
       const contract = getAdminContract();
 
       // Idempotency check
-      const owners = await contract.getRecordOwners(recordIdHash);
-      const admins = await contract.getRecordAdmins(recordIdHash);
+      const { owners, admins } = await contract.getAllRecordParticipants(recordIdHash);
       if (owners.length > 0 || admins.length > 0) {
         throw new HttpsError('already-exists', 'Record already initialized on chain');
       }

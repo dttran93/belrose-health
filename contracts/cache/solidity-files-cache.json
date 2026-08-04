@@ -1345,8 +1345,8 @@
       ]
     },
     "C:\\Users\\dangt\\Documents\\Project Kennedy\\belrose-react\\Belrose\\contracts\\smartContracts\\MemberRoleManager.sol": {
-      "lastModificationDate": 1783507656288,
-      "contentHash": "dfd25825bdf371b255ce641bfcd9197f",
+      "lastModificationDate": 1785793102996,
+      "contentHash": "af59c63fe50f515cbe6ec0ba760bd7ca",
       "sourceName": "smartContracts/MemberRoleManager.sol",
       "solcConfig": {
         "version": "0.8.24",
