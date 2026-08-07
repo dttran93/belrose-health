@@ -25,11 +25,14 @@ import { createPublicClient, http } from 'viem';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { BlockchainPreparationService } from '@/features/BlockchainWallet/services/blockchainPreparationService';
 import { getAuth } from 'firebase/auth';
-import { doc, getDoc, getFirestore } from 'firebase/firestore';
+import { collection, doc, getDoc, getFirestore, setDoc } from 'firebase/firestore';
 import { BlockchainRef } from '@belrose/shared';
 import { BlockchainRoleManagerService } from './blockchainRoleManagerService';
 import { NETWORK } from '@belrose/shared';
-import writePermissionChangeEvent from './writePermissionChangeEvent';
+import {
+  buildPermissionHistoryDocId,
+  preparePermissionChangeEventData,
+} from './writePermissionChangeEvent';
 
 // ==================== TYPES ====================
 
@@ -463,15 +466,28 @@ export class PermissionPreparationService {
 
       // Log for audit trail (BackendChainParity needs a tx hash here) — only on a genuine new
       // initialization. The "already exists" catch branch below returns no blockchainRef, so it's
-      // naturally skipped there.
+      // naturally skipped there. Same doc-ID scheme + event shape as every other
+      // permissionHistory write (buildPermissionHistoryDocId + preparePermissionChangeEventData)
+      // rather than a Firestore auto-ID — blockchainRef is already known here (the Cloud
+      // Function's on-chain write already resolved by the time we get a response), so it's
+      // written directly instead of starting null and getting filled in later. Fire-and-forget,
+      // same as before: a failed audit-log write must never surface as a failure of the
+      // initialization itself, which already succeeded on-chain.
       const userId = getAuth().currentUser?.uid;
       if (userId && result.data.blockchainRef) {
-        await writePermissionChangeEvent(
-          recordId,
-          userId,
-          [{ userId, action: 'granted', previousRole: null, newRole: role }],
-          result.data.blockchainRef
-        );
+        try {
+          const db = getFirestore();
+          const historyRef = doc(
+            collection(db, 'records', recordId, 'permissionHistory'),
+            buildPermissionHistoryDocId(userId)
+          );
+          const eventData = await preparePermissionChangeEventData(recordId, userId, [
+            { userId, action: 'granted', previousRole: null, newRole: role },
+          ]);
+          await setDoc(historyRef, { ...eventData, blockchainRef: result.data.blockchainRef });
+        } catch (auditError) {
+          console.warn('⚠️ Failed to write permission change event:', auditError);
+        }
       }
 
       return result.data;

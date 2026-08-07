@@ -919,35 +919,9 @@ contract MemberRoleManager is Initializable, UUPSUpgradeable, MemberRoleManagerI
   }
 
   /**
-   * @notice Get all owner identities of a record
-   */
-  function getRecordOwners(bytes32 recordIdHash) external view returns (bytes32[] memory) {
-    return ownersByRecord[recordIdHash];
-  }
-
-  /**
-   * @notice Get all admin identities of a record
-   */
-  function getRecordAdmins(bytes32 recordIdHash) external view returns (bytes32[] memory) {
-    return adminsByRecord[recordIdHash];
-  }
-
-  /**
-   * @notice Get all sharer identities of a record
-   */
-  function getRecordSharers(bytes32 recordIdHash) external view returns (bytes32[] memory) {
-    return sharersByRecord[recordIdHash];
-  }
-
-  /**
-   * @notice Get all viewer identities of a record
-   */
-  function getRecordViewers(bytes32 recordIdHash) external view returns (bytes32[] memory) {
-    return viewersByRecord[recordIdHash];
-  }
-
-  /**
-   * @notice Get all role arrays for a record in one call
+   * @notice Get all role arrays for a record in one call. Superseded the individual
+   *   getRecordOwners/Admins/Sharers/Viewers getters, which were removed as dead weight once
+   *   every caller had this single call available instead.
    */
   function getAllRecordParticipants(
     bytes32 recordIdHash
@@ -1151,18 +1125,9 @@ contract MemberRoleManager is Initializable, UUPSUpgradeable, MemberRoleManagerI
     bytes32[] storage grantedRecords = _trusteeGrantedRecords[trustorIdHash][trusteeIdHash];
     for (uint256 i = 0; i < grantedRecords.length; i++) {
       bytes32 recordIdHash = grantedRecords[i];
+      _revokeTrusteeGrantedRecordRole(recordIdHash, trustorIdHash, trusteeIdHash, trusteeIdHash);
       delete _trusteeGrantedRecordSet[trustorIdHash][trusteeIdHash][recordIdHash];
-
-      if (!_hasActiveRole(recordIdHash, trusteeIdHash)) continue;
-
-      bytes32 roleKey = _getRoleKey(recordIdHash, trusteeIdHash);
-      string memory role = recordRoles[roleKey].role;
-
-      _removeFromRoleArray(recordIdHash, trusteeIdHash, role);
-      recordRoles[roleKey].isActive = false;
-      delete roleGrantedBy[roleKey];
-
-      emit RoleRevoked(recordIdHash, trusteeIdHash, role, trusteeIdHash, block.timestamp);
+      delete _trusteeGrantedRecordPreviousRole[trustorIdHash][trusteeIdHash][recordIdHash];
     }
     delete _trusteeGrantedRecords[trustorIdHash][trusteeIdHash];
   }
@@ -1204,24 +1169,17 @@ contract MemberRoleManager is Initializable, UUPSUpgradeable, MemberRoleManagerI
 
     emit TrusteeRevoked(trustorIdHash, trusteeIdHash, callerIdHash, block.timestamp);
 
-    // Revoke all roles the trustee acquired through proposeTrustee, including owner.
-    // Normal revokeRole blocks owner removal, but trustee-derived roles are conditional on the
-    // relationship — if that relationship ends, so do the roles regardless of level.
+    // Revoke or downgrade every role the trustee acquired through this relationship, including
+    // owner. Normal changeRole/revokeRole block owner demotion/removal, but trustee-derived
+    // roles are conditional on the relationship — if it ends, so does the elevation, regardless
+    // of level (a record where they had independent access first is downgraded back to it, not
+    // stripped — see _revokeTrusteeGrantedRecordRole).
     bytes32[] storage grantedRecords = _trusteeGrantedRecords[trustorIdHash][trusteeIdHash];
     for (uint256 i = 0; i < grantedRecords.length; i++) {
       bytes32 recordIdHash = grantedRecords[i];
+      _revokeTrusteeGrantedRecordRole(recordIdHash, trustorIdHash, trusteeIdHash, callerIdHash);
       delete _trusteeGrantedRecordSet[trustorIdHash][trusteeIdHash][recordIdHash];
-
-      if (!_hasActiveRole(recordIdHash, trusteeIdHash)) continue;
-
-      bytes32 roleKey = _getRoleKey(recordIdHash, trusteeIdHash);
-      string memory role = recordRoles[roleKey].role;
-
-      _removeFromRoleArray(recordIdHash, trusteeIdHash, role);
-      recordRoles[roleKey].isActive = false;
-      delete roleGrantedBy[roleKey];
-
-      emit RoleRevoked(recordIdHash, trusteeIdHash, role, callerIdHash, block.timestamp);
+      delete _trusteeGrantedRecordPreviousRole[trustorIdHash][trusteeIdHash][recordIdHash];
     }
     delete _trusteeGrantedRecords[trustorIdHash][trusteeIdHash];
   }
@@ -1241,6 +1199,12 @@ contract MemberRoleManager is Initializable, UUPSUpgradeable, MemberRoleManagerI
    * extending the same admin-privileged bootstrap to include the trustee relationship does
    * not expand the trust surface. Revocation flows through the normal onlyActiveMember
    * revokeTrustee path — no admin involvement after creation.
+   *
+   * This must be an admin function because if it was a trustee driven function the trustee (guardian)
+   * would be able to add themselves as the trustee of any account. That could be gated by creating a
+   * MemberStatus of Dependent, but there would be no way to determine that the dependent was actually
+   * created by the guardian without adding multiple other functions and storage to the contract. Admin function
+   * is just easier at this time.
    *
    * @param trustorIdHash  keccak256 of the dependent's Firebase UID
    * @param trusteeIdHash  keccak256 of the guardian's Firebase UID
@@ -1411,9 +1375,27 @@ contract MemberRoleManager is Initializable, UUPSUpgradeable, MemberRoleManagerI
   }
 
   /**
+   * @dev Rank used to decide whether a trustee-resolved role would actually be an upgrade over
+   *   the trustee's current role. Empty/invalid role strings rank below every real role.
+   */
+  function _roleRank(string memory role) internal pure returns (uint8) {
+    bytes32 h = keccak256(bytes(role));
+    if (h == keccak256(bytes("viewer"))) return 1;
+    if (h == keccak256(bytes("sharer"))) return 2;
+    if (h == keccak256(bytes("administrator"))) return 3;
+    if (h == keccak256(bytes("owner"))) return 4;
+    return 0;
+  }
+
+  /**
    * @dev Grants a trustee mirrored access to a single record, if eligible. Shared by proposeTrustee
    *   (explicit record list) and extendTrusteeGrantsOnAnchor (triggered by a new anchor). Silently
    *   no-ops on ineligible records — same "skip, don't revert" philosophy as the batch functions.
+   *
+   *   If the trustee already has independent access at a LOWER rank than the resolved role, this
+   *   upgrades them and records their pre-upgrade role in _trusteeGrantedRecordPreviousRole so a
+   *   later revoke can restore it instead of stripping them to nothing. Equal-or-higher existing
+   *   access is left untouched, matching the old behavior for that case exactly.
    */
   function _grantTrusteeAccessToRecord(
     bytes32 recordIdHash,
@@ -1425,21 +1407,63 @@ contract MemberRoleManager is Initializable, UUPSUpgradeable, MemberRoleManagerI
 
     if (!_isValidRole(role)) return;
     if (!_hasActiveRole(recordIdHash, trustorIdHash)) return;
-    if (_hasActiveRole(recordIdHash, trusteeIdHash)) return;
+
+    string memory currentRole = "";
+    if (_hasActiveRole(recordIdHash, trusteeIdHash)) {
+      currentRole = recordRoles[_getRoleKey(recordIdHash, trusteeIdHash)].role;
+      if (_roleRank(currentRole) >= _roleRank(role)) return;
+    }
 
     _grantRoleInternal(recordIdHash, trusteeIdHash, role, trustorIdHash);
 
     if (!_trusteeGrantedRecordSet[trustorIdHash][trusteeIdHash][recordIdHash]) {
       _trusteeGrantedRecords[trustorIdHash][trusteeIdHash].push(recordIdHash);
       _trusteeGrantedRecordSet[trustorIdHash][trusteeIdHash][recordIdHash] = true;
+      // Baseline is only ever set the FIRST time this relationship touches this record — a
+      // later trust-level resync (_syncTrusteeRoles) must never overwrite it.
+      _trusteeGrantedRecordPreviousRole[trustorIdHash][trusteeIdHash][recordIdHash] = currentRole;
     }
   }
 
   /**
-   * @dev Revokes a trustee's mirrored access to a single record, if it was ever granted via the
-   *   trustee relationship. Mirror of _grantTrusteeAccessToRecord — only touches roles tracked in
-   *   _trusteeGrantedRecords, so a trustee with independent access (e.g. also a direct sharer)
-   *   keeps it untouched. Silently no-ops if there's nothing to revoke.
+   * @dev Strips or downgrades a single trustee-granted record's role, based on the stored
+   *   previousRole baseline — empty means the relationship is the sole reason the trustee has
+   *   any role here (strip completely); a real role means they already had independent access
+   *   at that lower role (restore it instead of stripping). Deliberately does NOT touch
+   *   _trusteeGrantedRecords/_trusteeGrantedRecordSet/_trusteeGrantedRecordPreviousRole —
+   *   callers own that bookkeeping, since each has a different cleanup shape (bulk-delete after
+   *   a loop vs. one-at-a-time removal). Must be called BEFORE the caller clears
+   *   _trusteeGrantedRecordPreviousRole, since it reads that mapping.
+   */
+  function _revokeTrusteeGrantedRecordRole(
+    bytes32 recordIdHash,
+    bytes32 trustorIdHash,
+    bytes32 trusteeIdHash,
+    bytes32 revokedByIdHash
+  ) internal {
+    if (!_hasActiveRole(recordIdHash, trusteeIdHash)) return;
+
+    string memory previousRole = _trusteeGrantedRecordPreviousRole[trustorIdHash][trusteeIdHash][
+      recordIdHash
+    ];
+    bytes32 roleKey = _getRoleKey(recordIdHash, trusteeIdHash);
+    string memory currentRole = recordRoles[roleKey].role;
+
+    if (bytes(previousRole).length == 0) {
+      _removeFromRoleArray(recordIdHash, trusteeIdHash, currentRole);
+      recordRoles[roleKey].isActive = false;
+      delete roleGrantedBy[roleKey];
+      emit RoleRevoked(recordIdHash, trusteeIdHash, currentRole, revokedByIdHash, block.timestamp);
+    } else {
+      _applyChangeRole(recordIdHash, revokedByIdHash, trusteeIdHash, previousRole, currentRole);
+    }
+  }
+
+  /**
+   * @dev Revokes (or downgrades) a trustee's mirrored access to a single record, if it was ever
+   *   granted via the trustee relationship. Mirror of _grantTrusteeAccessToRecord — only touches
+   *   roles tracked in _trusteeGrantedRecords, so a trustee with independent access (e.g. also a
+   *   direct sharer) keeps it untouched. Silently no-ops if there's nothing to revoke.
    */
   function _revokeTrusteeAccessFromRecord(
     bytes32 recordIdHash,
@@ -1448,19 +1472,11 @@ contract MemberRoleManager is Initializable, UUPSUpgradeable, MemberRoleManagerI
   ) internal {
     if (!_trusteeGrantedRecordSet[trustorIdHash][trusteeIdHash][recordIdHash]) return;
 
+    _revokeTrusteeGrantedRecordRole(recordIdHash, trustorIdHash, trusteeIdHash, trustorIdHash);
+
     _trusteeGrantedRecordSet[trustorIdHash][trusteeIdHash][recordIdHash] = false;
+    delete _trusteeGrantedRecordPreviousRole[trustorIdHash][trusteeIdHash][recordIdHash];
     _removeFromBytes32Array(_trusteeGrantedRecords[trustorIdHash][trusteeIdHash], recordIdHash);
-
-    if (!_hasActiveRole(recordIdHash, trusteeIdHash)) return;
-
-    bytes32 roleKey = _getRoleKey(recordIdHash, trusteeIdHash);
-    string memory role = recordRoles[roleKey].role;
-
-    _removeFromRoleArray(recordIdHash, trusteeIdHash, role);
-    recordRoles[roleKey].isActive = false;
-    delete roleGrantedBy[roleKey];
-
-    emit RoleRevoked(recordIdHash, trusteeIdHash, role, trustorIdHash, block.timestamp);
   }
 
   function _applyChangeRole(
@@ -1857,6 +1873,15 @@ contract MemberRoleManager is Initializable, UUPSUpgradeable, MemberRoleManagerI
     return vouchesReceived[voucheeIdHash];
   }
 
+  // trustorIdHash => trusteeIdHash => recordIdHash => role the trustee held immediately before
+  // this relationship touched this record. "" means the relationship is the sole reason they
+  // have any role here at all — strip completely on revoke. A real role means they already had
+  // independent access at that lower role — restore it on revoke instead of stripping. Set once,
+  // the first time _grantTrusteeAccessToRecord processes this record (guarded by
+  // _trusteeGrantedRecordSet) — never overwritten by a later trust-level change, since
+  // _syncTrusteeRoles doesn't touch this mapping.
+  mapping(bytes32 => mapping(bytes32 => mapping(bytes32 => string))) private _trusteeGrantedRecordPreviousRole;
+
   // ===============================================================
   // STORAGE GAP
   // Safe upgrade buffer — future versions can consume these slots
@@ -1864,5 +1889,5 @@ contract MemberRoleManager is Initializable, UUPSUpgradeable, MemberRoleManagerI
   // New variables must be appended HERE (before __gap), never inserted above.
   // ===============================================================
 
-  uint256[50] private __gap;
+  uint256[49] private __gap;
 }

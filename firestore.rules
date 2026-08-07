@@ -1005,7 +1005,7 @@ service cloud.firestore {
           resource.data.status == 'pending' &&
           request.resource.data.status in ['active', 'declined'] &&
           request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['status', 'isActive', 'respondedAt', 'revokedBy', 'onChainEvents']) &&
+            .hasOnly(['status', 'isActive', 'respondedAt', 'revokedBy', 'recordIdsGranted', 'onChainEvents']) &&
           request.resource.data.trustorId == resource.data.trustorId &&
           request.resource.data.trusteeId == resource.data.trusteeId
         )||
@@ -1015,7 +1015,7 @@ service cloud.firestore {
           resource.data.status == 'active' &&
           request.resource.data.status == 'declined' &&
           request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['status', 'isActive', 'revokedAt', 'revokedBy', 'statusUpdateReason', 'onChainEvents']) &&
+            .hasOnly(['status', 'isActive', 'revokedAt', 'revokedBy', 'statusUpdateReason', 'recordIdsGranted', 'onChainEvents']) &&
           request.resource.data.trustorId == resource.data.trustorId &&
           request.resource.data.trusteeId == resource.data.trusteeId
         ) ||
@@ -1038,6 +1038,45 @@ service cloud.firestore {
 
       // DELETE: Not allowed — soft delete only
       allow delete: if false;
+
+      // --- TRUSTEE HISTORY SUBCOLLECTION ---
+      // Parallel to records/{id}/permissionHistory and records/{id}/subjectHistory — an
+      // append-only audit ledger for blockchain operations on this relationship. A subcollection
+      // rather than an array field on the parent doc specifically so each event supports the
+      // same deferred-blockchainRef-fill pattern those two use (array elements aren't
+      // individually addressable for a later update). See TrusteeRelationshipService.
+      match /trusteeHistory/{eventId} {
+        // Read: platform admins, or either party to the relationship.
+        allow read: if request.auth != null && (
+          isPlatformAdmin() ||
+          request.auth.uid == resource.data.trustorId ||
+          request.auth.uid == resource.data.trusteeId
+        );
+
+        // Create: must be the one making the change, and a party to the relationship named on
+        // this very event (the event's own trustorId/trusteeId fields, not a get() on the
+        // parent doc — cheaper, and correct since the event is written in lockstep with the
+        // parent's own state transition).
+        allow create: if request.auth != null &&
+          request.resource.data.changedBy == request.auth.uid &&
+          (request.auth.uid == request.resource.data.trustorId ||
+           request.auth.uid == request.resource.data.trusteeId);
+
+        // Update: the only legitimate update is filling in blockchainRef once a deferred chain
+        // call resolves — Firestore-first relationship-lifecycle flows write this doc with
+        // blockchainRef: null, then complete it later. Scoped tightly, same as
+        // permissionHistory/subjectHistory: only the same person who created it (changedBy) can
+        // complete it — deliberately NOT gated on still being a party to the relationship, since
+        // the whole point is this may run after that same event's parent write ended the
+        // caller's own relationship (resign/decline) — only while blockchainRef is still null,
+        // and only that one field may change.
+        allow update: if request.auth != null &&
+          resource.data.changedBy == request.auth.uid &&
+          resource.data.blockchainRef == null &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['blockchainRef']);
+
+        allow delete: if false;
+      }
     }
 
   // ============================================

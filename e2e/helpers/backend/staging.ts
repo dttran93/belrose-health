@@ -184,6 +184,27 @@ export async function waitForRoleArrayStatus(
   );
 }
 
+// Staging-only, not part of TestBackend — same rationale as waitForRoleArrayStatus above.
+// useTrusteeFlow's confirmInvite/confirmAccept/confirmResign all fire their
+// TrusteeRelationshipService call without awaiting it, so polling the real
+// trusteeRelationships/{trustorId}_{trusteeId} doc directly is the only unambiguous way to know
+// the real on-chain confirmation + Firestore status transition has actually finished.
+export async function waitForTrusteeStatus(
+  trustorId: string,
+  trusteeId: string,
+  expected: 'pending' | 'active' | 'revoked' | 'declined',
+  timeoutMs = 120_000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  const docPath = `trusteeRelationships/${trustorId}_${trusteeId}`;
+  while (Date.now() < deadline) {
+    const snap = await db().doc(docPath).get();
+    if (snap.data()?.status === expected) return;
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+  throw new Error(`Timed out waiting for ${docPath}'s status to become '${expected}'`);
+}
+
 export const stagingBackend: TestBackend = {
   async seedInvite(email) {
     await db()

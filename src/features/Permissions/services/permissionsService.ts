@@ -22,7 +22,10 @@ import * as Sentry from '@sentry/react';
 import { SharingService } from '@/features/Sharing/services/sharingService';
 import { BlockchainRoleManagerService } from './blockchainRoleManagerService';
 import { getUserProfile } from '@/features/Users/services/userProfileService';
-import { BlockchainSyncQueueService } from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
+import {
+  BlockchainSyncQueueService,
+  getUserFacingErrorMessage,
+} from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
 import { WalletService } from '@/features/BlockchainWallet/services/walletService';
 import {
   preparePermissionChangeEventData,
@@ -532,8 +535,10 @@ export class PermissionsService {
     } catch (blockchainError) {
       console.error('⚠️ Blockchain update failed:', blockchainError);
 
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+      const errorMessage = getUserFacingErrorMessage(
+        blockchainError,
+        'Blockchain transaction failed'
+      );
 
       await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
@@ -703,8 +708,10 @@ export class PermissionsService {
     } catch (blockchainError) {
       console.error('⚠️ Blockchain update failed:', blockchainError);
 
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+      const errorMessage = getUserFacingErrorMessage(
+        blockchainError,
+        'Blockchain transaction failed'
+      );
 
       await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
@@ -881,8 +888,10 @@ export class PermissionsService {
     } catch (blockchainError) {
       console.error('⚠️ Blockchain update failed:', blockchainError);
 
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+      const errorMessage = getUserFacingErrorMessage(
+        blockchainError,
+        'Blockchain transaction failed'
+      );
 
       await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
@@ -1053,8 +1062,10 @@ export class PermissionsService {
     } catch (blockchainError) {
       console.error('⚠️ Blockchain update failed:', blockchainError);
 
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+      const errorMessage = getUserFacingErrorMessage(
+        blockchainError,
+        'Blockchain transaction failed'
+      );
 
       await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
@@ -1222,8 +1233,10 @@ export class PermissionsService {
     } catch (blockchainError) {
       console.error('⚠️ Blockchain update failed:', blockchainError);
 
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+      const errorMessage = getUserFacingErrorMessage(
+        blockchainError,
+        'Blockchain transaction failed'
+      );
 
       await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
@@ -1402,8 +1415,10 @@ export class PermissionsService {
     } catch (blockchainError) {
       console.error('⚠️ Blockchain update failed:', blockchainError);
 
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+      const errorMessage = getUserFacingErrorMessage(
+        blockchainError,
+        'Blockchain transaction failed'
+      );
 
       await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
@@ -1589,8 +1604,10 @@ export class PermissionsService {
     } catch (blockchainError) {
       console.error('⚠️ Blockchain update failed:', blockchainError);
 
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+      const errorMessage = getUserFacingErrorMessage(
+        blockchainError,
+        'Blockchain transaction failed'
+      );
 
       await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
@@ -1783,8 +1800,10 @@ export class PermissionsService {
     } catch (blockchainError) {
       console.error('⚠️ Blockchain update failed:', blockchainError);
 
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+      const errorMessage = getUserFacingErrorMessage(
+        blockchainError,
+        'Blockchain transaction failed'
+      );
 
       await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
@@ -2034,8 +2053,10 @@ export class PermissionsService {
     } catch (blockchainError) {
       console.error('⚠️ Blockchain batch update failed:', blockchainError);
 
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+      const errorMessage = getUserFacingErrorMessage(
+        blockchainError,
+        'Blockchain transaction failed'
+      );
 
       await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
@@ -2199,8 +2220,10 @@ export class PermissionsService {
     } catch (blockchainError) {
       console.error('⚠️ Blockchain batch update failed:', blockchainError);
 
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+      const errorMessage = getUserFacingErrorMessage(
+        blockchainError,
+        'Blockchain transaction failed'
+      );
 
       await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }
@@ -2453,8 +2476,10 @@ export class PermissionsService {
     } catch (blockchainError) {
       console.error('⚠️ Blockchain batch update failed:', blockchainError);
 
-      const errorMessage =
-        blockchainError instanceof Error ? blockchainError.message : String(blockchainError);
+      const errorMessage = getUserFacingErrorMessage(
+        blockchainError,
+        'Blockchain transaction failed'
+      );
 
       await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
     }

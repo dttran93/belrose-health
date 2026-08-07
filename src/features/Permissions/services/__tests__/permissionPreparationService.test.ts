@@ -24,7 +24,8 @@ vi.mock('../blockchainRoleManagerService', () => ({
 }));
 
 vi.mock('../writePermissionChangeEvent', () => ({
-  default: vi.fn(),
+  buildPermissionHistoryDocId: vi.fn(() => 'mock-history-doc-id'),
+  preparePermissionChangeEventData: vi.fn(),
 }));
 
 vi.mock('firebase/functions', () => ({
@@ -40,15 +41,20 @@ vi.mock('firebase/firestore', () => ({
   getFirestore: vi.fn(),
   doc: vi.fn(),
   getDoc: vi.fn(),
+  collection: vi.fn(),
+  setDoc: vi.fn(),
 }));
 
 import { PermissionPreparationService } from '../permissionPreparationService';
 import { BlockchainPreparationService } from '@/features/BlockchainWallet/services/blockchainPreparationService';
 import { BlockchainRoleManagerService } from '../blockchainRoleManagerService';
-import writePermissionChangeEvent from '../writePermissionChangeEvent';
+import {
+  buildPermissionHistoryDocId,
+  preparePermissionChangeEventData,
+} from '../writePermissionChangeEvent';
 import { httpsCallable } from 'firebase/functions';
 import { getAuth } from 'firebase/auth';
-import { getDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 const READY_STATUS = {
   ready: true,
@@ -175,6 +181,16 @@ describe('PermissionPreparationService.verifyCallerPrerequisites', () => {
 });
 
 describe('PermissionPreparationService.initializeRecordRole', () => {
+  beforeEach(() => {
+    vi.mocked(preparePermissionChangeEventData).mockResolvedValue({
+      recordId: 'rec1',
+      changedBy: 'user1',
+      changes: [{ userId: 'user1', action: 'granted', previousRole: null, newRole: 'owner' }],
+      blockchainRef: null,
+    } as any);
+    vi.mocked(doc).mockReturnValue('mock-history-ref' as any);
+  });
+
   it('writes an audit event when initialization succeeds with a blockchainRef', async () => {
     const callable = vi.fn().mockResolvedValue({
       data: { success: true, blockchainRef: { txHash: '0xabc', blockNumber: 1 }, role: 'owner' },
@@ -189,11 +205,13 @@ describe('PermissionPreparationService.initializeRecordRole', () => {
     );
 
     expect(result.success).toBe(true);
-    expect(writePermissionChangeEvent).toHaveBeenCalledWith(
-      'rec1',
-      'user1',
-      [{ userId: 'user1', action: 'granted', previousRole: null, newRole: 'owner' }],
-      { txHash: '0xabc', blockNumber: 1 }
+    expect(buildPermissionHistoryDocId).toHaveBeenCalledWith('user1');
+    expect(preparePermissionChangeEventData).toHaveBeenCalledWith('rec1', 'user1', [
+      { userId: 'user1', action: 'granted', previousRole: null, newRole: 'owner' },
+    ]);
+    expect(setDoc).toHaveBeenCalledWith(
+      'mock-history-ref',
+      expect.objectContaining({ blockchainRef: { txHash: '0xabc', blockNumber: 1 } })
     );
   });
 
@@ -206,7 +224,7 @@ describe('PermissionPreparationService.initializeRecordRole', () => {
 
     await PermissionPreparationService.initializeRecordRole('rec1', '0xWallet', 'owner');
 
-    expect(writePermissionChangeEvent).not.toHaveBeenCalled();
+    expect(setDoc).not.toHaveBeenCalled();
   });
 
   it('treats an "already-exists" error code as a graceful no-op, not a failure', async () => {
@@ -220,7 +238,7 @@ describe('PermissionPreparationService.initializeRecordRole', () => {
     );
 
     expect(result).toEqual({ success: true, blockchainRef: undefined, role: 'administrator' });
-    expect(writePermissionChangeEvent).not.toHaveBeenCalled();
+    expect(setDoc).not.toHaveBeenCalled();
   });
 
   it('treats an "already initialized" message as a graceful no-op too', async () => {

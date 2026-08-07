@@ -41,11 +41,7 @@ export interface MemberRoleManagerInterface extends Interface {
       | "extendTrusteeGrantsOnAnchor"
       | "getAllRecordParticipants"
       | "getHealthRecordCore"
-      | "getRecordAdmins"
-      | "getRecordOwners"
       | "getRecordRoleStats"
-      | "getRecordSharers"
-      | "getRecordViewers"
       | "getRoleDetails"
       | "getRoleDetailsByUser"
       | "getRoleGranter"
@@ -184,23 +180,7 @@ export interface MemberRoleManagerInterface extends Interface {
     values?: undefined
   ): string;
   encodeFunctionData(
-    functionFragment: "getRecordAdmins",
-    values: [BytesLike]
-  ): string;
-  encodeFunctionData(
-    functionFragment: "getRecordOwners",
-    values: [BytesLike]
-  ): string;
-  encodeFunctionData(
     functionFragment: "getRecordRoleStats",
-    values: [BytesLike]
-  ): string;
-  encodeFunctionData(
-    functionFragment: "getRecordSharers",
-    values: [BytesLike]
-  ): string;
-  encodeFunctionData(
-    functionFragment: "getRecordViewers",
     values: [BytesLike]
   ): string;
   encodeFunctionData(
@@ -480,23 +460,7 @@ export interface MemberRoleManagerInterface extends Interface {
     data: BytesLike
   ): Result;
   decodeFunctionResult(
-    functionFragment: "getRecordAdmins",
-    data: BytesLike
-  ): Result;
-  decodeFunctionResult(
-    functionFragment: "getRecordOwners",
-    data: BytesLike
-  ): Result;
-  decodeFunctionResult(
     functionFragment: "getRecordRoleStats",
-    data: BytesLike
-  ): Result;
-  decodeFunctionResult(
-    functionFragment: "getRecordSharers",
-    data: BytesLike
-  ): Result;
-  decodeFunctionResult(
-    functionFragment: "getRecordViewers",
     data: BytesLike
   ): Result;
   decodeFunctionResult(
@@ -1236,18 +1200,6 @@ export interface MemberRoleManager extends BaseContract {
 
   getHealthRecordCore: TypedContractMethod<[], [string], "view">;
 
-  getRecordAdmins: TypedContractMethod<
-    [recordIdHash: BytesLike],
-    [string[]],
-    "view"
-  >;
-
-  getRecordOwners: TypedContractMethod<
-    [recordIdHash: BytesLike],
-    [string[]],
-    "view"
-  >;
-
   getRecordRoleStats: TypedContractMethod<
     [recordIdHash: BytesLike],
     [
@@ -1258,18 +1210,6 @@ export interface MemberRoleManager extends BaseContract {
         viewerCount: bigint;
       }
     ],
-    "view"
-  >;
-
-  getRecordSharers: TypedContractMethod<
-    [recordIdHash: BytesLike],
-    [string[]],
-    "view"
-  >;
-
-  getRecordViewers: TypedContractMethod<
-    [recordIdHash: BytesLike],
-    [string[]],
     "view"
   >;
 
@@ -1674,12 +1614,6 @@ export interface MemberRoleManager extends BaseContract {
     nameOrSignature: "getHealthRecordCore"
   ): TypedContractMethod<[], [string], "view">;
   getFunction(
-    nameOrSignature: "getRecordAdmins"
-  ): TypedContractMethod<[recordIdHash: BytesLike], [string[]], "view">;
-  getFunction(
-    nameOrSignature: "getRecordOwners"
-  ): TypedContractMethod<[recordIdHash: BytesLike], [string[]], "view">;
-  getFunction(
     nameOrSignature: "getRecordRoleStats"
   ): TypedContractMethod<
     [recordIdHash: BytesLike],
@@ -1693,12 +1627,6 @@ export interface MemberRoleManager extends BaseContract {
     ],
     "view"
   >;
-  getFunction(
-    nameOrSignature: "getRecordSharers"
-  ): TypedContractMethod<[recordIdHash: BytesLike], [string[]], "view">;
-  getFunction(
-    nameOrSignature: "getRecordViewers"
-  ): TypedContractMethod<[recordIdHash: BytesLike], [string[]], "view">;
   getFunction(
     nameOrSignature: "getRoleDetails"
   ): TypedContractMethod<
