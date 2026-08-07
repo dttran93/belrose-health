@@ -458,6 +458,15 @@ exports.initializeRoleOnChainForRequester = (0, https_1.onCall)({ secrets: ['ADM
         // Idempotency check
         const { owners, admins } = await contract.getAllRecordParticipants(recordIdHash);
         if (owners.length > 0 || admins.length > 0) {
+            // Self-heal Firestore if needed — same reconciliation as initializeRoleOnChain. A client
+            // retry after a dropped response would otherwise throw forever even though on-chain
+            // state is already correct.
+            if (!recordData?.blockchainRoleInitialization?.blockchainInitialized) {
+                await db.collection('records').doc(recordId).update({
+                    'blockchainRoleInitialization.blockchainInitialized': true,
+                    'blockchainRoleInitialization.syncedFromChain': true,
+                });
+            }
             throw new https_1.HttpsError('already-exists', 'Record already initialized on chain');
         }
         const tx = await contract.initializeRecordRole(recordIdHash, activeWallet.address, role);

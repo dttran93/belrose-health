@@ -2,26 +2,26 @@
 //
 // Layer 3 (orchestration) — FulfillRequestService.fulfillAsGuest, flagged in the test strategy
 // as the single highest-risk untested surface across AddRecord/ViewEditRecord/RequestRecord: it
-// chains session-key retrieval -> Firestore read -> key unwrap -> key rewrap -> Cloud Function
-// on-chain write -> failure logging -> two more Firestore writes, with no rollback if a later
-// step fails after the on-chain call already succeeded.
+// chains session-key retrieval -> Firestore read -> key unwrap -> key rewrap -> one atomic
+// Firestore batch (wrappedKey + role array + permissionHistory event + request status) -> a
+// best-effort Cloud Function on-chain write, tracked via BlockchainSyncQueueService.
 //
 // Real Firestore emulator + REAL EncryptionService/EncryptionKeyManager/SharingKeyManagementService
-// (this is the crypto that actually re-wraps the guest's file key for the requester). Only
-// firebase/auth, firebase/functions (the real Cloud Function call), and BlockchainSyncQueueService
-// (peer dependency, only touched on the failure path) are mocked. getUserProfile is NOT mocked —
-// it's a plain Firestore read with no external calls, so it runs for real against seeded data.
+// (this is the crypto that actually re-wraps the guest's file key for the requester), and REAL
+// BlockchainSyncQueueService (writes to the emulator, asserted on directly — matches
+// grantAdmin.test.ts's convention). Only firebase/auth and firebase/functions (the real Cloud
+// Function boundary) are mocked. getUserProfile is NOT mocked — it's a plain Firestore read with
+// no external calls, so it runs for real against seeded data.
 
 import { beforeEach, afterEach, afterAll, describe, it, expect, vi } from 'vitest';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, getDocs } from 'firebase/firestore';
 import { deleteApp, getApps } from 'firebase/app';
 import { connectTestFirestore, clearTestFirestore } from './helpers/testFirestore';
 import { arrayBufferToBase64 } from '../../src/utils/dataFormattingUtils';
 
-const { mockCurrentUser, httpsCallableMock, logFailureMock } = vi.hoisted(() => ({
+const { mockCurrentUser, httpsCallableMock } = vi.hoisted(() => ({
   mockCurrentUser: { uid: null as string | null },
   httpsCallableMock: vi.fn(),
-  logFailureMock: vi.fn(),
 }));
 
 vi.mock('firebase/auth', () => ({
@@ -31,10 +31,6 @@ vi.mock('firebase/auth', () => ({
 vi.mock('firebase/functions', () => ({
   getFunctions: vi.fn(() => ({})),
   httpsCallable: () => httpsCallableMock,
-}));
-
-vi.mock('@/features/BlockchainWallet/services/blockchainSyncQueueService', () => ({
-  BlockchainSyncQueueService: { logFailure: logFailureMock },
 }));
 
 import { FulfillRequestService } from '../../src/features/RequestRecord/services/fulfillRequestService';
@@ -107,7 +103,6 @@ beforeEach(async () => {
   installFakeSessionStorage();
   EncryptionKeyManager.clearSession();
   httpsCallableMock.mockReset();
-  logFailureMock.mockReset();
   setCaller(null);
   // getUserProfile (real, unmocked) keeps a module-level in-memory cache keyed by uid — without
   // clearing it, one test's seeded (or missing) profile for REQUESTER_UID leaks into the next.
@@ -167,7 +162,17 @@ describe('FulfillRequestService.fulfillAsGuest — happy path', () => {
     await seedGuestWrappedKey(fileKey, throwawayKey);
     const { privateKey: requesterPrivateKey } = await seedRequesterProfile();
     await seedRecordAndRequest();
-    httpsCallableMock.mockResolvedValue({ data: { success: true } });
+    httpsCallableMock.mockResolvedValue({
+      data: {
+        success: true,
+        blockchainRef: {
+          txHash: '0xguestfulfill',
+          blockNumber: 55,
+          chainId: 84532,
+          contractAddress: '0xMemberRoleManager',
+        },
+      },
+    });
 
     await FulfillRequestService.fulfillAsGuest(makeRequest(), RECORD_ID);
 
@@ -203,11 +208,36 @@ describe('FulfillRequestService.fulfillAsGuest — happy path', () => {
     const requestSnap = await getDoc(doc(db, 'recordRequests', INVITE_CODE));
     expect(requestSnap.data()!.status).toBe('fulfilled');
     expect(requestSnap.data()!.fulfilledRecordIds).toEqual([RECORD_ID]);
+
+    const events = await getDocs(collection(db, 'records', RECORD_ID, 'permissionHistory'));
+    expect(events.docs).toHaveLength(1);
+    expect(events.docs[0]!.data().changes).toEqual([
+      { userId: REQUESTER_UID, action: 'granted', previousRole: null, newRole: 'administrator' },
+    ]);
+    // blockchainRef starts null in the atomic Firestore write and is filled in once the
+    // (mocked, successful) Cloud Function call resolves.
+    expect(events.docs[0]!.data().blockchainRef).toMatchObject({
+      txHash: '0xguestfulfill',
+      blockNumber: 55,
+    });
+
+    const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+    expect(syncDocs.size).toBe(1);
+    expect(syncDocs.docs[0]!.data()).toMatchObject({
+      status: 'confirmed',
+      contract: 'MemberRoleManager',
+      action: 'initializeRoleOnChainForRequester',
+      userId: GUEST_UID,
+      txHash: '0xguestfulfill',
+      blockNumber: 55,
+      permissionHistoryPath: `records/${RECORD_ID}/permissionHistory/${events.docs[0]!.id}`,
+    });
+    expect(syncDocs.docs[0]!.data().userWalletAddress).toBeUndefined();
   });
 });
 
 describe('FulfillRequestService.fulfillAsGuest — on-chain failure', () => {
-  it('logs the failure and rethrows, without writing the wrappedKey/record/request updates', async () => {
+  it('keeps the Firestore fulfillment when the blockchain call rejects, and logs it for reconciliation', async () => {
     setCaller(GUEST_UID);
     const throwawayKey = await EncryptionKeyManager.generateMasterKey();
     EncryptionKeyManager.setSessionKey(throwawayKey);
@@ -216,29 +246,73 @@ describe('FulfillRequestService.fulfillAsGuest — on-chain failure', () => {
     await seedRecordAndRequest();
     httpsCallableMock.mockRejectedValue(new Error('Pimlico bundler timeout'));
 
-    await expect(FulfillRequestService.fulfillAsGuest(makeRequest(), RECORD_ID)).rejects.toThrow(
-      'Pimlico bundler timeout'
+    // Firestore-first: the chain call is best-effort and does not revert the fulfillment that
+    // already succeeded, so this resolves rather than throwing.
+    await expect(
+      FulfillRequestService.fulfillAsGuest(makeRequest(), RECORD_ID)
+    ).resolves.toBeUndefined();
+
+    const requesterWrappedKeySnap = await getDoc(
+      doc(db, 'wrappedKeys', `${RECORD_ID}_${REQUESTER_UID}`)
+    );
+    expect(requesterWrappedKeySnap.exists()).toBe(true);
+
+    const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
+    expect(recordSnap.data()!.administrators).toEqual(
+      expect.arrayContaining([GUEST_UID, REQUESTER_UID])
     );
 
-    expect(logFailureMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contract: 'MemberRoleManager',
-        action: 'initializeRoleOnChainForRequester',
-        userId: GUEST_UID,
-        error: 'Pimlico bundler timeout',
-        context: expect.objectContaining({
-          targetUserId: REQUESTER_UID,
-          targetWalletAddress: '0xRequesterWallet',
-          role: 'administrator',
-          recordId: RECORD_ID,
-        }),
-      })
-    );
-
-    // No rollback exists for this — but nothing past the failed on-chain call should have run.
-    const requesterWrappedKeySnap = await getDoc(doc(db, 'wrappedKeys', `${RECORD_ID}_${REQUESTER_UID}`));
-    expect(requesterWrappedKeySnap.exists()).toBe(false);
     const requestSnap = await getDoc(doc(db, 'recordRequests', INVITE_CODE));
-    expect(requestSnap.data()!.status).toBe('pending');
+    expect(requestSnap.data()!.status).toBe('fulfilled');
+    expect(requestSnap.data()!.fulfilledRecordIds).toEqual([RECORD_ID]);
+
+    const events = await getDocs(collection(db, 'records', RECORD_ID, 'permissionHistory'));
+    expect(events.docs).toHaveLength(1);
+    // No confirmed tx to cite — the audit event still exists, just without a chain reference yet.
+    expect(events.docs[0]!.data().blockchainRef).toBeNull();
+
+    const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+    expect(syncDocs.size).toBe(1);
+    expect(syncDocs.docs[0]!.data()).toMatchObject({
+      status: 'failed',
+      contract: 'MemberRoleManager',
+      action: 'initializeRoleOnChainForRequester',
+      userId: GUEST_UID,
+      error: 'Pimlico bundler timeout',
+      context: expect.objectContaining({
+        targetUserId: REQUESTER_UID,
+        targetWalletAddress: '0xRequesterWallet',
+        role: 'administrator',
+        recordId: RECORD_ID,
+      }),
+    });
+  });
+
+  it('resolves and leaves a failed sync-queue entry when the Cloud Function reports already-exists (self-healed)', async () => {
+    setCaller(GUEST_UID);
+    const throwawayKey = await EncryptionKeyManager.generateMasterKey();
+    EncryptionKeyManager.setSessionKey(throwawayKey);
+    await seedGuestWrappedKey(await EncryptionService.generateFileKey(), throwawayKey);
+    await seedRequesterProfile();
+    await seedRecordAndRequest();
+    httpsCallableMock.mockRejectedValue(
+      Object.assign(new Error('Record already initialized on chain'), { code: 'already-exists' })
+    );
+
+    // Not special-cased client-side — falls through the same best-effort catch as any other
+    // chain error, so the Firestore fulfillment still stands.
+    await expect(
+      FulfillRequestService.fulfillAsGuest(makeRequest(), RECORD_ID)
+    ).resolves.toBeUndefined();
+
+    const requestSnap = await getDoc(doc(db, 'recordRequests', INVITE_CODE));
+    expect(requestSnap.data()!.status).toBe('fulfilled');
+
+    const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+    expect(syncDocs.size).toBe(1);
+    expect(syncDocs.docs[0]!.data()).toMatchObject({
+      status: 'failed',
+      error: 'Record already initialized on chain',
+    });
   });
 });

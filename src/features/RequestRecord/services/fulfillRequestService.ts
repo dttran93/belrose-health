@@ -11,13 +11,14 @@
 import {
   getFirestore,
   doc,
+  collection,
   updateDoc,
   serverTimestamp,
   arrayUnion,
   getDoc,
-  setDoc,
+  writeBatch,
 } from 'firebase/firestore';
-import { RecordRequest } from '@belrose/shared';
+import { PermissionChange, RecordRequest } from '@belrose/shared';
 import { PermissionsService, Role } from '@/features/Permissions/services/permissionsService';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { getUserProfile } from '@/features/Users/services/userProfileService';
@@ -26,7 +27,14 @@ import { getAuth } from 'firebase/auth';
 import { EncryptionKeyManager } from '@/features/Encryption/services/encryptionKeyManager';
 import { base64ToArrayBuffer } from '@/utils/dataFormattingUtils';
 import { EncryptionService } from '@/features/Encryption/services/encryptionService';
-import { BlockchainSyncQueueService } from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
+import {
+  BlockchainSyncQueueService,
+  getUserFacingErrorMessage,
+} from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
+import {
+  buildPermissionHistoryDocId,
+  preparePermissionChangeEventData,
+} from '@/features/Permissions/services/writePermissionChangeEvent';
 import { id } from 'ethers';
 
 // ── Firestore document ────────────────────────────────────────────────────────
@@ -92,10 +100,15 @@ export class FulfillRequestService {
    * Fulfill a record request as a guest provider.
    *
    * Differences from the registered flow:
-   * - No blockchain role grant for the provider (no wallet yet)
-   * - Record is initialized on-chain with the requester as administrator
-   *   via a cloud function call (admin wallet handles this)
-   * - Provider's own access is queued for backfill on claim
+   * - No blockchain role grant for the provider (no wallet yet) — the provider's own
+   *   `administrators[]` membership was already set client-side at upload time
+   *   (createFirestoreRecord), but nothing here or in the later claim flow
+   *   (GuestClaimAccountModal) ever registers the provider on-chain for this record. That's a
+   *   known pre-existing gap, not something this method is responsible for closing.
+   * - Record is initialized on-chain with the requester as administrator via a Cloud Function
+   *   call (admin wallet handles this — Firestore-first: the grant below always lands even if
+   *   this best-effort chain call fails, tracked via BlockchainSyncQueueService for
+   *   reconciliation)
    * - Encryption: requester's public RSA key wraps the file key directly
    */
   static async fulfillAsGuest(recordRequest: RecordRequest, recordId: string): Promise<void> {
@@ -134,35 +147,43 @@ export class FulfillRequestService {
     );
     const wrappedKey = await SharingKeyManagementService.wrapKey(fileKey, requesterPublicKey);
 
-    // Step 3: Initialize record on-chain with requester as administrator
-    // Admin cloud function handles this — guest has no wallet to call the contract
-    try {
-      const initFn = httpsCallable(getFunctions(), 'initializeRoleOnChainForRequester');
-      await initFn({
-        recordId,
-        requesterUserId: recordRequest.requesterId,
-        role: 'administrator',
-      });
-    } catch (err: any) {
-      await BlockchainSyncQueueService.logFailure({
-        contract: 'MemberRoleManager',
-        action: 'initializeRoleOnChainForRequester',
-        userId: guestUid,
-        error: err?.message || 'Unknown error',
-        context: {
-          type: 'permission',
-          targetUserId: recordRequest.requesterId,
-          targetWalletAddress: requesterProfile.wallet?.address ?? '',
-          role: 'administrator',
-          recordId,
-          recordIdHash: id(recordId),
-        },
-      });
-      throw err;
-    }
+    // Step 3: Determine granted vs. upgraded — mirrors PermissionsService.grantAdmin so the
+    // audit event records the correct transition even in the rare case the requester already
+    // held some role on this record.
+    const recordRef = doc(db, 'records', recordId);
+    const recordSnap = await getDoc(recordRef);
+    if (!recordSnap.exists()) throw new Error('Record not found');
+    const existingRole = PermissionsService.getUserRole(
+      recordSnap.data(),
+      recordRequest.requesterId
+    );
+    const changes: PermissionChange[] = [
+      existingRole
+        ? {
+            userId: recordRequest.requesterId,
+            action: 'upgraded',
+            previousRole: existingRole,
+            newRole: 'administrator',
+          }
+        : {
+            userId: recordRequest.requesterId,
+            action: 'granted',
+            previousRole: null,
+            newRole: 'administrator',
+          },
+    ];
 
-    // Step 4: Write wrappedKey doc for requester
-    await setDoc(doc(db, 'wrappedKeys', `${recordId}_${recordRequest.requesterId}`), {
+    const historyRef = doc(
+      collection(db, 'records', recordId, 'permissionHistory'),
+      buildPermissionHistoryDocId(recordRequest.requesterId)
+    );
+    const eventData = await preparePermissionChangeEventData(recordId, guestUid, changes);
+
+    // Step 4: Atomic Firestore write — wrappedKey + role array + permissionHistory event +
+    // request status, all four or none. blockchainRef starts null; filled in below once the
+    // admin-signed chain call resolves.
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'wrappedKeys', `${recordId}_${recordRequest.requesterId}`), {
       recordId,
       userId: recordRequest.requesterId,
       wrappedKey,
@@ -170,17 +191,53 @@ export class FulfillRequestService {
       isActive: true,
       createdAt: serverTimestamp(),
     });
-
-    // Step 5: Grant requester role in Firestore record arrays
-    await updateDoc(doc(db, 'records', recordId), {
-      administrators: arrayUnion(recordRequest.requesterId),
-    });
-
-    // Step 6: Mark request fulfilled
-    await updateDoc(doc(db, 'recordRequests', recordRequest.inviteCode), {
+    batch.update(recordRef, { administrators: arrayUnion(recordRequest.requesterId) });
+    batch.set(historyRef, eventData);
+    batch.update(doc(db, 'recordRequests', recordRequest.inviteCode), {
       status: 'fulfilled',
       fulfilledRecordIds: arrayUnion(recordId),
       fulfilledAt: serverTimestamp(),
     });
+    await batch.commit();
+
+    // Step 5: Initialize record on-chain with requester as administrator — best-effort, does
+    // not revert the Firestore grant above. Admin cloud function handles this — guest has no
+    // wallet to call the contract directly.
+    const syncRef = await BlockchainSyncQueueService.startAttempt({
+      contract: 'MemberRoleManager',
+      action: 'initializeRoleOnChainForRequester',
+      userId: guestUid,
+      // Guest providers have no wallet of their own — omit rather than pass undefined
+      // (Firestore's SDK rejects explicit undefined field values in this codebase).
+      permissionHistoryPath: historyRef.path,
+      context: {
+        type: 'permission',
+        targetUserId: recordRequest.requesterId,
+        targetWalletAddress: requesterProfile.wallet?.address ?? '',
+        role: 'administrator',
+        recordId,
+        recordIdHash: id(recordId),
+      },
+    });
+
+    try {
+      const initFn = httpsCallable(getFunctions(), 'initializeRoleOnChainForRequester');
+      const result: any = await initFn({
+        recordId,
+        requesterUserId: recordRequest.requesterId,
+        role: 'administrator',
+      });
+      const blockchainRef = result.data.blockchainRef;
+      await updateDoc(historyRef, { blockchainRef });
+      await BlockchainSyncQueueService.recordSuccess(syncRef, {
+        txHash: blockchainRef.txHash,
+        blockNumber: blockchainRef.blockNumber,
+      });
+    } catch (err) {
+      // Covers genuine chain failures and the CF's self-healed already-exists throw alike —
+      // neither is special-cased, both land as a 'failed' sync-queue entry for reconciliation.
+      const errorMessage = getUserFacingErrorMessage(err, 'Blockchain transaction failed');
+      await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
+    }
   }
 }
