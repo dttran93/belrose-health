@@ -20,7 +20,7 @@ export async function getAccessibleRecords(userId: string): Promise<FileObject[]
       query(recordsRef, where('viewers', 'array-contains', userId)),
       query(recordsRef, where('administrators', 'array-contains', userId)),
       query(recordsRef, where('subjects', 'array-contains', userId)),
-      query(recordsRef, where('uploadedBy', '==', userId)),
+      query(recordsRef, where('sharers', 'array-contains', userId)),
     ];
 
     const snapshots = await Promise.all(queries.map(q => getDocs(q)));
