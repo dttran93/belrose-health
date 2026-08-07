@@ -1,13 +1,15 @@
 // src/features/GuestAccess/components/GuestUploadBlockerModal.tsx
 
 /**
- * This component is shown to guest users when they attempt to navigate away from AddRecord after uploading a file
+ * This component is shown to guest users when they attempt to navigate away from an unsecured
+ * upload — whether that's AddRecord right after uploading, or RecordFull while reviewing a
+ * record they uploaded earlier (see useGuestUploadBlocker, used by both).
  * Guests are given temporary AES keys as part of the Encryption Manager and to be able to login.
  */
 
 import React from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Lock, Loader2, Send, UserPlus, AlertTriangle } from 'lucide-react';
+import { Lock, Send, UserPlus, AlertTriangle } from 'lucide-react';
 import { RecordRequest } from '@belrose/shared';
 import { FileObject } from '@/types/core';
 import { truncate } from '@/utils/dataFormattingUtils';
@@ -16,7 +18,6 @@ import ActionButton from '@/components/ui/ActionButton';
 interface GuestUploadBlockerModalProps {
   pendingRequest: RecordRequest | null;
   completedFiles: FileObject[];
-  fulfilling: boolean;
   onClaim: () => void;
   onFulfillAndExit: () => void;
   onLeave: () => void;
@@ -25,7 +26,6 @@ interface GuestUploadBlockerModalProps {
 export const GuestUploadBlockerModal: React.FC<GuestUploadBlockerModalProps> = ({
   pendingRequest,
   completedFiles,
-  fulfilling,
   onClaim,
   onFulfillAndExit,
   onLeave,
@@ -81,27 +81,15 @@ export const GuestUploadBlockerModal: React.FC<GuestUploadBlockerModalProps> = (
               label="Create a free account"
               sublabel="Keep permanent access to this record and unlock all features"
               onClick={onClaim}
-              disabled={fulfilling}
               variant="primary"
             />
 
             {pendingRequest && (
               <ActionButton
-                icon={
-                  fulfilling ? (
-                    <Loader2 className="w-4 h-4 text-white animate-spin" />
-                  ) : (
-                    <Send className="w-4 h-4 text-white" />
-                  )
-                }
-                label={fulfilling ? 'Sending...' : `Send to ${pendingRequest.requesterName}`}
-                sublabel={
-                  fulfilling
-                    ? 'Encrypting and delivering the record'
-                    : `Fulfil ${pendingRequest.requesterName}'s request and exit`
-                }
+                icon={<Send className="w-4 h-4 text-white" />}
+                label={`Send to ${pendingRequest.requesterName}`}
+                sublabel={`Fulfil ${pendingRequest.requesterName}'s request and exit`}
                 onClick={onFulfillAndExit}
-                disabled={fulfilling}
                 variant="secondary"
               />
             )}
@@ -110,9 +98,8 @@ export const GuestUploadBlockerModal: React.FC<GuestUploadBlockerModalProps> = (
             {!pendingRequest && (
               <button
                 onClick={onLeave}
-                disabled={fulfilling}
                 className="w-full text-center text-xs text-slate-400 hover:text-slate-600
-                           transition-colors py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                           transition-colors py-2"
               >
                 Leave anyway — I understand I'll lose record access
               </button>

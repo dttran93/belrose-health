@@ -2,11 +2,6 @@ import type { FHIRWithValidation } from '../services/fhirConversionService.type'
 import { FileObject, VirtualFileInput } from '@/types/core';
 import { UploadResult } from '../services/shared.types';
 import { ProcessFileOptions, UploadFilesOptions } from '../hooks/useFileManager.type';
-import {
-  RefinementAnswer,
-  RefinementQuestion,
-  RefinementStatus,
-} from '@/features/RecordFollowUp/types';
 
 // ============================================================================
 // FILE MANAGEMENT TYPES
@@ -59,7 +54,10 @@ export interface CombinedUploadFHIRProps {
     fhirData: FHIRWithValidation,
     options?: VirtualFileInput & { autoUpload?: boolean }
   ) => Promise<VirtualFileResult>;
-  uploadFiles: (filesToUpload: FileObject[], options?: UploadFilesOptions) => Promise<UploadResult[]>;
+  uploadFiles: (
+    filesToUpload: FileObject[],
+    options?: UploadFilesOptions
+  ) => Promise<UploadResult[]>;
   savingToFirestore: Set<string>;
 
   // Configuration props
@@ -69,9 +67,6 @@ export interface CombinedUploadFHIRProps {
   className?: string;
 
   convertTextToFHIR?: (text: string, patientName?: string) => Promise<FHIRWithValidation>;
-
-  externalLinkRequestFile: FileObject | null;
-  onExternalLinkRequestClose: () => void;
 
   isGuest: boolean;
 }
