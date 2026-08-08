@@ -118,7 +118,6 @@ const AddRecord: React.FC<AddRecordProps> = ({ className }) => {
           onClose={closeClaimModal}
           onComplete={() => navigate('/app/record-requests')}
           guestContext="record_request"
-          pendingRecordIds={completedFileIds}
         />
       )}
 

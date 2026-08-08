@@ -813,7 +813,6 @@ export const RecordFull: React.FC<RecordFullProps> = ({
             onRefreshRecord?.();
           }}
           guestContext="record_request"
-          pendingRecordIds={[record.id]}
         />
       )}
     </div>

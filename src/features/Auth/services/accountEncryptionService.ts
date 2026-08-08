@@ -11,6 +11,7 @@ import { EncryptionService } from '@/features/Encryption/services/encryptionServ
 import { MemberRegistryBlockchain } from './memberRegistryBlockchain';
 import { WalletGenerationService } from './walletGenerationService';
 import { arrayBufferToBase64, base64ToArrayBuffer } from '@/utils/dataFormattingUtils';
+import { BlockchainRef } from '@belrose/shared';
 
 export interface EncryptionBootstrapBundle {
   masterKey: CryptoKey; // live key — caller decides if/when to setSessionKey
@@ -28,6 +29,7 @@ export interface WalletRegistrationResult {
   masterKeyHex: string;
   walletAddress: string;
   smartAccountAddress: string;
+  blockchainRef: BlockchainRef;
 }
 
 export class AccountEncryptionService {
@@ -78,9 +80,9 @@ export class AccountEncryptionService {
    */
   static async registerWalletOnChain(masterKey: CryptoKey): Promise<WalletRegistrationResult> {
     const masterKeyHex = await WalletGenerationService.convertMasterKeyToHex(masterKey);
-    const { walletAddress, smartAccountAddress } =
+    const { walletAddress, smartAccountAddress, blockchainRef } =
       await MemberRegistryBlockchain.registerMemberOnChainComplete(masterKeyHex);
 
-    return { masterKeyHex, walletAddress, smartAccountAddress };
+    return { masterKeyHex, walletAddress, smartAccountAddress, blockchainRef };
   }
 }
