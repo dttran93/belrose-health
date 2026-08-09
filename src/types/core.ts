@@ -92,10 +92,13 @@ export interface LinkedWalletRecord {
 }
 
 /**
- * Represents on-chain status of account overall (not just the wallet). Keeps an audit record of any changes in on-chain status (Guest/Active/Inactive/Verified etc.)
+ * Represents on-chain status of account overall (not just the wallet). Keeps an audit record of
+ * any changes in on-chain status. Mirrors MemberRoleManager.sol's MemberStatus enum exactly —
+ * there is no "Guest" status on-chain; guests are deliberately kept off the blockchain entirely
+ * (see GuestClaimService's header comment).
  */
 export interface onChainIdentityStatus {
-  status: 'NotRegistered' | 'Inactive' | 'Active' | 'Verified' | 'VerifiedProvider' | 'Guest'; //Practically NotRegistered will never happen, but technically its on chain so just here for completeness.
+  status: 'NotRegistered' | 'Inactive' | 'Active' | 'Verified' | 'VerifiedProvider'; //Practically NotRegistered will never happen, but technically its on chain so just here for completeness.
   statusUpdatedAt?: any;
   statusBlockchainRef?: BlockchainRef;
 }

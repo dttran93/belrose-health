@@ -1,8 +1,34 @@
-// src/features/Blockchain/services/blockchainSyncQueueService.ts
+// src/features/BlockchainWallet/services/blockchainSyncQueueService.ts
 /**
  * Service to capture when blockchain fails to update. Used for auditing and debugging.
  * Captures universal information, contract, function, user, error message. And adds
- * custom data based on context
+ * custom data based on context.
+ *
+ * In some cases the write might be either client-orchestrated or backend-orchestrated, in which
+ * case this is the general rule:
+ *
+ *   Client-orchestrated flows track client-side, even when the actual signing happens inside an
+ *   admin-signed Cloud Function on the caller's behalf (the client still can't sign for itself —
+ *   that's *why* the CF exists — but it's still the client that decided to make the call, and it
+ *   already has the richer application context — which permissionHistory doc this ties back to,
+ *   which record, which UI flow — that a thin "admin wallet, please sign this" CF doesn't know or
+ *   care about). This is every write in this file's callers: PermissionsService, SubjectService,
+ *   TrusteePermissionService, GuestClaimService.claimAccount (Step 3), RegistrationForm, and
+ *   FulfillRequestService.fulfillAsGuest's call to the initializeRoleOnChainForRequester CF.
+ *
+ *   Fully server-orchestrated flows track server-side, use the functions-side counterpart. This
+ *   is for the rare case where a Cloud Function's own multi-step transaction has no meaningful
+ *   client-side wrapper around just the blockchain slice — the client calls one CF and gets a
+ *   final result, with no orchestration of its own to attach context to. createDependentAccount
+ *   is the one example: Auth user creation, the Firestore doc, wallet generation, on-chain
+ *   registration, and the trustee bootstrap all happen inside the CF as one atomic unit with its
+ *   own rollback logic: there's nothing for client-side tracking to meaningfully wrap. Another
+ *   example is initializeRoleOnChain - it automatically happens without input from the user.
+ *
+ * The practical tell: if the client already does real work around the CF call (writes an audit
+ * event, links a permissionHistoryPath, decides success/failure UI) — track it here, next to
+ * that work. If the client's role is just "call this CF and take whatever it returns" — track it
+ * server-side instead.
  */
 
 import {
@@ -195,6 +221,7 @@ export function getUserFacingErrorMessage(error: unknown, fallback: string): str
 export class BlockchainSyncQueueService {
   /**
    * Log any blockchain write failure for retry
+   * DEPRECATED: use startAttempt + recordFailure instead, this will be removed once we update the credibility service
    */
   static async logFailure(failure: BlockchainSyncFailure): Promise<void> {
     try {

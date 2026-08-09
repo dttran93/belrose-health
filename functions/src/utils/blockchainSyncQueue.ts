@@ -12,6 +12,12 @@
 // atomic all-or-nothing behavior (roll back the whole operation on any chain failure). This is
 // purely for observability/audit — every blockchain write gets a queue entry, full stop — not
 // for controlling whether the calling function proceeds.
+//
+// Reach for this only when there's no meaningful client-side wrapper to attach tracking to
+// instead — see the "client-side vs server-side" rule documented in blockchainSyncQueueService.ts
+// above. Most Cloud-Function-mediated blockchain writes (an admin wallet signing on the client's
+// behalf) should still be tracked client-side, next to whatever other orchestration the caller is
+// already doing around the call.
 
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 

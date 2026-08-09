@@ -10,6 +10,7 @@ const _shared_1 = require("../_shared/");
 const typechain_1 = require("../_shared/typechain");
 const backendWalletService_1 = require("../services/backendWalletService");
 const wallet_1 = require("./wallet");
+const blockchainSyncQueue_1 = require("../utils/blockchainSyncQueue");
 const MEMBER_ROLE_MANAGER_ADDRESS = _shared_1.MEMBER_ROLE_MANAGER.proxy;
 const CHAIN_ID = _shared_1.NETWORK.chainId;
 // ============================================================================
@@ -161,13 +162,34 @@ exports.registerMemberOnChain = (0, https_1.onCall)({ secrets: ['ADMIN_WALLET_PR
         }
         const isSmartAccount = walletAddress.toLowerCase() === userData.wallet?.smartAccountAddress?.toLowerCase();
         const walletLabel = isSmartAccount ? 'smart-account' : 'eoa';
-        // 3. Contract Call
+        // 3. Contract Call — tracked in blockchainSyncQueue for observability. This CF fires as
+        // an automatic prerequisite (BlockchainPreparationService.ensureReady, run ahead of
+        // Permissions/Subject/Credibility flows), never something the user directly triggers, so
+        // tracking lives here rather than client-side — see blockchainSyncQueueService.ts's header
+        // comment (src/features/BlockchainWallet/services/) for the full client-vs-server rule.
         const userIdHash = ethers_1.ethers.id(userId);
         const contract = getAdminContract();
-        // Smart Contract Call
-        const tx = await contract.addMember(walletAddress, userIdHash);
-        const receipt = await awaitTx(tx);
-        const blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
+        const syncId = await (0, blockchainSyncQueue_1.startBlockchainSyncAttempt)({
+            contract: 'MemberRoleManager',
+            action: 'addMember',
+            userId,
+            userWalletAddress: walletAddress,
+            chainId: CHAIN_ID,
+            contractAddress: MEMBER_ROLE_MANAGER_ADDRESS,
+            context: { type: 'memberRegistry', newStatus: 'Active' },
+        });
+        let blockchainRef;
+        try {
+            // Smart Contract Call
+            const tx = await contract.addMember(walletAddress, userIdHash);
+            const receipt = await awaitTx(tx);
+            blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
+            await (0, blockchainSyncQueue_1.recordBlockchainSyncSuccess)(syncId, { txHash: tx.hash, blockNumber: receipt.blockNumber });
+        }
+        catch (chainError) {
+            await (0, blockchainSyncQueue_1.recordBlockchainSyncFailure)(syncId, chainError instanceof Error ? chainError.message : String(chainError));
+            throw chainError;
+        }
         //4. Update Firestore
         await db
             .collection('users')
@@ -202,23 +224,48 @@ exports.registerMemberOnChain = (0, https_1.onCall)({ secrets: ['ADMIN_WALLET_PR
  */
 exports.updateMemberStatus = (0, https_1.onCall)({ secrets: ['ADMIN_WALLET_PRIVATE_KEY', 'RPC_URL'] }, async (request) => {
     const { userId, status } = request.data;
-    if (!userId || ![1, 2, 3, 4, 5].includes(status)) {
+    // Mirrors MemberRoleManager.sol's MemberStatus enum exactly (NotRegistered=0, Inactive=1,
+    // Active=2, Verified=3, VerifiedProvider=4) — there is no "Guest" status on-chain. Guests are
+    // deliberately kept off the blockchain entirely (see GuestClaimService's header comment);
+    // status 0 (NotRegistered) is excluded here too since it's the default/uninitialized state,
+    // not something this CF should ever be asked to set explicitly.
+    if (!userId || ![1, 2, 3, 4].includes(status)) {
         throw new https_1.HttpsError('invalid-argument', 'Invalid userId or status');
     }
+    const statusMap = {
+        1: 'Inactive',
+        2: 'Active',
+        3: 'Verified',
+        4: 'VerifiedProvider',
+    };
     try {
         const userIdHash = ethers_1.ethers.id(userId);
         const contract = getAdminContract();
-        const tx = await contract.setUserStatus(userIdHash, status);
-        const receipt = await awaitTx(tx);
-        const blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
+        // Tracked in blockchainSyncQueue for observability — this CF fires automatically as a
+        // callback once a third-party identity-verification provider (Persona) reports success,
+        // never something the user directly triggers, so tracking lives here rather than
+        // client-side — see blockchainSyncQueueService.ts's header comment
+        // (src/features/BlockchainWallet/services/) for the full client-vs-server rule.
+        const syncId = await (0, blockchainSyncQueue_1.startBlockchainSyncAttempt)({
+            contract: 'MemberRoleManager',
+            action: 'setUserStatus',
+            userId,
+            chainId: CHAIN_ID,
+            contractAddress: MEMBER_ROLE_MANAGER_ADDRESS,
+            context: { type: 'memberRegistry', newStatus: statusMap[status] },
+        });
+        let blockchainRef;
+        try {
+            const tx = await contract.setUserStatus(userIdHash, status);
+            const receipt = await awaitTx(tx);
+            blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
+            await (0, blockchainSyncQueue_1.recordBlockchainSyncSuccess)(syncId, { txHash: tx.hash, blockNumber: receipt.blockNumber });
+        }
+        catch (chainError) {
+            await (0, blockchainSyncQueue_1.recordBlockchainSyncFailure)(syncId, chainError instanceof Error ? chainError.message : String(chainError));
+            throw chainError;
+        }
         // Sync the status change to Firestore
-        const statusMap = {
-            1: 'Inactive',
-            2: 'Active',
-            3: 'Verified',
-            4: 'VerifiedProvider',
-            5: 'Guest',
-        };
         await (0, firestore_1.getFirestore)()
             .collection('users')
             .doc(userId)
@@ -396,10 +443,38 @@ exports.initializeRoleOnChain = (0, https_1.onCall)({ secrets: ['ADMIN_WALLET_PR
             }
             throw new https_1.HttpsError('already-exists', 'Record already initialized on chain');
         }
-        // 4. Execution
-        const tx = await contract.initializeRecordRole(recordIdHash, walletAddress, role);
-        const receipt = await awaitTx(tx);
-        const blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
+        // 4. Execution — tracked in blockchainSyncQueue for observability. This CF fires as a
+        // silent prerequisite inside usePermissionFlow's grant handler, never something the user
+        // directly triggers, so tracking lives here rather than client-side — see
+        // blockchainSyncQueueService.ts's header comment (src/features/BlockchainWallet/services/)
+        // for the full client-vs-server rule.
+        const syncId = await (0, blockchainSyncQueue_1.startBlockchainSyncAttempt)({
+            contract: 'MemberRoleManager',
+            action: 'initializeRoleOnChain',
+            userId,
+            userWalletAddress: walletAddress,
+            chainId: CHAIN_ID,
+            contractAddress: MEMBER_ROLE_MANAGER_ADDRESS,
+            context: {
+                type: 'permission',
+                targetUserId: userId,
+                targetWalletAddress: walletAddress,
+                role,
+                recordId,
+                recordIdHash,
+            },
+        });
+        let blockchainRef;
+        try {
+            const tx = await contract.initializeRecordRole(recordIdHash, walletAddress, role);
+            const receipt = await awaitTx(tx);
+            blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
+            await (0, blockchainSyncQueue_1.recordBlockchainSyncSuccess)(syncId, { txHash: tx.hash, blockNumber: receipt.blockNumber });
+        }
+        catch (chainError) {
+            await (0, blockchainSyncQueue_1.recordBlockchainSyncFailure)(syncId, chainError instanceof Error ? chainError.message : String(chainError));
+            throw chainError;
+        }
         await db
             .collection('records')
             .doc(recordId)
