@@ -2,14 +2,10 @@
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
-  signInWithPopup,
   signOut,
   sendPasswordResetEmail,
   sendEmailVerification,
   updateProfile,
-  FacebookAuthProvider,
-  GithubAuthProvider,
-  GoogleAuthProvider,
   onAuthStateChanged,
   User,
   UserCredential,
@@ -17,10 +13,6 @@ import {
 } from 'firebase/auth';
 import { auth } from '../../../firebase/config';
 import { UserService } from './userService';
-
-const googleProvider = new GoogleAuthProvider();
-const facebookProvider = new FacebookAuthProvider();
-const githubProvider = new GithubAuthProvider();
 
 export interface AuthError {
   code: string;
@@ -122,57 +114,6 @@ export const authService = {
       return userCredential.user;
     } catch (error) {
       console.error('Sign in failed:', error);
-      throw error;
-    }
-  },
-
-  /**
-   * Sign in with Google
-   */
-  signInWithGoogle: async (): Promise<User> => {
-    try {
-      const result: UserCredential = await signInWithPopup(auth, googleProvider);
-
-      // Create or update user document for social login
-      await UserService.createUserDocument(result.user);
-
-      return result.user;
-    } catch (error) {
-      console.error('Google sign in failed:', error);
-      throw error;
-    }
-  },
-
-  /**
-   * Sign in with Facebook
-   */
-  signInWithFacebook: async (): Promise<User> => {
-    try {
-      const result: UserCredential = await signInWithPopup(auth, facebookProvider);
-
-      // Create or update user document for social login
-      await UserService.createUserDocument(result.user);
-
-      return result.user;
-    } catch (error) {
-      console.error('Facebook sign in failed:', error);
-      throw error;
-    }
-  },
-
-  /**
-   * Sign in with GitHub
-   */
-  signInWithGitHub: async (): Promise<User> => {
-    try {
-      const result: UserCredential = await signInWithPopup(auth, githubProvider);
-
-      // Create or update user document for social login
-      await UserService.createUserDocument(result.user);
-
-      return result.user;
-    } catch (error) {
-      console.error('GitHub sign in failed:', error);
       throw error;
     }
   },
