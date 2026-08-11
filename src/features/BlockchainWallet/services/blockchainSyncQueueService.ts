@@ -38,6 +38,7 @@ import {
   TimestampLike,
   NETWORK_CORE,
   CONTRACT_ADDRESSES,
+  BlockchainContract,
 } from '@belrose/shared';
 import {
   collection,
@@ -49,9 +50,6 @@ import {
   getFirestore,
   DocumentReference,
 } from 'firebase/firestore';
-
-// The contract being written to
-export type BlockchainContract = 'MemberRoleManager' | 'HealthRecordCore' | 'BelrosePaymaster';
 
 // chainId/contractAddress are known before a chain call is ever attempted (they're static
 // config, not outcome data), so startAttempt stamps them on every entry — pending, confirmed,

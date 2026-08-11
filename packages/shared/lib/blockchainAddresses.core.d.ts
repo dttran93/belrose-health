@@ -5,6 +5,7 @@ export declare const NETWORK_CORE: {
     readonly explorerUrl: "https://sepolia.basescan.org/";
 };
 export declare function buildRpcUrl(apiKey: string): string;
+export type BlockchainContract = 'MemberRoleManager' | 'HealthRecordCore' | 'BelrosePaymaster';
 export declare const AA_INFRASTRUCTURE: {
     readonly entryPoint: "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
 };

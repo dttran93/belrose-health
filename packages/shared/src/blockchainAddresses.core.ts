@@ -26,6 +26,9 @@ export function buildRpcUrl(apiKey: string) {
   return `https://base-sepolia.g.alchemy.com/v2/${apiKey}`;
 }
 
+// Smart Contract Names
+export type BlockchainContract = 'MemberRoleManager' | 'HealthRecordCore' | 'BelrosePaymaster';
+
 // ============================================================================
 // ERC-4337 ACCOUNT ABSTRACTION INFRASTRUCTURE
 // ============================================================================
