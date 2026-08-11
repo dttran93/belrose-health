@@ -19,9 +19,8 @@
 // behalf) should still be tracked client-side, next to whatever other orchestration the caller is
 // already doing around the call.
 
+import { BlockchainContract } from '@/_shared/blockchainAddresses';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
-
-export type BlockchainContract = 'MemberRoleManager' | 'HealthRecordCore' | 'BelrosePaymaster';
 
 interface StartBlockchainSyncAttemptParams {
   contract: BlockchainContract;
