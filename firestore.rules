@@ -465,6 +465,36 @@ service cloud.firestore {
 
         allow delete: if false;
       }
+
+      // --- SCORE EVENTS SUBCOLLECTION (Credibility Audit Trail) ---
+      // Parallel to permissionHistory/subjectHistory above — an append-only ledger of
+      // verification/dispute events behind this record's cached credibility.score. Nested
+      // under the record (rather than a top-level collection keyed by a recordId field) since
+      // every read/write is already scoped to exactly one record; recordId is available
+      // straight from the parent match here instead of needing a resource.data lookup.
+      match /scoreEvents/{eventId} {
+        // Read: platform admins or any user with a role on this record
+        allow read: if request.auth != null && (isPlatformAdmin() || hasRoleOnRecord(recordId));
+
+        // Create: must have a role and must be the one recording the event
+        allow create: if request.auth != null &&
+          hasRoleOnRecord(recordId) &&
+          request.resource.data.createdBy == request.auth.uid &&
+          request.resource.data.recordHash != null &&
+          request.resource.data.eventType in [
+            'verification',
+            'verification_revoked',
+            'verification_modified',
+            'dispute',
+            'dispute_revoked',
+            'dispute_modified'
+          ] &&
+          request.resource.data.scoreDelta is number &&
+          request.resource.data.createdAt is timestamp;
+
+        allow update: if false; // Immutable audit trail
+        allow delete: if false; // Immutable audit trail
+      }
     }
 
     // ============================================
@@ -781,45 +811,6 @@ service cloud.firestore {
 
       // DELETE: Not allowed — vouches are a permanent audit trail.
       allow delete: if false;
-    }
-
-    // ============================================
-    // SCORE EVENTS (Credibility Audit Trail)
-    // ============================================
-    
-    match /scoreEvents/{eventId} {
-      // READ: Allow if user has a role on the associated record
-      // This allows users to see the credibility history for records they can access
-      allow read: if request.auth != null && (
-        !exists(/databases/$(database)/documents/scoreEvents/$(eventId)) ||
-        hasRoleOnRecord(resource.data.recordId)
-      );
-
-      // CREATE: User must:
-      // 1. Have a role on the record
-      // 2. Be the one creating the event (createdBy matches auth uid)
-      // 3. Document ID must start with recordId (format: recordId_timestamp)
-      // 4. Include required fields
-      allow create: if request.auth != null &&
-        hasRoleOnRecord(request.resource.data.recordId) &&
-        request.resource.data.createdBy == request.auth.uid &&
-        // Enforce document ID starts with recordId_
-        eventId.matches(request.resource.data.recordId + '_[0-9]+') &&
-        request.resource.data.recordId != null &&
-        request.resource.data.recordHash != null &&
-        request.resource.data.eventType in [
-          'verification', 
-          'verification_revoked', 
-          'verification_modified',
-          'dispute',
-          'dispute_revoked',
-          'dispute_modified'
-        ] &&
-        request.resource.data.scoreDelta is number &&
-        request.resource.data.createdAt is timestamp;
-
-      allow update: if false; // Immutable audit trail
-      allow delete: if false; // Immutable audit trail
     }
 
     // ============================================

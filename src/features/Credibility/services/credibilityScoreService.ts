@@ -197,8 +197,9 @@ async function createScoreEvent(
   const scoreDelta = calculateScoreDelta(eventType, metadata);
   const timestamp = Timestamp.now();
 
-  // Generate deterministic document ID: recordId_timestamp
-  const eventId = `${recordId}_${timestamp.toMillis()}`;
+  // recordId now comes from the doc path, so the ID just needs to be unique within
+  // the subcollection — mirrors buildPermissionHistoryDocId's scheme.
+  const eventId = `${timestamp.toMillis()}_${crypto.randomUUID().slice(0, 8)}`;
 
   const scoreEvent: Omit<ScoreEvent, 'id'> = {
     recordId,
@@ -211,7 +212,7 @@ async function createScoreEvent(
   };
 
   // Use setDoc with explicit ID instead of addDoc
-  const eventRef = doc(db, 'scoreEvents', eventId);
+  const eventRef = doc(db, 'records', recordId, 'scoreEvents', eventId);
   await setDoc(eventRef, scoreEvent);
 
   console.log(`📊 Score event created: ${eventType} (${scoreDelta > 0 ? '+' : ''}${scoreDelta})`);
@@ -231,8 +232,7 @@ async function updateRecordScore(recordId: string): Promise<number> {
 
   // Get all score events for this record
   const eventsQuery = query(
-    collection(db, 'scoreEvents'),
-    where('recordId', '==', recordId),
+    collection(db, 'records', recordId, 'scoreEvents'),
     orderBy('createdAt', 'asc')
   );
   const eventsSnap = await getDocs(eventsQuery);
@@ -356,8 +356,7 @@ export async function getScoreEventsForRecord(recordId: string): Promise<ScoreEv
   const db = getFirestore();
 
   const eventsQuery = query(
-    collection(db, 'scoreEvents'),
-    where('recordId', '==', recordId),
+    collection(db, 'records', recordId, 'scoreEvents'),
     orderBy('createdAt', 'desc')
   );
 
@@ -370,13 +369,17 @@ export async function getScoreEventsForRecord(recordId: string): Promise<ScoreEv
 }
 
 /**
- * Get score events for a specific hash (useful for viewing history)
+ * Get score events for a specific hash within a record (useful for viewing
+ * the history behind one content version).
  */
-export async function getScoreEventsForHash(recordHash: string): Promise<ScoreEvent[]> {
+export async function getScoreEventsForHash(
+  recordId: string,
+  recordHash: string
+): Promise<ScoreEvent[]> {
   const db = getFirestore();
 
   const eventsQuery = query(
-    collection(db, 'scoreEvents'),
+    collection(db, 'records', recordId, 'scoreEvents'),
     where('recordHash', '==', recordHash),
     orderBy('createdAt', 'desc')
   );

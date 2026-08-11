@@ -153,25 +153,6 @@
       "density": "SPARSE_ALL"
     },
     {
-      "collectionGroup": "scoreEvents",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "recordId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "createdAt",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "ASCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
-    },
-    {
       "collectionGroup": "guestInvites",
       "queryScope": "COLLECTION",
       "fields": [
