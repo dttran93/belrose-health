@@ -1,9 +1,11 @@
 // test/orchestration/linkRecordService.test.ts
 //
-// Layer 3 (orchestration) — linkRecordService's addRecordsToRequest (two-phase prepare/grant-
-// batch flow), markRequestComplete, and denyRequest. PermissionPreparationService.prepareBatch
-// and PermissionsService.grantRoleBatch are mocked as peer dependencies (blockchain-heavy, out
-// of scope here) — the point of this suite is the real Firestore write that follows: registering
+// Layer 3 (orchestration) — linkRecordService's prepareRecordsForLinking + addRecordsToRequest
+// (now two separately-awaitable steps, no longer bundled: useLinkRecord blocks the UI on the
+// former and fires the latter without awaiting, tracked via OnChainActivityTray instead), plus
+// markRequestComplete and denyRequest. PermissionPreparationService.prepareBatch and
+// PermissionsService.grantRoleBatch are mocked as peer dependencies (blockchain-heavy, out of
+// scope here) — the point of this suite is the real Firestore write that follows: registering
 // which records actually succeeded on fulfilledRecordIds, using the *returned* succeeded-ids
 // subset rather than blindly writing everything that was requested.
 
@@ -25,7 +27,12 @@ vi.mock('@/features/Permissions/services/permissionsService', () => ({
   PermissionsService: { grantRoleBatch: grantRoleBatchMock },
 }));
 
-import { addRecordsToRequest, markRequestComplete, denyRequest } from '../../src/features/RequestRecord/services/linkRecordService';
+import {
+  prepareRecordsForLinking,
+  addRecordsToRequest,
+  markRequestComplete,
+  denyRequest,
+} from '../../src/features/RequestRecord/services/linkRecordService';
 import type { RecordRequest } from '@belrose/shared';
 
 const INVITE_CODE = 'invite-link-1';
@@ -51,21 +58,42 @@ afterAll(() => {
   getApps().forEach(app => deleteApp(app));
 });
 
+describe('prepareRecordsForLinking', () => {
+  it('throws when no records are selected', async () => {
+    await expect(prepareRecordsForLinking([])).rejects.toThrow('No records selected');
+    expect(prepareBatchMock).not.toHaveBeenCalled();
+  });
+
+  it('delegates to PermissionPreparationService.prepareBatch', async () => {
+    prepareBatchMock.mockResolvedValue(undefined);
+
+    await prepareRecordsForLinking(['rec-1', 'rec-2']);
+
+    expect(prepareBatchMock).toHaveBeenCalledWith(['rec-1', 'rec-2']);
+  });
+
+  it('propagates a prepareBatch failure', async () => {
+    prepareBatchMock.mockRejectedValue(new Error('smart account setup failed'));
+
+    await expect(prepareRecordsForLinking(['rec-1'])).rejects.toThrow(
+      'smart account setup failed'
+    );
+  });
+});
+
 describe('addRecordsToRequest', () => {
   it('throws when no records are selected', async () => {
     await expect(addRecordsToRequest([], makeRequest(), 'viewer')).rejects.toThrow(
       'No records selected'
     );
-    expect(prepareBatchMock).not.toHaveBeenCalled();
+    expect(grantRoleBatchMock).not.toHaveBeenCalled();
   });
 
-  it('prepares then grants in a single batch, and registers all succeeded ids on the request', async () => {
-    prepareBatchMock.mockResolvedValue(undefined);
+  it('grants in a single batch, and registers all succeeded ids on the request', async () => {
     grantRoleBatchMock.mockResolvedValue(['rec-1', 'rec-2']);
 
     const result = await addRecordsToRequest(['rec-1', 'rec-2'], makeRequest(), 'viewer');
 
-    expect(prepareBatchMock).toHaveBeenCalledWith(['rec-1', 'rec-2']);
     expect(grantRoleBatchMock).toHaveBeenCalledWith(
       ['rec-1', 'rec-2'],
       REQUESTER_ID,
@@ -78,7 +106,6 @@ describe('addRecordsToRequest', () => {
   });
 
   it('registers only the subset that actually succeeded on-chain, not everything requested', async () => {
-    prepareBatchMock.mockResolvedValue(undefined);
     grantRoleBatchMock.mockResolvedValue(['rec-1']); // rec-2 failed on-chain
 
     const result = await addRecordsToRequest(['rec-1', 'rec-2'], makeRequest(), 'administrator');
@@ -89,7 +116,6 @@ describe('addRecordsToRequest', () => {
   });
 
   it('accumulates fulfilledRecordIds across multiple calls rather than overwriting', async () => {
-    prepareBatchMock.mockResolvedValue(undefined);
     grantRoleBatchMock.mockResolvedValueOnce(['rec-1']);
     grantRoleBatchMock.mockResolvedValueOnce(['rec-2']);
 
@@ -102,13 +128,12 @@ describe('addRecordsToRequest', () => {
     );
   });
 
-  it('propagates the error and writes nothing when prepareBatch fails', async () => {
-    prepareBatchMock.mockRejectedValue(new Error('smart account setup failed'));
+  it('propagates the error and writes nothing when grantRoleBatch fails', async () => {
+    grantRoleBatchMock.mockRejectedValue(new Error('blockchain grant failed'));
 
     await expect(addRecordsToRequest(['rec-1'], makeRequest(), 'viewer')).rejects.toThrow(
-      'smart account setup failed'
+      'blockchain grant failed'
     );
-    expect(grantRoleBatchMock).not.toHaveBeenCalled();
     const requestSnap = await getDoc(doc(db, 'recordRequests', INVITE_CODE));
     expect(requestSnap.data()!.fulfilledRecordIds).toEqual([]);
   });

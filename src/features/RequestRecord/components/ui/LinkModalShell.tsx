@@ -6,16 +6,20 @@
  * Exports:
  *   LinkModalOverlay  — Dialog.Root + portal wrapper
  *   ExecutingPhase    — spinner
+ *   SubmittedPhase    — success card that auto-dismisses after a few seconds, same
+ *                       OnChainSubmittedContent used by PermissionActionDialog/SubjectActionDialog
  *   ErrorPhase        — error + retry/cancel
  *   PickRolePhase     — role selector (identical in both flows)
  */
 
 import * as Dialog from '@radix-ui/react-dialog';
-import { ArrowLeft, Loader2, XCircle } from 'lucide-react';
-import React from 'react';
+import { ArrowLeft, CheckCircle2, Loader2, XCircle } from 'lucide-react';
+import React, { useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/Button';
 import RoleSelector from '@/features/Permissions/components/ui/RoleSelector';
 import { Role } from '@/features/Permissions/services/permissionsService';
+
+const SUBMITTED_AUTO_DISMISS_MS = 3000;
 
 // ── Overlay wrapper ───────────────────────────────────────────────────────────
 
@@ -57,6 +61,60 @@ export const ExecutingPhase: React.FC<ExecutingPhaseProps> = ({
     <p className="text-sm text-slate-500 text-center">{message}</p>
   </div>
 );
+
+// ── Submitted ─────────────────────────────────────────────────────────────────
+
+interface SubmittedPhaseProps {
+  label: string;
+  onClose: () => void;
+}
+
+/**
+ * Success card shown once a blockchain-writing action has been *fired* (not awaited), instead of
+ * leaving the modal on a blocking spinner for as long as the tray card next to it is also
+ * showing "pending" — same look/timing (checkmark, 3s auto-dismiss, "Got it") as
+ * OnChainSubmittedContent, used by PermissionActionDialog/SubjectActionDialog. Not reused
+ * directly: it renders AlertDialog.Title/Description, which require an AlertDialog.Root
+ * ancestor — this shell's LinkModalOverlay is a plain Dialog.Root, so this uses Dialog.Title/
+ * Description instead (both from @radix-ui/react-dialog, imported above).
+ */
+export const SubmittedPhase: React.FC<SubmittedPhaseProps> = ({ label, onClose }) => {
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    timerRef.current = setTimeout(onClose, SUBMITTED_AUTO_DISMISS_MS);
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only timer, same as OnChainSubmittedContent
+  }, []);
+
+  const handleGotIt = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    onClose();
+  };
+
+  return (
+    <div className="flex flex-col items-center text-center gap-4 px-6 py-8">
+      <div className="w-14 h-14 rounded-full bg-green-50 flex items-center justify-center">
+        <CheckCircle2 className="w-8 h-8 text-green-500" />
+      </div>
+      <div>
+        <Dialog.Title className="text-base font-semibold text-slate-900">
+          Transaction Submitted
+        </Dialog.Title>
+        <Dialog.Description className="text-sm text-slate-500 mt-1 leading-relaxed">
+          <span className="font-medium text-slate-700">{label}</span>.
+          <br />
+          Track progress in the activity tray, bottom-right.
+        </Dialog.Description>
+      </div>
+      <Button variant="outline" size="sm" onClick={handleGotIt} className="w-full">
+        Got it
+      </Button>
+    </div>
+  );
+};
 
 // ── Error ─────────────────────────────────────────────────────────────────────
 

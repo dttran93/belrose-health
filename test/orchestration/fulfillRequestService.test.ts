@@ -1,10 +1,13 @@
 // test/orchestration/fulfillRequestService.test.ts
 //
-// Layer 3 (orchestration) — FulfillRequestService.fulfillAsGuest, flagged in the test strategy
-// as the single highest-risk untested surface across AddRecord/ViewEditRecord/RequestRecord: it
-// chains session-key retrieval -> Firestore read -> key unwrap -> key rewrap -> one atomic
-// Firestore batch (wrappedKey + role array + permissionHistory event + request status) -> a
-// best-effort Cloud Function on-chain write, tracked via BlockchainSyncQueueService.
+// Layer 3 (orchestration) — FulfillRequestService.fulfillAsGuest + registerGuestFulfillmentOnChain,
+// flagged in the test strategy as the single highest-risk untested surface across
+// AddRecord/ViewEditRecord/RequestRecord. Split into two separately-awaitable steps (the guest UI
+// awaits the first, then fires the second without awaiting it — see LinkRequestModal):
+//   - fulfillAsGuest: session-key retrieval -> Firestore read -> key unwrap -> key rewrap -> one
+//     atomic Firestore batch (wrappedKey + role array + permissionHistory event + request status).
+//   - registerGuestFulfillmentOnChain: a best-effort Cloud Function on-chain write, tracked via
+//     BlockchainSyncQueueService — called separately, after fulfillAsGuest has already resolved.
 //
 // Real Firestore emulator + REAL EncryptionService/EncryptionKeyManager/SharingKeyManagementService
 // (this is the crypto that actually re-wraps the guest's file key for the requester), and REAL
@@ -153,8 +156,17 @@ describe('FulfillRequestService.fulfillAsGuest — guard clauses', () => {
   });
 });
 
+describe('FulfillRequestService.registerGuestFulfillmentOnChain — guard clauses', () => {
+  it('throws when there is no authenticated guest', async () => {
+    await expect(
+      FulfillRequestService.registerGuestFulfillmentOnChain(makeRequest(), RECORD_ID, 'irrelevant-doc-id')
+    ).rejects.toThrow('Not authenticated');
+    expect(httpsCallableMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('FulfillRequestService.fulfillAsGuest — happy path', () => {
-  it('rewraps the file key for the requester and completes fulfillment', async () => {
+  it('rewraps the file key for the requester and completes fulfillment, without touching the chain', async () => {
     setCaller(GUEST_UID);
     const throwawayKey = await EncryptionKeyManager.generateMasterKey();
     EncryptionKeyManager.setSessionKey(throwawayKey);
@@ -162,25 +174,11 @@ describe('FulfillRequestService.fulfillAsGuest — happy path', () => {
     await seedGuestWrappedKey(fileKey, throwawayKey);
     const { privateKey: requesterPrivateKey } = await seedRequesterProfile();
     await seedRecordAndRequest();
-    httpsCallableMock.mockResolvedValue({
-      data: {
-        success: true,
-        blockchainRef: {
-          txHash: '0xguestfulfill',
-          blockNumber: 55,
-          chainId: 84532,
-          contractAddress: '0xMemberRoleManager',
-        },
-      },
-    });
 
-    await FulfillRequestService.fulfillAsGuest(makeRequest(), RECORD_ID);
+    const historyDocId = await FulfillRequestService.fulfillAsGuest(makeRequest(), RECORD_ID);
+    expect(typeof historyDocId).toBe('string');
 
-    expect(httpsCallableMock).toHaveBeenCalledWith({
-      recordId: RECORD_ID,
-      requesterUserId: REQUESTER_UID,
-      role: 'administrator',
-    });
+    expect(httpsCallableMock).not.toHaveBeenCalled();
 
     // The requester's new wrappedKey must actually unwrap to the SAME file key the guest had.
     const requesterWrappedKeySnap = await getDoc(doc(db, 'wrappedKeys', `${RECORD_ID}_${REQUESTER_UID}`));
@@ -211,9 +209,52 @@ describe('FulfillRequestService.fulfillAsGuest — happy path', () => {
 
     const events = await getDocs(collection(db, 'records', RECORD_ID, 'permissionHistory'));
     expect(events.docs).toHaveLength(1);
+    // The id fulfillAsGuest returned must be the doc it actually created — that's what callers
+    // thread into registerGuestFulfillmentOnChain.
+    expect(events.docs[0]!.id).toBe(historyDocId);
     expect(events.docs[0]!.data().changes).toEqual([
       { userId: REQUESTER_UID, action: 'granted', previousRole: null, newRole: 'administrator' },
     ]);
+    // blockchainRef starts null — only registerGuestFulfillmentOnChain fills it in.
+    expect(events.docs[0]!.data().blockchainRef).toBeNull();
+
+    // Nothing queued yet either — that's registerGuestFulfillmentOnChain's job.
+    const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+    expect(syncDocs.size).toBe(0);
+  });
+});
+
+describe('FulfillRequestService.registerGuestFulfillmentOnChain — happy path', () => {
+  it('fills in blockchainRef and records a confirmed sync-queue entry once fulfillAsGuest has already landed', async () => {
+    setCaller(GUEST_UID);
+    const throwawayKey = await EncryptionKeyManager.generateMasterKey();
+    EncryptionKeyManager.setSessionKey(throwawayKey);
+    await seedGuestWrappedKey(await EncryptionService.generateFileKey(), throwawayKey);
+    await seedRequesterProfile();
+    await seedRecordAndRequest();
+    httpsCallableMock.mockResolvedValue({
+      data: {
+        success: true,
+        blockchainRef: {
+          txHash: '0xguestfulfill',
+          blockNumber: 55,
+          chainId: 84532,
+          contractAddress: '0xMemberRoleManager',
+        },
+      },
+    });
+
+    const historyDocId = await FulfillRequestService.fulfillAsGuest(makeRequest(), RECORD_ID);
+    await FulfillRequestService.registerGuestFulfillmentOnChain(makeRequest(), RECORD_ID, historyDocId);
+
+    expect(httpsCallableMock).toHaveBeenCalledWith({
+      recordId: RECORD_ID,
+      requesterUserId: REQUESTER_UID,
+      role: 'administrator',
+    });
+
+    const events = await getDocs(collection(db, 'records', RECORD_ID, 'permissionHistory'));
+    expect(events.docs).toHaveLength(1);
     // blockchainRef starts null in the atomic Firestore write and is filled in once the
     // (mocked, successful) Cloud Function call resolves.
     expect(events.docs[0]!.data().blockchainRef).toMatchObject({
@@ -236,7 +277,7 @@ describe('FulfillRequestService.fulfillAsGuest — happy path', () => {
   });
 });
 
-describe('FulfillRequestService.fulfillAsGuest — on-chain failure', () => {
+describe('FulfillRequestService.registerGuestFulfillmentOnChain — on-chain failure', () => {
   it('keeps the Firestore fulfillment when the blockchain call rejects, and logs it for reconciliation', async () => {
     setCaller(GUEST_UID);
     const throwawayKey = await EncryptionKeyManager.generateMasterKey();
@@ -246,10 +287,12 @@ describe('FulfillRequestService.fulfillAsGuest — on-chain failure', () => {
     await seedRecordAndRequest();
     httpsCallableMock.mockRejectedValue(new Error('Pimlico bundler timeout'));
 
+    const historyDocId = await FulfillRequestService.fulfillAsGuest(makeRequest(), RECORD_ID);
+
     // Firestore-first: the chain call is best-effort and does not revert the fulfillment that
     // already succeeded, so this resolves rather than throwing.
     await expect(
-      FulfillRequestService.fulfillAsGuest(makeRequest(), RECORD_ID)
+      FulfillRequestService.registerGuestFulfillmentOnChain(makeRequest(), RECORD_ID, historyDocId)
     ).resolves.toBeUndefined();
 
     const requesterWrappedKeySnap = await getDoc(
@@ -299,10 +342,12 @@ describe('FulfillRequestService.fulfillAsGuest — on-chain failure', () => {
       Object.assign(new Error('Record already initialized on chain'), { code: 'already-exists' })
     );
 
+    const historyDocId = await FulfillRequestService.fulfillAsGuest(makeRequest(), RECORD_ID);
+
     // Not special-cased client-side — falls through the same best-effort catch as any other
     // chain error, so the Firestore fulfillment still stands.
     await expect(
-      FulfillRequestService.fulfillAsGuest(makeRequest(), RECORD_ID)
+      FulfillRequestService.registerGuestFulfillmentOnChain(makeRequest(), RECORD_ID, historyDocId)
     ).resolves.toBeUndefined();
 
     const requestSnap = await getDoc(doc(db, 'recordRequests', INVITE_CODE));

@@ -56,6 +56,21 @@ export const DENY_REASONS = [
 
 export type DenyReasonValue = (typeof DENY_REASONS)[number]['value'];
 
+// ── OnChainActivityTray ───────────────────────────────────────────────────────
+//
+// Structurally matches the subset of useOnChainActivityTray() that fulfillAsGuest needs.
+// Defined locally (rather than importing OnChainActivityTrayContext) so this plain service
+// module stays free of a dependency on a React context file — callers just pass their hook's
+// addActivity/updateActivity through.
+
+export interface ChainActivityHandle {
+  addActivity: (input: { label: string; link?: string }) => string;
+  updateActivity: (
+    id: string,
+    update: { status?: 'confirmed' | 'failed'; errorMessage?: string }
+  ) => void;
+}
+
 export class FulfillRequestService {
   // ============================================================================
   // MAIN FULFILL FLOW
@@ -97,7 +112,10 @@ export class FulfillRequestService {
   }
 
   /**
-   * Fulfill a record request as a guest provider.
+   * Fulfill a record request as a guest provider — the Firestore-only half. Rewraps the file
+   * key for the requester and marks the request fulfilled; does NOT touch the chain. Callers
+   * await this (it's the part the guest is actually waiting on), then fire
+   * registerGuestFulfillmentOnChain without awaiting it — see LinkRequestModal.handleConfirm.
    *
    * Differences from the registered flow:
    * - No blockchain role grant for the provider (no wallet yet) — the provider's own
@@ -105,13 +123,15 @@ export class FulfillRequestService {
    *   (createFirestoreRecord), but nothing here or in the later claim flow
    *   (GuestClaimAccountModal) ever registers the provider on-chain for this record. That's a
    *   known pre-existing gap, not something this method is responsible for closing.
-   * - Record is initialized on-chain with the requester as administrator via a Cloud Function
-   *   call (admin wallet handles this — Firestore-first: the grant below always lands even if
-   *   this best-effort chain call fails, tracked via BlockchainSyncQueueService for
-   *   reconciliation)
    * - Encryption: requester's public RSA key wraps the file key directly
+   *
+   * @returns the permissionHistory doc id this call created — buildPermissionHistoryDocId bakes
+   * in Date.now() + a random suffix, so it's NOT reproducible from (recordId, requesterId)
+   * alone. Callers must pass this straight into registerGuestFulfillmentOnChain rather than
+   * trying to re-derive it, or that call's updateDoc(historyRef, ...) targets a doc that was
+   * never created.
    */
-  static async fulfillAsGuest(recordRequest: RecordRequest, recordId: string): Promise<void> {
+  static async fulfillAsGuest(recordRequest: RecordRequest, recordId: string): Promise<string> {
     const db = getFirestore();
     const auth = getAuth();
     const guestUid = auth.currentUser?.uid;
@@ -173,15 +193,13 @@ export class FulfillRequestService {
           },
     ];
 
-    const historyRef = doc(
-      collection(db, 'records', recordId, 'permissionHistory'),
-      buildPermissionHistoryDocId(recordRequest.requesterId)
-    );
+    const historyDocId = buildPermissionHistoryDocId(recordRequest.requesterId);
+    const historyRef = doc(collection(db, 'records', recordId, 'permissionHistory'), historyDocId);
     const eventData = await preparePermissionChangeEventData(recordId, guestUid, changes);
 
     // Step 4: Atomic Firestore write — wrappedKey + role array + permissionHistory event +
-    // request status, all four or none. blockchainRef starts null; filled in below once the
-    // admin-signed chain call resolves.
+    // request status, all four or none. blockchainRef starts null; filled in by
+    // registerGuestFulfillmentOnChain once the admin-signed chain call resolves.
     const batch = writeBatch(db);
     batch.set(doc(db, 'wrappedKeys', `${recordId}_${recordRequest.requesterId}`), {
       recordId,
@@ -200,9 +218,37 @@ export class FulfillRequestService {
     });
     await batch.commit();
 
-    // Step 5: Initialize record on-chain with requester as administrator — best-effort, does
-    // not revert the Firestore grant above. Admin cloud function handles this — guest has no
-    // wallet to call the contract directly.
+    return historyDocId;
+  }
+
+  /**
+   * Step 5 of the guest fulfillment flow, split out from fulfillAsGuest so callers can fire it
+   * without awaiting it — best-effort, does not revert the Firestore grant fulfillAsGuest already
+   * committed. Admin cloud function handles this — guest has no wallet to call the contract
+   * directly.
+   *
+   * @param historyDocId - The permissionHistory doc id *returned by* the matching
+   * fulfillAsGuest call. Must be threaded through rather than recomputed — the id bakes in
+   * Date.now() + a random suffix, so recomputing it here would target a doc that was never
+   * created.
+   * @param activity - Optional OnChainActivityTray handle (addActivity/updateActivity) so the
+   * caller can surface this call in the bottom-right tray, same as other blockchain writes in
+   * the app. Omitted entirely in tests / non-UI callers.
+   */
+  static async registerGuestFulfillmentOnChain(
+    recordRequest: RecordRequest,
+    recordId: string,
+    historyDocId: string,
+    activity?: ChainActivityHandle
+  ): Promise<void> {
+    const db = getFirestore();
+    const auth = getAuth();
+    const guestUid = auth.currentUser?.uid;
+    if (!guestUid) throw new Error('Not authenticated');
+
+    const requesterProfile = await getUserProfile(recordRequest.requesterId);
+    const historyRef = doc(collection(db, 'records', recordId, 'permissionHistory'), historyDocId);
+
     const syncRef = await BlockchainSyncQueueService.startAttempt({
       contract: 'MemberRoleManager',
       action: 'initializeRoleOnChainForRequester',
@@ -213,11 +259,16 @@ export class FulfillRequestService {
       context: {
         type: 'permission',
         targetUserId: recordRequest.requesterId,
-        targetWalletAddress: requesterProfile.wallet?.address ?? '',
+        targetWalletAddress: requesterProfile?.wallet?.address ?? '',
         role: 'administrator',
         recordId,
         recordIdHash: id(recordId),
       },
+    });
+
+    const activityId = activity?.addActivity({
+      label: 'Registering requester on-chain',
+      link: `/app/records/${recordId}?view=permissions`,
     });
 
     try {
@@ -233,11 +284,17 @@ export class FulfillRequestService {
         txHash: blockchainRef.txHash,
         blockNumber: blockchainRef.blockNumber,
       });
+      if (activityId) {
+        activity!.updateActivity(activityId, { status: 'confirmed' });
+      }
     } catch (err) {
       // Covers genuine chain failures and the CF's self-healed already-exists throw alike —
       // neither is special-cased, both land as a 'failed' sync-queue entry for reconciliation.
       const errorMessage = getUserFacingErrorMessage(err, 'Blockchain transaction failed');
       await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
+      if (activityId) {
+        activity!.updateActivity(activityId, { status: 'failed', errorMessage });
+      }
     }
   }
 }

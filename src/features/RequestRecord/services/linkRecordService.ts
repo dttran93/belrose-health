@@ -3,16 +3,19 @@
 /**
  * linkRecordService
  *
- * Fulfils a record request by linking an existing record. The two steps are:
+ * Fulfils a record request by linking an existing record. Split into two awaitable steps so
+ * the caller can block the UI on the first (fast, local setup) and fire-and-forget the second
+ * (the actual blockchain write, tracked via OnChainActivityTray instead of a blocking spinner —
+ * see useLinkRecord.submitAddRecords):
  *
- *   1. Grant the requester a role on the record via PermissionsService.
- *      That call internally handles:
- *        - Blockchain role registration
- *        - RSA-wrapping the record DEK for the requester (SharingService)
- *        - Updating the Firestore role arrays
+ *   1. prepareRecordsForLinking — smart account + per-record blockchain initialization.
+ *   2. addRecordsToRequest      — grant the requester a role on all records in a single
+ *      blockchain tx via grantRoleBatch (blockchain role registration + RSA-wrapping the
+ *      record DEK for the requester + updating the Firestore role arrays), then mark the
+ *      linked record IDs on the request document.
  *
- *   2. Mark the recordRequest document as fulfilled. Called by the provider when done adding records.
- *   2a. Deny the request --> flips status to denied with reason + optional note.
+ *   Also: markRequestComplete (called by the provider when done adding records) and
+ *   denyRequest (flips status to denied with reason + optional note).
  */
 
 import { getFirestore, doc, updateDoc, serverTimestamp, arrayUnion } from 'firebase/firestore';
@@ -20,6 +23,23 @@ import { PermissionsService, Role } from '@/features/Permissions/services/permis
 import { DenyReasonValue } from './fulfillRequestService';
 import { PermissionPreparationService } from '@/features/Permissions/services/permissionPreparationService';
 import { RecordRequest } from '@belrose/shared';
+
+// ── prepare ───────────────────────────────────────────────────────────────────
+
+/**
+ * Prepare all selected records (smart account + per-record blockchain initialization) so
+ * addRecordsToRequest's grant can go straight to the chain. Sequential per-record internally
+ * (avoids nonce conflicts on the admin wallet used by initializeRoleOnChain) — this is the part
+ * of the flow worth blocking the UI on, since it's local/fast setup rather than the transaction
+ * itself.
+ */
+export async function prepareRecordsForLinking(recordIds: string[]): Promise<void> {
+  if (recordIds.length === 0) throw new Error('No records selected');
+
+  console.log(`🔄 Preparing ${recordIds.length} record(s) for linking…`);
+  await PermissionPreparationService.prepareBatch(recordIds);
+  console.log('✅ All records prepared');
+}
 
 // ── addRecords ────────────────────────────────────────────────────────────────
 
@@ -29,13 +49,10 @@ export interface AddRecordsResult {
 }
 
 /**
- * Prepare all selected records (smart account + blockchain initialization),
- * then grant the requester a role across all of them in a single blockchain
- * transaction via grantRoleBatch.
- *
- * Preparation is sequential per-record (avoids nonce conflicts on the admin
- * wallet used by initializeRoleOnChain). The blockchain grant and subsequent
- * encryption/Firestore updates happen as a single tx + parallel off-chain work.
+ * Grant the requester a role across all selected records in a single blockchain transaction.
+ * Assumes prepareRecordsForLinking has already run for these ids — callers fire this without
+ * awaiting it and track progress via OnChainActivityTray (see useLinkRecord.submitAddRecords),
+ * same fire-and-forget pattern as usePermissionFlow's confirmGrant.
  */
 export async function addRecordsToRequest(
   recordIds: string[],
@@ -44,13 +61,7 @@ export async function addRecordsToRequest(
 ): Promise<AddRecordsResult> {
   if (recordIds.length === 0) throw new Error('No records selected');
 
-  // Step 1: Prepare — smart account setup + per-record blockchain initialization
-  // prepareBatch checks each record's initialRole from Firestore (owner vs admin)
-  console.log(`🔄 Preparing ${recordIds.length} record(s) for linking…`);
-  await PermissionPreparationService.prepareBatch(recordIds);
-  console.log('✅ All records prepared');
-
-  // Step 2: Grant role — single blockchain tx, parallel encryption + Firestore
+  // Grant role — single blockchain tx, parallel encryption + Firestore
   const succeededIds = await PermissionsService.grantRoleBatch(
     recordIds,
     request.requesterId,
@@ -58,9 +69,9 @@ export async function addRecordsToRequest(
   );
   console.log(`✅ Role '${role}' granted on ${succeededIds.length} record(s)`);
 
-  // Step 3: Register linked record IDs on the request document — only the ones that actually
-  // succeeded on-chain, not every id that was requested (a partial grantRoleBatch failure must
-  // not be reported to the requester as fulfilled).
+  // Register linked record IDs on the request document — only the ones that actually succeeded
+  // on-chain, not every id that was requested (a partial grantRoleBatch failure must not be
+  // reported to the requester as fulfilled).
   const db = getFirestore();
   await updateDoc(doc(db, 'recordRequests', request.inviteCode), {
     fulfilledRecordIds: arrayUnion(...succeededIds),

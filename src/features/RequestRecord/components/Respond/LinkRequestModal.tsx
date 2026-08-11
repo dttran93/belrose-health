@@ -9,7 +9,11 @@
  *
  * Phases:
  *   pick-request  — scrollable list of pending inbound requests
- *   executing     — spinner while addRecords / fulfill call runs
+ *   executing     — guest path only: blocks on fulfillAsGuest's Firestore write (session key +
+ *                   key rewrap + batch commit); the non-guest grant needs no such prep, so it
+ *                   skips straight from pick-role to submitted
+ *   submitted     — success card, auto-dismisses (closes the modal); the actual chain write(s)
+ *                   have already been fired (not awaited) and handed to OnChainActivityTray
  *   error         — error + retry
  *
  * Props:
@@ -26,10 +30,25 @@ import { Button } from '@/components/ui/Button';
 import { FileObject } from '@/types/core';
 import { Role } from '@/features/Permissions/services/permissionsService';
 import { useInboundRequests } from '../../hooks/useInboundRequests';
-import { LinkModalOverlay, ExecutingPhase, ErrorPhase, PickRolePhase } from '../ui/LinkModalShell';
+import {
+  LinkModalOverlay,
+  ExecutingPhase,
+  SubmittedPhase,
+  ErrorPhase,
+  PickRolePhase,
+} from '../ui/LinkModalShell';
 import { RecordRequest } from '@belrose/shared';
 import { FulfillRequestService } from '../../services/fulfillRequestService';
 import { EncryptionKeyManager } from '@/features/Encryption/services/encryptionKeyManager';
+import { useOnChainActivityTray } from '@/features/OnChainActivityTray/OnChainActivityTrayContext';
+import { getUserFacingErrorMessage } from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
+
+const roleLabels: Record<Role, string> = {
+  viewer: 'Viewer',
+  sharer: 'Sharer',
+  administrator: 'Administrator',
+  owner: 'Owner',
+};
 
 interface LinkRequestModalProps {
   record: FileObject;
@@ -48,20 +67,28 @@ const LinkRequestModal: React.FC<LinkRequestModalProps> = ({
   onSuccess,
   isGuest,
 }) => {
-  const [phase, setPhase] = useState<'pick-requests' | 'pick-role' | 'executing' | 'error'>(
-    'pick-requests'
-  );
+  const [phase, setPhase] = useState<
+    'pick-requests' | 'pick-role' | 'executing' | 'submitted' | 'error'
+  >('pick-requests');
   const [error, setError] = useState<string | null>(null);
+  const [submittedLabel, setSubmittedLabel] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selectedRole, setSelectedRole] = useState<Role>('viewer');
 
   const { filtered: pendingRequests, loading } = useInboundRequests();
+
+  // OnChainActivityTray — the actual chain-writing calls below are fired without being awaited
+  // and tracked here instead of behind a blocking spinner; 'executing' below is reserved for the
+  // guest path's Firestore-critical prep (session key + fulfillAsGuest), which is worth blocking
+  // on since it's fast, local, and is the part the guest is actually waiting for.
+  const { addActivity, updateActivity } = useOnChainActivityTray();
 
   const handleClose = () => {
     setPhase('pick-requests');
     setSelectedIds(new Set());
     setSelectedRole('viewer');
     setError(null);
+    setSubmittedLabel('');
     onClose();
   };
 
@@ -76,9 +103,16 @@ const LinkRequestModal: React.FC<LinkRequestModalProps> = ({
   const handleConfirm = async () => {
     const selected = pendingRequests.filter(r => selectedIds.has(r.inviteCode));
     if (selected.length === 0) return;
-    setPhase('executing');
-    try {
-      if (isGuest) {
+
+    const activityLink = `/app/records/${record.id}?view=permissions`;
+
+    if (isGuest) {
+      // Block on the Firestore-critical part only (session key + fulfillAsGuest) — that's what
+      // the guest is actually waiting on. The on-chain registration below is a best-effort
+      // admin-side step, fired without awaiting it and tracked via the tray instead.
+      setPhase('executing');
+      setError(null);
+      try {
         // Verify throwaway session key is still alive before attempting fulfill.
         // If it's gone the user needs to reload — fulfillAsGuest will also check
         // internally but this gives a cleaner error before any Firestore reads.
@@ -86,18 +120,54 @@ const LinkRequestModal: React.FC<LinkRequestModalProps> = ({
         if (!throwawayKey) {
           throw new Error('Your session has expired. Please reload the page and try again.');
         }
-        await Promise.all(selected.map(r => FulfillRequestService.fulfillAsGuest(r, record.id)));
-      } else {
-        await Promise.all(
-          selected.map(r => FulfillRequestService.linkExistingRecord(r, record.id, selectedRole))
+        const historyDocIds = await Promise.all(
+          selected.map(r => FulfillRequestService.fulfillAsGuest(r, record.id))
         );
+
+        // Fire-and-forget — registerGuestFulfillmentOnChain manages its own tray card(s)
+        // internally (status confirmed/failed), so nothing here needs to await or react to it.
+        selected.forEach((r, i) => {
+          FulfillRequestService.registerGuestFulfillmentOnChain(r, record.id, historyDocIds[i]!, {
+            addActivity,
+            updateActivity,
+          });
+        });
+      } catch (err: any) {
+        setError(err.message || 'Something went wrong.');
+        setPhase('error');
+        return;
       }
+
       onSuccess(selected);
-      handleClose();
-    } catch (err: any) {
-      setError(err.message || 'Something went wrong.');
-      setPhase('error');
+      setSubmittedLabel(
+        selected.length > 1 ? `Fulfilled ${selected.length} requests` : 'Request fulfilled'
+      );
+      setPhase('submitted');
+      return;
     }
+
+    // Non-guest: linkExistingRecord needs no preparation step, so there's nothing worth blocking
+    // the modal on — fire the grant and hand straight off to the tray.
+    const activityLabel =
+      selected.length > 1
+        ? `Granting ${roleLabels[selectedRole]} access to ${selected.length} requesters`
+        : `Granting ${roleLabels[selectedRole]} access to ${selected[0]!.requesterName}`;
+    const activityId = addActivity({ label: activityLabel, link: activityLink });
+
+    setSubmittedLabel(activityLabel);
+    setPhase('submitted');
+
+    Promise.all(selected.map(r => FulfillRequestService.linkExistingRecord(r, record.id, selectedRole)))
+      .then(() => {
+        updateActivity(activityId, { status: 'confirmed' });
+        onSuccess(selected);
+      })
+      .catch(err => {
+        updateActivity(activityId, {
+          status: 'failed',
+          errorMessage: getUserFacingErrorMessage(err, 'Failed to grant access'),
+        });
+      });
   };
 
   // Build a readable summary of who's selected for the role phase
@@ -110,9 +180,11 @@ const LinkRequestModal: React.FC<LinkRequestModalProps> = ({
   return (
     <LinkModalOverlay isOpen={isOpen} canDismiss={phase !== 'executing'} onClose={handleClose}>
       {phase === 'executing' && (
-        <ExecutingPhase
-          message={`Granting access to ${selectedIds.size} requester${selectedIds.size !== 1 ? 's' : ''}.`}
-        />
+        <ExecutingPhase message="Encrypting the record for the requester and saving your fulfillment." />
+      )}
+
+      {phase === 'submitted' && (
+        <SubmittedPhase label={submittedLabel} onClose={handleClose} />
       )}
 
       {phase === 'error' && (
