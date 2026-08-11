@@ -191,6 +191,9 @@ describe('updateFirestoreRecord — creator happy path', () => {
     expect(updatedDoc.versionNumber).toBe(1);
     // Untouched field's ciphertext is preserved as-is (not re-encrypted).
     expect(updatedDoc.encryptedExtractedText).toMatchObject(encryptedExtractedText);
+    // New recordHash has no scoreEvents yet, so the cached credibility score resets to
+    // INITIAL_SCORE rather than carrying forward whatever the pre-edit hash had.
+    expect(updatedDoc.credibility?.score).toBe(500);
 
     // Regression check for the encryptedUpdatedFileObject plaintext-fields fix: the object
     // passed to createVersion must carry the actual plaintext for diffing, not just ciphertext.

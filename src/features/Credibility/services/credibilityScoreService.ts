@@ -18,8 +18,11 @@
  * - 700-849: Very Good
  * - 850-1000: Excellent
  *
- * Note: RecordVersion credibility snapshots are handled by versionControlService
- * when new versions are created.
+ * Score events are tagged with the recordHash they apply to, and the cached score is
+ * always recomputed scoped to the record's CURRENT recordHash — see updateRecordScore.
+ * This means editing a record's content (new recordHash) resets its cached score back
+ * to INITIAL_SCORE: uploadUtils.ts calls updateRecordScore(recordId, newRecordHash) right
+ * after the hash bump, and a hash with no events yet naturally resolves to INITIAL_SCORE.
  */
 
 import {
@@ -218,21 +221,28 @@ async function createScoreEvent(
   console.log(`📊 Score event created: ${eventType} (${scoreDelta > 0 ? '+' : ''}${scoreDelta})`);
 
   // Update the record's cached score
-  await updateRecordScore(recordId);
+  await updateRecordScore(recordId, recordHash);
 
   return eventId;
 }
 
 /**
- * Recalculate and update a record's credibility score
- * Based on all score events for the current hash
+ * Recalculate and update a record's credibility score.
+ * Scoped to a single recordHash — events made against a previous (now-superseded) hash
+ * are excluded, so a record with no events yet for its current hash correctly resolves
+ * back to INITIAL_SCORE rather than inheriting a prior version's accumulated score.
+ *
+ * Exported directly (rather than behind a same-shaped wrapper) because callers like
+ * uploadUtils.ts's version-bump flow want exactly this: "recompute for this hash" — a new
+ * hash with no events yet just resolves to INITIAL_SCORE, which is the reset behavior.
  */
-async function updateRecordScore(recordId: string): Promise<number> {
+export async function updateRecordScore(recordId: string, recordHash: string): Promise<number> {
   const db = getFirestore();
 
-  // Get all score events for this record
+  // Get all score events for this record's current hash
   const eventsQuery = query(
     collection(db, 'records', recordId, 'scoreEvents'),
+    where('recordHash', '==', recordHash),
     orderBy('createdAt', 'asc')
   );
   const eventsSnap = await getDocs(eventsQuery);
