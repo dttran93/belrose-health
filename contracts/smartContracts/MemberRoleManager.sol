@@ -1203,8 +1203,8 @@ contract MemberRoleManager is Initializable, UUPSUpgradeable, MemberRoleManagerI
    * This must be an admin function because if it was a trustee driven function the trustee (guardian)
    * would be able to add themselves as the trustee of any account. That could be gated by creating a
    * MemberStatus of Dependent, but there would be no way to determine that the dependent was actually
-   * created by the guardian without adding multiple other functions and storage to the contract. Admin function
-   * is just easier at this time.
+   * created by the guardian without adding multiple other functions and storage to the contract and the
+   * contract is less than 70 bytes from max size currently.
    *
    * @param trustorIdHash  keccak256 of the dependent's Firebase UID
    * @param trusteeIdHash  keccak256 of the guardian's Firebase UID
@@ -1880,7 +1880,8 @@ contract MemberRoleManager is Initializable, UUPSUpgradeable, MemberRoleManagerI
   // the first time _grantTrusteeAccessToRecord processes this record (guarded by
   // _trusteeGrantedRecordSet) — never overwritten by a later trust-level change, since
   // _syncTrusteeRoles doesn't touch this mapping.
-  mapping(bytes32 => mapping(bytes32 => mapping(bytes32 => string))) private _trusteeGrantedRecordPreviousRole;
+  mapping(bytes32 => mapping(bytes32 => mapping(bytes32 => string)))
+    private _trusteeGrantedRecordPreviousRole;
 
   // ===============================================================
   // STORAGE GAP

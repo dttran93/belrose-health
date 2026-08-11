@@ -15,6 +15,11 @@ import { MemberRoleManager__factory } from '../_shared/typechain';
 import type { MemberRoleManager } from '../_shared/typechain';
 import { encryptPrivateKey, generateWallet } from '../services/backendWalletService';
 import { computeSmartAccountAddress } from './wallet';
+import {
+  startBlockchainSyncAttempt,
+  recordBlockchainSyncSuccess,
+  recordBlockchainSyncFailure,
+} from '../utils/blockchainSyncQueue';
 
 interface CreateDependentAccountRequest {
   email: string; // real email or placeholder (dep-{id}@placeholder.belrose.health)
@@ -163,16 +168,41 @@ export const createDependentAccount = onCall(
         MEMBER_ROLE_MANAGER_ADDRESS,
         getAdminWallet()
       );
-      const tx = await contract.addMemberBatch([wallet.address, smartAccountAddress], userIdHash);
-      const receipt = await tx.wait();
-      if (!receipt) throw new Error('Transaction was dropped or replaced');
-      const blockchainRef = {
-        txHash: tx.hash,
+      // Tracked in blockchainSyncQueue purely for observability — this function already rolls
+      // the whole operation back on any failure (see the outer catch), so this doesn't change
+      // that control flow, it just makes the attempt visible in the same dashboard client-side
+      // writes show up in.
+      const memberSyncId = await startBlockchainSyncAttempt({
+        contract: 'MemberRoleManager',
+        action: 'addMemberBatch',
+        userId: guardianUid,
         chainId: CHAIN_ID,
-        blockNumber: receipt.blockNumber,
         contractAddress: MEMBER_ROLE_MANAGER_ADDRESS,
-      };
-      console.log('✅ Both wallets registered on-chain:', tx.hash);
+        context: { type: 'memberRegistry', newStatus: 'Active' },
+      });
+      let blockchainRef;
+      try {
+        const tx = await contract.addMemberBatch([wallet.address, smartAccountAddress], userIdHash);
+        const receipt = await tx.wait();
+        if (!receipt) throw new Error('Transaction was dropped or replaced');
+        blockchainRef = {
+          txHash: tx.hash,
+          chainId: CHAIN_ID,
+          blockNumber: receipt.blockNumber,
+          contractAddress: MEMBER_ROLE_MANAGER_ADDRESS,
+        };
+        await recordBlockchainSyncSuccess(memberSyncId, {
+          txHash: tx.hash,
+          blockNumber: receipt.blockNumber,
+        });
+      } catch (err) {
+        await recordBlockchainSyncFailure(
+          memberSyncId,
+          err instanceof Error ? err.message : String(err)
+        );
+        throw err;
+      }
+      console.log('✅ Both wallets registered on-chain:', blockchainRef.txHash);
 
       // Bootstrap on-chain trustee relationship.
       // Dependent accounts have no independent signer at creation time, so the normal
@@ -190,18 +220,45 @@ export const createDependentAccount = onCall(
       // sequencer once submitted. 300,000 gas is generously above this function's actual usage
       // (5 requires, one array push, one struct write, two events).
       const guardianIdHash = ethers.id(guardianUid);
-      const trusteeTx = await contract.bootstrapDependentTrustee(userIdHash, guardianIdHash, {
-        gasLimit: 300_000,
-      });
-      const trusteeReceipt = await trusteeTx.wait();
-      if (!trusteeReceipt) throw new Error('Trustee transaction was dropped or replaced');
-      const trusteeBlockchainRef = {
-        txHash: trusteeTx.hash,
+      const trusteeSyncId = await startBlockchainSyncAttempt({
+        contract: 'MemberRoleManager',
+        action: 'bootstrapDependentTrustee',
+        userId: guardianUid,
         chainId: CHAIN_ID,
-        blockNumber: trusteeReceipt.blockNumber,
         contractAddress: MEMBER_ROLE_MANAGER_ADDRESS,
-      };
-      console.log('✅ On-chain trustee relationship bootstrapped:', trusteeTx.hash);
+        context: {
+          type: 'trustee-accept',
+          trustorId: dependentUid,
+          trustorIdHash: userIdHash,
+          trusteeId: guardianUid,
+          trusteeIdHash: guardianIdHash,
+        },
+      });
+      let trusteeBlockchainRef;
+      try {
+        const trusteeTx = await contract.bootstrapDependentTrustee(userIdHash, guardianIdHash, {
+          gasLimit: 300_000,
+        });
+        const trusteeReceipt = await trusteeTx.wait();
+        if (!trusteeReceipt) throw new Error('Trustee transaction was dropped or replaced');
+        trusteeBlockchainRef = {
+          txHash: trusteeTx.hash,
+          chainId: CHAIN_ID,
+          blockNumber: trusteeReceipt.blockNumber,
+          contractAddress: MEMBER_ROLE_MANAGER_ADDRESS,
+        };
+        await recordBlockchainSyncSuccess(trusteeSyncId, {
+          txHash: trusteeTx.hash,
+          blockNumber: trusteeReceipt.blockNumber,
+        });
+      } catch (err) {
+        await recordBlockchainSyncFailure(
+          trusteeSyncId,
+          err instanceof Error ? err.message : String(err)
+        );
+        throw err;
+      }
+      console.log('✅ On-chain trustee relationship bootstrapped:', trusteeBlockchainRef.txHash);
 
       const encryptedWallet = encryptPrivateKey(wallet.privateKey, masterKeyHex);
       const encryptedMnemonic = encryptPrivateKey(wallet.mnemonic || '', masterKeyHex);
@@ -271,12 +328,21 @@ export const createDependentAccount = onCall(
 
       return { uid: dependentUid, walletAddress: wallet.address, smartAccountAddress };
     } catch (err) {
-      // Best-effort cleanup: remove the Auth user so we don't leave orphaned accounts
-      console.error('❌ Dependent account setup failed, cleaning up Auth user:', err);
+      // Best-effort cleanup: remove the Auth user AND the Firestore users/{uid} doc from Step 2,
+      // so a failure after that point doesn't leave an orphaned Firestore doc with no matching
+      // Auth account behind forever. Each cleanup step is independent — a failure in one must
+      // not prevent the other from being attempted. dependentRef.delete() is a safe no-op if
+      // Step 2 itself never ran (e.g. Auth creation succeeded but the Firestore write failed).
+      console.error('❌ Dependent account setup failed, cleaning up:', err);
       try {
         await admin.auth().deleteUser(dependentUid);
       } catch (cleanupErr) {
-        console.error('❌ Cleanup failed — Auth user may be orphaned:', cleanupErr);
+        console.error('❌ Auth user cleanup failed — may be orphaned:', cleanupErr);
+      }
+      try {
+        await dependentRef.delete();
+      } catch (cleanupErr) {
+        console.error('❌ Firestore user doc cleanup failed — may be orphaned:', cleanupErr);
       }
       throw new HttpsError('internal', 'Failed to set up dependent account');
     }

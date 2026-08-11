@@ -162,6 +162,55 @@ describe('initializeRoleOnChainForRequester — guard clauses', () => {
     ).rejects.toThrow('already initialized');
     expect(mockContract.initializeRecordRole).not.toHaveBeenCalled();
   });
+
+  // Mirrors initializeRoleOnChain's own self-heal branch — a client retry after a prior attempt
+  // whose tx landed on-chain but whose response never reached the client (e.g. a dropped
+  // network connection) would otherwise throw already-exists forever, even though on-chain
+  // state is already correct.
+  it('self-heals the Firestore flag when the record is already initialized on chain but not yet marked', async () => {
+    await seedRecord();
+    await seedRequesterWithWallet();
+    mockContract.getAllRecordParticipants.mockResolvedValue({
+      owners: ['0xexistingowner'],
+      admins: [],
+      sharers: [],
+      viewers: [],
+    });
+
+    await expect(
+      initializeRoleOnChainForRequester.run(
+        buildRequest({ recordId: RECORD_ID, requesterUserId: REQUESTER, role: 'owner' }, UPLOADER)
+      )
+    ).rejects.toThrow('already initialized');
+
+    const snap = await admin.firestore().collection('records').doc(RECORD_ID).get();
+    expect(snap.data()!.blockchainRoleInitialization.blockchainInitialized).toBe(true);
+    expect(snap.data()!.blockchainRoleInitialization.syncedFromChain).toBe(true);
+  });
+
+  it('does not overwrite an already-reconciled Firestore flag', async () => {
+    await seedRecord({
+      blockchainRoleInitialization: { blockchainInitialized: true, syncedFromChain: false },
+    });
+    await seedRequesterWithWallet();
+    mockContract.getAllRecordParticipants.mockResolvedValue({
+      owners: ['0xexistingowner'],
+      admins: [],
+      sharers: [],
+      viewers: [],
+    });
+
+    await expect(
+      initializeRoleOnChainForRequester.run(
+        buildRequest({ recordId: RECORD_ID, requesterUserId: REQUESTER, role: 'owner' }, UPLOADER)
+      )
+    ).rejects.toThrow('already initialized');
+
+    const snap = await admin.firestore().collection('records').doc(RECORD_ID).get();
+    // Proves the self-heal update branch was skipped entirely — a real self-heal write would
+    // have flipped this to true, since blockchainInitialized was already true going in.
+    expect(snap.data()!.blockchainRoleInitialization.syncedFromChain).toBe(false);
+  });
 });
 
 describe('initializeRoleOnChainForRequester — happy path', () => {

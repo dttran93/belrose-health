@@ -38,6 +38,9 @@ import { useRecordFollowUps } from '@/features/RecordFollowUp/hooks/useRecordFol
 import { CopyableHash } from '@/features/BackendChainParity/components/ui/CopyableHash';
 import { useAuthContext } from '@/features/Auth/AuthContext';
 import { GuestFeatureGate } from '@/features/GuestAccess/components/GuestFeatureGate';
+import { GuestUploadBlockerModal } from '@/features/GuestAccess/components/GuestUploadBlockerModal';
+import { GuestClaimAccountModal } from '@/features/GuestAccess/components/GuestClaimAccountModal';
+import { useGuestUploadBlocker } from '@/features/GuestAccess/hooks/useGuestUploadBlocker';
 import { toast } from 'sonner';
 import { PermissionsService } from '@/features/Permissions/services/permissionsService';
 
@@ -167,6 +170,28 @@ export const RecordFull: React.FC<RecordFullProps> = ({
   const { hasReviewed, isLoading: isCheckingReview } = useReviewedByCurrentUser(record);
   const [linkRequestOpen, setLinkRequestOpen] = useState(false);
   const navigate = useNavigate();
+
+  // Guest-provider navigation guard — blocks leaving this page while the record is an
+  // unsecured guest upload (mirrors AddRecord.tsx's use of the same hook, which is what lets a
+  // guest navigate here to review in the first place).
+  const isGuest = user?.isGuest === true;
+  const {
+    blocker: guestBlocker,
+    pendingRequest: guestPendingRequest,
+    refreshRequests: refreshGuestRequests,
+    showClaimModal,
+    openClaimModal,
+    closeClaimModal,
+  } = useGuestUploadBlocker({
+    isGuest,
+    candidateRecordIds: record.uploadedBy === user?.uid ? [record.id] : [],
+  });
+
+  const handleGuestFulfillAndExit = () => {
+    if (guestBlocker.state !== 'blocked') return;
+    guestBlocker.reset();
+    setLinkRequestOpen(true);
+  };
 
   // For managing subject banner
   const hasSubject = (record.subjects || []).length > 0;
@@ -749,17 +774,47 @@ export const RecordFull: React.FC<RecordFullProps> = ({
       {/* Subject Action Dialog for accept/decline flows */}
       <SubjectActionDialog {...subjectFlow.dialogProps} />
 
-      {/* Link Request Modal — opened from follow-up actions */}
+      {/* Link Request Modal — opened from follow-up actions, or from the guest upload blocker
+          below when a guest chooses "Send to requester and exit" */}
       <LinkRequestModal
         record={record}
         isOpen={linkRequestOpen}
-        onClose={() => setLinkRequestOpen(false)}
+        onClose={() => {
+          setLinkRequestOpen(false);
+          refreshGuestRequests();
+        }}
         onSuccess={() => {
           setLinkRequestOpen(false);
           handleRefreshRecord();
+          refreshGuestRequests();
         }}
         isGuest={user?.isGuest}
       />
+
+      {/* Blocks navigation until the guest resolves this unsecured upload — see
+          useGuestUploadBlocker; lets them freely bounce back to AddRecord or any other of their
+          own still-unsecured records. */}
+      {guestBlocker.state === 'blocked' && (
+        <GuestUploadBlockerModal
+          pendingRequest={guestPendingRequest}
+          completedFiles={[record]}
+          onClaim={openClaimModal}
+          onFulfillAndExit={handleGuestFulfillAndExit}
+          onLeave={() => guestBlocker.proceed()}
+        />
+      )}
+
+      {showClaimModal && (
+        <GuestClaimAccountModal
+          isOpen={showClaimModal}
+          onClose={closeClaimModal}
+          onComplete={() => {
+            closeClaimModal();
+            onRefreshRecord?.();
+          }}
+          guestContext="record_request"
+        />
+      )}
     </div>
   );
 };

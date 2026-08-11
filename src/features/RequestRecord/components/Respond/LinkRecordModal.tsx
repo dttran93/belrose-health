@@ -8,10 +8,11 @@
  *   pick-role     — RoleSelector applied to all selected records
  *   confirm-deny  — reason select + optional free-text note
  *   executing     — spinner
+ *   submitted     — success card (OnChainSubmittedContent), auto-dismisses back to pick-records
  *   error         — error + retry
  *
- * After a successful addRecords call the modal returns to pick-records so
- * the provider can keep linking more. They close out via "Mark as complete"
+ * After a successful addRecords call the modal shows a brief success card, then returns to
+ * pick-records so the provider can keep linking more. They close out via "Mark as complete"
  * or "Deny request".
  */
 
@@ -23,7 +24,13 @@ import { useLinkRecord } from '../../hooks/useLinkRecord';
 import { DENY_REASONS, DenyReasonValue } from '../../services/fulfillRequestService';
 import { RecordPickerContent } from '@/features/Ai/components/ui/RecordPicker';
 import { RecordRequest } from '@belrose/shared';
-import { LinkModalOverlay, ExecutingPhase, ErrorPhase, PickRolePhase } from '../ui/LinkModalShell';
+import {
+  LinkModalOverlay,
+  ExecutingPhase,
+  SubmittedPhase,
+  ErrorPhase,
+  PickRolePhase,
+} from '../ui/LinkModalShell';
 
 interface LinkRecordModalProps {
   request: RecordRequest | null;
@@ -60,9 +67,11 @@ const LinkRecordModal: React.FC<LinkRecordModalProps> = ({
     setDenyNote,
     phase,
     error,
+    submittedLabel,
     linkedThisSession,
     goToRolePicker,
     goBackToRecordPicker,
+    dismissSubmitted,
     goToDenyConfirm,
     goBackFromDeny,
     submitAddRecords,
@@ -82,6 +91,10 @@ const LinkRecordModal: React.FC<LinkRecordModalProps> = ({
   return (
     <LinkModalOverlay isOpen={isOpen} canDismiss={phase !== 'executing'} onClose={handleClose}>
       {phase === 'executing' && <ExecutingPhase />}
+
+      {phase === 'submitted' && (
+        <SubmittedPhase label={submittedLabel} onClose={dismissSubmitted} />
+      )}
 
       {phase === 'error' && (
         <ErrorPhase error={error} onRetry={goBackToRecordPicker} onClose={handleClose} />

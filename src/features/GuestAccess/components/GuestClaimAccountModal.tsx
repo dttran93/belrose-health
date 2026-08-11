@@ -1,67 +1,30 @@
-// src/features/Auth/components/GuestClaimAccountModal.tsx
+// src/features/GuestAccess/components/GuestClaimAccountModal.tsx
 
 /**
  * GuestClaimAccountModal
  *
- * Converts a temporary guest session into a permanent Belrose account.
- *
- * Write strategy:
- *   - Step 1a (sharing file key rewrap) — in batch with profile/invites/backfill
- *     because these all belong to the same "account is now real" transaction.
- *   - Step 1b (request note key rewrap) — standalone updateDoc outside batch.
- *     Fails intermittently in batch context, likely due to auth token state
- *     after updatePassword. Non-fatal: provider loses note decrypt if it fails,
- *     but record access and fulfillment are unaffected.
- *   - Step 1c (uploaded record key rewrap) — standalone updateDoc outside batch.
- *     Best-effort: throwaway key may be gone if session was interrupted between
- *     upload and claim. Non-fatal with toast warning to re-upload if needed.
- *   - Steps 3/4/4b (user profile, guestInvites, targetUserId) — in batch.
- *     These must succeed or fail atomically: a half-claimed state where isGuest
- *     is false but encryption keys aren't saved would break decryption.
- *   - Step 4 (password update) — via Cloud Function (guestPasswordUpdate).
- *     Uses Admin SDK to bypass Firebase's 5-minute recent-login requirement,
- *     which guests routinely exceed. Invalidates the auth token, so refreshUser()
- *     is called immediately after before any further Firebase client calls.
- *   - Step 5 (mark guestInvites accepted) — separate batch AFTER Cloud Function.
- *     The CF guards on guestInvites.status == 'pending', so this must commit
- *     only after the password update succeeds. Intentionally not atomic with
- *     the profile batch — a failed invite mark is non-fatal since the account
- *     is already fully claimed at that point.
+ * UI shell for converting a temporary guest session into a permanent Belrose account. Owns
+ * form/step state and progress display; the actual orchestration (Firestore writes, key
+ * rewrapping, Cloud Function calls, blockchain registration) lives in GuestClaimService — see
+ * that file's header comment for the full write-strategy rationale (why each step is
+ * batched/standalone, atomic/best-effort, and ordered the way it is).
  */
 
 import React, { useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X, Check, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
-import { getAuth, signInWithCustomToken, updateProfile } from 'firebase/auth';
 import { useAuthContext } from '@/features/Auth/AuthContext';
 import { EncryptionKeyManager } from '@/features/Encryption/services/encryptionKeyManager';
-import { EncryptionService } from '@/features/Encryption/services/encryptionService';
-import { SharingKeyManagementService } from '@/features/Sharing/services/sharingKeyManagementService';
 import {
   AccountEncryptionService,
   EncryptionBootstrapBundle,
 } from '@/features/Auth/services/accountEncryptionService';
-import { MemberRegistryBlockchain } from '@/features/Auth/services/memberRegistryBlockchain';
+import { GuestClaimService } from '@/features/GuestAccess/services/guestClaimService';
 import { RecoveryKeyDisplay } from '@/features/Auth/components/RecoveryKeyDisplay';
-import { arrayBufferToBase64, base64ToArrayBuffer } from '@/utils/dataFormattingUtils';
 import { toast } from 'sonner';
 import InputField from '@/components/ui/InputField';
-import {
-  collection,
-  deleteField,
-  doc,
-  getDoc,
-  getDocs,
-  getFirestore,
-  query,
-  serverTimestamp,
-  updateDoc,
-  where,
-  writeBatch,
-} from 'firebase/firestore';
 import PasswordStrengthIndicator from '@/features/Auth/components/ui/PasswordStrengthIndicator';
-import { getFunctions, httpsCallable } from 'firebase/functions';
 
 type ClaimStep = 'credentials' | 'recovery' | 'processing' | 'done';
 
@@ -74,7 +37,6 @@ interface GuestClaimAccountModalProps {
   onClose: () => void;
   onComplete?: () => void;
   guestContext?: 'sharing' | 'record_request';
-  pendingRecordIds?: string[];
 }
 
 export const GuestClaimAccountModal: React.FC<GuestClaimAccountModalProps> = ({
@@ -82,7 +44,6 @@ export const GuestClaimAccountModal: React.FC<GuestClaimAccountModalProps> = ({
   onClose,
   onComplete,
   guestContext,
-  pendingRecordIds,
 }) => {
   const { user, refreshUser } = useAuthContext();
 
@@ -149,185 +110,25 @@ export const GuestClaimAccountModal: React.FC<GuestClaimAccountModalProps> = ({
     setError(null);
 
     try {
-      const auth = getAuth();
-      const guestUid = user.uid;
-      const guestFileKeys = EncryptionKeyManager.getGuestFileKeys();
-      const db = getFirestore();
-      const batch = writeBatch(db);
-
-      const shouldCheckKeys = guestContext !== 'record_request';
-      const hasKeys = guestFileKeys !== null && guestFileKeys.size > 0;
-
-      if (shouldCheckKeys && !hasKeys) {
-        setError('Your session has expired. Please click the invite link again.');
-        setStep('recovery');
-        return;
-      }
-
-      const newRsaPublicKey = await SharingKeyManagementService.importPublicKey(
-        cryptoData.publicKey
-      );
-
-      // ===========================================================================================
-      // Step 1 - Rewrap guest keys for record access, request notes, and uploaded records
-      // ===========================================================================================
-
-      // ── Step 1a: Rewrap guest file keys (Sharing Flow) ────────────────────
-      // In batch — these belong to the same atomic "account is now real" write
-      // as the user profile update below.
-      if (hasKeys) {
-        setProgress({ message: 'Re-encrypting record access keys...' });
-        for (const [recordId, fileKey] of guestFileKeys!) {
-          const docId = `${recordId}_${guestUid}`;
-          const rewrapped = await SharingKeyManagementService.wrapKey(fileKey, newRsaPublicKey);
-          batch.update(doc(db, 'wrappedKeys', docId), {
-            wrappedKey: rewrapped,
-            isCreator: false,
-            isGuest: false,
-            expiresAt: deleteField(),
-            claimedAt: serverTimestamp(),
-          });
-        }
-      }
-
-      // ── Step 1b: Rewrap request note key (Request Flow) ───────────────────
-      // Standalone updateDoc — fails intermittently when run inside a batch,
-      // likely due to auth token state changes after updatePassword in step 2.
-      // Non-fatal: provider loses note decrypt access if this fails, but record
-      // access and request fulfillment are unaffected.
-      const guestPrivateKeyBase64 = EncryptionKeyManager.getGuestRsaPrivateKey();
-
-      if (guestPrivateKeyBase64) {
-        setProgress({ message: 'Re-encrypting request note access...' });
-        try {
-          const guestRsaPrivateKey =
-            await SharingKeyManagementService.importPrivateKey(guestPrivateKeyBase64);
-
-          const requestSnap = await getDocs(
-            query(collection(db, 'recordRequests'), where('providerGuestUid', '==', guestUid))
-          );
-
-          for (const requestDoc of requestSnap.docs) {
-            const data = requestDoc.data();
-            if (!data.encryptedNoteKeyForProvider || !data.encryptedNoteIv) continue;
-
-            const aesNoteKey = await SharingKeyManagementService.unwrapKey(
-              data.encryptedNoteKeyForProvider,
-              guestRsaPrivateKey
-            );
-            const rewrappedNoteKey = await SharingKeyManagementService.wrapKey(
-              aesNoteKey,
-              newRsaPublicKey
-            );
-
-            await updateDoc(doc(db, 'recordRequests', requestDoc.id), {
-              encryptedNoteKeyForProvider: rewrappedNoteKey,
-            });
-          }
-        } catch (err) {
-          console.warn('⚠️ Step 1b: failed to rewrap note key — provider loses note access', err);
-        }
-      }
-
-      // ── Step 1c: Rewrap uploaded record keys (Upload Blocker Flow) ────────
-      // Standalone updateDoc — best-effort. The throwaway AES master key used
-      // to encrypt these file keys only lives in memory for the current session.
-      // If the session was interrupted between upload and claim (tab close,
-      // re-login, etc.), the key is gone and the rewrap cannot be completed.
-      // The record itself still exists in Firestore — the guest just loses
-      // decrypt access after claiming. A toast warns them to re-upload.
-      let skippedRecordCount = 0;
-
-      if (pendingRecordIds && pendingRecordIds.length > 0) {
-        setProgress({ message: 'Securing your uploaded records...' });
-        const throwawayKey = await EncryptionKeyManager.getSessionKey();
-
-        if (!throwawayKey) {
-          console.warn('⚠️ Throwaway key gone — skipping step 1c entirely');
-          skippedRecordCount = pendingRecordIds.length;
-        } else {
-          for (const recordId of pendingRecordIds) {
-            const docId = `${recordId}_${guestUid}`;
-            try {
-              const wrappedKeySnap = await getDoc(doc(db, 'wrappedKeys', docId));
-              if (!wrappedKeySnap.exists()) {
-                console.warn('⚠️ wrappedKeys doc not found:', docId);
-                skippedRecordCount++;
-                continue;
-              }
-
-              const encryptedKeyData = base64ToArrayBuffer(wrappedKeySnap.data().wrappedKey);
-              const fileKeyData = await EncryptionService.decryptKeyWithMasterKey(
-                encryptedKeyData,
-                throwawayKey
-              );
-              const fileKey = await EncryptionService.importKey(fileKeyData);
-              const rewrapped = await EncryptionService.encryptKeyWithMasterKey(
-                fileKey,
-                cryptoData.masterKey
-              );
-
-              await updateDoc(doc(db, 'wrappedKeys', docId), {
-                wrappedKey: arrayBufferToBase64(rewrapped),
-                claimedAt: serverTimestamp(),
-              });
-              console.log('✅ Step 1c write ok:', docId);
-            } catch (e) {
-              console.warn(`⚠️ Step 1c skipped for ${recordId}`, e);
-              skippedRecordCount++;
-            }
-          }
-        }
-      }
-
-      // ── Step 2: Update user profile (in batch) ────────────────────────────
-      setProgress({ message: 'Saving your account details...' });
-      const displayName = `${firstName} ${lastName}`;
-
-      batch.update(doc(db, 'users', guestUid), {
-        displayName,
-        displayNameLower: displayName.toLowerCase(),
-        firstName,
-        lastName,
-        isGuest: false,
-        emailVerified: true,
-        emailVerifiedAt: serverTimestamp(),
-        identityVerified: false,
-        identityVerifiedAt: null,
-        updatedAt: serverTimestamp(),
-        encryption: {
-          enabled: true,
-          encryptedMasterKey: cryptoData.encryptedMasterKey,
-          masterKeyIV: cryptoData.masterKeyIV,
-          masterKeySalt: cryptoData.masterKeySalt,
-          recoveryKeyHash: cryptoData.recoveryKeyHash,
-          publicKey: cryptoData.publicKey,
-          encryptedPrivateKey: cryptoData.encryptedPrivateKey,
-          encryptedPrivateKeyIV: cryptoData.encryptedPrivateKeyIV,
-          setupAt: new Date().toISOString(),
+      const { skippedRecordCount } = await GuestClaimService.claimAccount(
+        {
+          guestUid: user.uid,
+          guestEmail: user.email,
+          firstName,
+          lastName,
+          password,
+          guestContext,
+          cryptoData,
+          // AuthContext's refreshUser is loosely typed (() => {}) even though it's actually
+          // async — wrap it so the service's stricter () => Promise<void> param is satisfied.
+          refreshUser: async () => {
+            await refreshUser();
+          },
         },
-      });
-
-      // ── Step 2b: Backfill targetUserId on recordRequests (in batch) ───────
-      // useInboundRequests queries by both userId and email, but setting
-      // targetUserId ensures future queries by ID alone still find them.
-      const backfillSnap = await getDocs(
-        query(
-          collection(db, 'recordRequests'),
-          where('targetEmail', '==', user.email),
-          where('status', 'in', ['pending', 'fulfilled'])
-        )
+        message => setProgress({ message })
       );
 
-      backfillSnap.docs.forEach(requestDoc => {
-        batch.update(requestDoc.ref, { targetUserId: guestUid });
-      });
-
-      // ── Commit atomic writes ──────────────────────────────────────────────
-      setProgress({ message: 'Saving changes...' });
-      await batch.commit();
-
-      // Warn if any uploaded records couldn't be rewrapped (step 1c failures)
+      // Warn if any uploaded records couldn't be rewrapped (Step 1c failures)
       if (skippedRecordCount > 0) {
         toast.warning(
           `${skippedRecordCount} uploaded record${skippedRecordCount > 1 ? 's' : ''} couldn't be secured`,
@@ -337,82 +138,6 @@ export const GuestClaimAccountModal: React.FC<GuestClaimAccountModalProps> = ({
             duration: 8000,
           }
         );
-      }
-
-      // ── Step 3: Generate wallet + register on blockchain ──
-      setProgress({ message: 'Generating your distributed network account...' });
-      const registrationResult = await AccountEncryptionService.registerWalletOnChain(
-        cryptoData.masterKey
-      );
-
-      // Set real master key in session
-      EncryptionKeyManager.setSessionKey(cryptoData.masterKey);
-
-      // ── Step 4: Set password on Firebase Auth account ────────────────────
-      // Cloud function to more securely handle passwords for guest accounts which are likely to hit 5 minute limit for firebase
-      setProgress({ message: 'Securing your account...' });
-      try {
-        const updatePasswordFn = httpsCallable(getFunctions(), 'guestPasswordUpdate');
-        const result = await updatePasswordFn({ newPassword: password });
-        const { customToken } = result.data as { customToken: string };
-        await signInWithCustomToken(getAuth(), customToken);
-      } catch (err: any) {
-        if (err.code === 'auth/requires-recent-login') {
-          throw new Error(
-            'Your session has expired. Please click the invite link again to refresh your session.'
-          );
-        }
-        throw err;
-      }
-
-      // ── Step 5: Mark guestInvites as accepted (in batch) ──────────────────
-      // Has to come after password change, because cloud function checks for guestInvite with status pending
-      const inviteSnap = await getDocs(
-        query(
-          collection(db, 'guestInvites'),
-          where('guestUserId', '==', guestUid),
-          where('status', '==', 'pending')
-        )
-      );
-
-      const inviteBatch = writeBatch(db);
-      inviteSnap.docs.forEach(inviteDoc => {
-        inviteBatch.update(inviteDoc.ref, {
-          status: 'accepted',
-          claimedAt: serverTimestamp(),
-        });
-      });
-      await inviteBatch.commit();
-
-      // ── Step 6: Deactivate placeholder guest wallet on-chain (nice-to-have) ──
-      // Sharing flow only — in the request flow no placeholder wallet was ever
-      // registered on-chain so there's nothing to deactivate.
-      if (guestContext !== 'record_request') {
-        try {
-          const placeholderWallet = user.onChainIdentity?.linkedWallets?.find(
-            w => w.address !== registrationResult.walletAddress
-          )?.address;
-          if (placeholderWallet) {
-            await MemberRegistryBlockchain.deactivateWallet(placeholderWallet);
-            console.log('✅ Placeholder wallet deactivated');
-          }
-        } catch (err) {
-          console.warn('⚠️ Could not deactivate placeholder wallet:', err);
-        }
-      }
-
-      // ── Step 7: Clear guest keys from memory ─────────────────────────────
-      EncryptionKeyManager.setGuestFileKeys(new Map());
-
-      // ── Step 8: Refresh auth context so banner disappears ───────────────────
-      setProgress({ message: 'Finalizing...' });
-
-      try {
-        await getAuth().currentUser?.getIdToken(true);
-        await refreshUser();
-        await updateProfile(getAuth().currentUser!, { displayName });
-      } catch (err) {
-        console.warn('⚠️ Post-claim refresh failed — account was created successfully', err);
       }
 
       setStep('done');

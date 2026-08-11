@@ -35,8 +35,6 @@ const CombinedUploadFHIR: React.FC<CombinedUploadFHIRProps> = ({
   maxFiles = 5,
   maxSizeBytes = 10 * 1024 * 1024,
   className = '',
-  externalLinkRequestFile,
-  onExternalLinkRequestClose,
   isGuest,
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>('upload');
@@ -207,16 +205,6 @@ const CombinedUploadFHIR: React.FC<CombinedUploadFHIRProps> = ({
           isOpen={true}
           onClose={() => setLinkRequestRecord(null)}
           onSuccess={() => setLinkRequestRecord(null)}
-          isGuest={isGuest}
-        />
-      )}
-      {/* Link Request Modal called from Add Record's blocker (passed down) Yeah it's a little janky but w/e*/}
-      {externalLinkRequestFile && (
-        <LinkRequestModal
-          record={externalLinkRequestFile}
-          isOpen={true}
-          onClose={onExternalLinkRequestClose}
-          onSuccess={onExternalLinkRequestClose}
           isGuest={isGuest}
         />
       )}

@@ -6,11 +6,12 @@
 // network-dependent smart-account-address computation are mocked; Firestore/Auth are real
 // (emulators, via test/setup.ts).
 //
-// Includes the pinning test for a confirmed bug: the catch block's best-effort cleanup only
-// calls admin.auth().deleteUser() — it never deletes the users/{dependentUid} Firestore doc
-// already written in Step 2, so a blockchain failure after that point leaves an orphaned
-// Firestore doc with no matching Auth account, forever. Pinned here (not fixed) so it's visible
-// in the suite; see the root test plan's bug #7 disposition for the recommended fast-follow fix.
+// Includes a regression test for a previously-confirmed bug (formerly pinned here as "bug #7"):
+// the catch block's best-effort cleanup used to only call admin.auth().deleteUser() — it never
+// deleted the users/{dependentUid} Firestore doc already written in Step 2, so a blockchain
+// failure after that point left an orphaned Firestore doc with no matching Auth account,
+// forever. Fixed by also deleting dependentRef in the catch block; this test now confirms both
+// cleanups happen.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as admin from 'firebase-admin';
@@ -178,6 +179,23 @@ describe('createDependentAccount — happy path', () => {
       status: 'active',
       isDependentRelationship: true,
     });
+
+    // Both on-chain writes are tracked in blockchainSyncQueue for observability, same as any
+    // client-side blockchain write — this doesn't change the function's own atomic behavior,
+    // it just makes the attempts visible in the same dashboard.
+    const syncDocs = await admin.firestore().collection('blockchainSyncQueue').get();
+    expect(syncDocs.size).toBe(2);
+    const actions = syncDocs.docs.map(d => d.data().action).sort();
+    expect(actions).toEqual(['addMemberBatch', 'bootstrapDependentTrustee']);
+    syncDocs.docs.forEach(d => {
+      expect(d.data()).toMatchObject({
+        status: 'confirmed',
+        contract: 'MemberRoleManager',
+        userId: GUARDIAN,
+        txHash: '0xtxhash',
+        blockNumber: 100,
+      });
+    });
   });
 
   it('marks a real (non-placeholder) email as unverified but a placeholder email as verified', async () => {
@@ -189,25 +207,36 @@ describe('createDependentAccount — happy path', () => {
   });
 });
 
-describe('createDependentAccount — bug #7 pin: orphaned Firestore doc on post-write blockchain failure', () => {
-  it('PINNED BUG: leaves the users/{uid} doc behind (only the Auth user is cleaned up) when the on-chain step fails after Step 2', async () => {
+describe('createDependentAccount — cleanup on post-write blockchain failure', () => {
+  it('deletes both the Auth user and the Firestore users/{uid} doc when the on-chain step fails after Step 2', async () => {
     mockContract.addMemberBatch.mockRejectedValueOnce(new Error('RPC timeout'));
 
     await expect(createDependentAccount.run(buildRequest(fullPayload(), GUARDIAN))).rejects.toThrow(
       'Failed to set up dependent account'
     );
 
-    // The Auth user IS cleaned up (best-effort deleteUser succeeds)...
+    // The Auth user is cleaned up (best-effort deleteUser succeeds)...
     await expect(admin.auth().getUserByEmail('dep-abc@placeholder.belrose.health')).rejects.toThrow();
 
-    // ...but the Firestore users/{uid} doc from Step 2 is NOT — it's orphaned with no
-    // corresponding Auth account, and nothing else in the app will ever clean it up.
+    // ...and so is the Firestore users/{uid} doc from Step 2 — no orphaned doc left behind with
+    // no matching Auth account.
     const orphaned = await admin
       .firestore()
       .collection('users')
       .where('dependentCreatedBy', '==', GUARDIAN)
       .get();
-    expect(orphaned.empty).toBe(false);
-    expect(orphaned.docs[0]!.data()).toMatchObject({ isDependent: true, dependentCreatedBy: GUARDIAN });
+    expect(orphaned.empty).toBe(true);
+
+    // The failed attempt is still tracked — and since addMemberBatch itself never got a chance
+    // to run, only that one entry exists (bootstrapDependentTrustee is never even attempted).
+    const syncDocs = await admin.firestore().collection('blockchainSyncQueue').get();
+    expect(syncDocs.size).toBe(1);
+    expect(syncDocs.docs[0]!.data()).toMatchObject({
+      status: 'failed',
+      contract: 'MemberRoleManager',
+      action: 'addMemberBatch',
+      userId: GUARDIAN,
+      error: 'RPC timeout',
+    });
   });
 });

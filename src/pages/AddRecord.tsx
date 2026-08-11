@@ -1,13 +1,14 @@
-import React, { useRef, useState } from 'react';
+import React, { useState } from 'react';
 import useFileManager from '@/features/AddRecord/hooks/useFileManager';
 import { convertToFHIR } from '@/features/AddRecord/services/fhirConversionService';
 import { FileObject } from '@/types/core';
 import CombinedUploadFHIR from '@/features/AddRecord/components/CombinedUploadFHIR';
-import { useBlocker, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAuthContext } from '@/features/Auth/AuthContext';
-import { useInboundRequests } from '@/features/RequestRecord/hooks/useInboundRequests';
 import { GuestUploadBlockerModal } from '@/features/GuestAccess/components/GuestUploadBlockerModal';
 import { GuestClaimAccountModal } from '@/features/GuestAccess/components/GuestClaimAccountModal';
+import { useGuestUploadBlocker } from '@/features/GuestAccess/hooks/useGuestUploadBlocker';
+import LinkRequestModal from '@/features/RequestRecord/components/Respond/LinkRequestModal';
 
 interface AddRecordProps {
   className?: string;
@@ -43,30 +44,19 @@ const AddRecord: React.FC<AddRecordProps> = ({ className }) => {
   } = useFileManager();
 
   const [linkRequestFile, setLinkRequestFile] = useState<FileObject | null>(null);
-  const [fulfilling, setFulfilling] = useState(false);
-  const isFulfilled = useRef(false);
-  const [showClaimModal, setShowClaimModal] = useState(false);
-  const hasCompletedFiles = files.some(f => f.status === 'completed');
-  const {
-    filtered: pendingRequests,
-    loading: requestsLoading,
-    refresh: refreshRequests,
-  } = useInboundRequests();
-  const pendingRequest = isGuest ? (pendingRequests[0] ?? null) : null;
 
   const completedFileIds = files
     .filter(f => f.status === 'completed' && f.firestoreId)
     .map(f => f.firestoreId!);
 
-  // Block navigation if guest has uploaded something
-
-  const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) =>
-      isGuest &&
-      hasCompletedFiles &&
-      !isFulfilled.current &&
-      currentLocation.pathname !== nextLocation.pathname
-  );
+  const {
+    blocker,
+    pendingRequest,
+    refreshRequests,
+    showClaimModal,
+    openClaimModal,
+    closeClaimModal,
+  } = useGuestUploadBlocker({ isGuest, candidateRecordIds: completedFileIds });
 
   const handleReviewFile = (fileRecord: FileObject, viewMode: string = 'record') => {
     if (!fileRecord.id) {
@@ -106,26 +96,17 @@ const AddRecord: React.FC<AddRecordProps> = ({ className }) => {
           savingToFirestore={savingToFirestore}
           onReview={handleReviewFile}
           processFile={processFile}
-          externalLinkRequestFile={linkRequestFile}
-          onExternalLinkRequestClose={() => {
-            isFulfilled.current = true;
-            setLinkRequestFile(null);
-            refreshRequests();
-          }}
           isGuest={isGuest}
         />
       </div>
 
-      {/* Blocks navigation until guest resolves their upload */}
+      {/* Blocks navigation until guest resolves their upload — lets them through to review any
+          of their own still-unsecured records (see useGuestUploadBlocker) */}
       {blocker.state === 'blocked' && (
         <GuestUploadBlockerModal
           pendingRequest={pendingRequest}
           completedFiles={files.filter(f => f.status === 'completed') as FileObject[]}
-          fulfilling={fulfilling}
-          onClaim={() => {
-            blocker.reset();
-            setShowClaimModal(true);
-          }}
+          onClaim={openClaimModal}
           onFulfillAndExit={handleFulfillAndExit}
           onLeave={() => blocker.proceed()}
         />
@@ -134,10 +115,25 @@ const AddRecord: React.FC<AddRecordProps> = ({ className }) => {
       {showClaimModal && (
         <GuestClaimAccountModal
           isOpen={showClaimModal}
-          onClose={() => setShowClaimModal(false)}
+          onClose={closeClaimModal}
           onComplete={() => navigate('/app/record-requests')}
           guestContext="record_request"
-          pendingRecordIds={completedFileIds}
+        />
+      )}
+
+      {linkRequestFile && (
+        <LinkRequestModal
+          record={linkRequestFile}
+          isOpen={true}
+          onClose={() => {
+            setLinkRequestFile(null);
+            refreshRequests();
+          }}
+          onSuccess={() => {
+            setLinkRequestFile(null);
+            refreshRequests();
+          }}
+          isGuest={isGuest}
         />
       )}
     </div>

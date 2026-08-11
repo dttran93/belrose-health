@@ -12,13 +12,14 @@ import { NETWORK } from '@belrose/shared';
 const BASESCAN_ADDR_URL = `${NETWORK.explorerUrl}/address/`;
 const BASESCAN_TX_URL = `${NETWORK.explorerUrl}/tx/`;
 
+// Mirrors MemberRoleManager.sol's MemberStatus enum exactly — there is no "Guest" status
+// on-chain; guests are deliberately kept off the blockchain entirely.
 const MEMBER_STATUS_LABEL: Record<number, string> = {
   0: 'NotRegistered',
   1: 'Inactive',
   2: 'Active',
   3: 'Verified',
   4: 'VerifiedProvider',
-  5: 'Guest',
 };
 
 const WALLET_TYPE_LABEL: Record<string, string> = {

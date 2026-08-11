@@ -23,6 +23,7 @@ const {
   computeSmartAccountAddressMock,
 } = vi.hoisted(() => {
   const mockContract = {
+    addMember: vi.fn(),
     addMemberBatch: vi.fn(),
     deactivateWallet: vi.fn(),
     reactivateWallet: vi.fn(),
@@ -52,6 +53,7 @@ vi.mock('../src/handlers/wallet', () => ({
 
 import {
   registerMemberOnChainComplete,
+  registerMemberOnChain,
   updateMemberStatus,
   deactivateWalletOnChain,
   reactivateWalletOnChain,
@@ -79,6 +81,7 @@ beforeEach(async () => {
     authTag: 'authtag',
     salt: 'salt',
   }));
+  mockContract.addMember.mockResolvedValue(fakeTx());
   mockContract.addMemberBatch.mockResolvedValue(fakeTx());
   mockContract.deactivateWallet.mockResolvedValue(fakeTx());
   mockContract.reactivateWallet.mockResolvedValue(fakeTx());
@@ -171,6 +174,106 @@ describe('registerMemberOnChainComplete', () => {
     await expect(
       registerMemberOnChainComplete.run(buildRequest({ masterKeyHex: 'hex' }, 'uid-1'))
     ).rejects.toThrow('dropped or replaced');
+  });
+});
+
+describe('registerMemberOnChain', () => {
+  it('throws unauthenticated when there is no caller', async () => {
+    await expect(
+      registerMemberOnChain.run(buildRequest({ walletAddress: VALID_ADDRESS }))
+    ).rejects.toThrow('authenticated');
+  });
+
+  it('throws invalid-argument for a malformed wallet address', async () => {
+    await expect(
+      registerMemberOnChain.run(buildRequest({ walletAddress: 'not-an-address' }, 'uid-1'))
+    ).rejects.toThrow('Invalid wallet address');
+  });
+
+  it('throws not-found when the caller has no Firestore doc', async () => {
+    await expect(
+      registerMemberOnChain.run(buildRequest({ walletAddress: VALID_ADDRESS }, 'uid-1'))
+    ).rejects.toThrow('User profile not found');
+  });
+
+  it('is idempotent: returns success without a contract call when already linked in Firestore', async () => {
+    await admin
+      .firestore()
+      .collection('users')
+      .doc('uid-1')
+      .set({ onChainIdentity: { linkedWallets: [{ address: VALID_ADDRESS }] } });
+
+    const result: any = await registerMemberOnChain.run(
+      buildRequest({ walletAddress: VALID_ADDRESS }, 'uid-1')
+    );
+
+    expect(result).toEqual({ success: true, message: 'Wallet already registered in Firestore' });
+    expect(mockContract.addMember).not.toHaveBeenCalled();
+  });
+
+  it('registers the wallet on-chain and links it in Firestore', async () => {
+    await admin.firestore().collection('users').doc('uid-1').set({});
+
+    const result: any = await registerMemberOnChain.run(
+      buildRequest({ walletAddress: VALID_ADDRESS }, 'uid-1')
+    );
+
+    expect(result.success).toBe(true);
+    expect(mockContract.addMember).toHaveBeenCalledWith(VALID_ADDRESS, expect.any(String));
+
+    const snap = await admin.firestore().collection('users').doc('uid-1').get();
+    const data = snap.data()!;
+    expect(data.onChainIdentity.userIdHash).toEqual(expect.any(String));
+    expect(data.onChainIdentity.linkedWallets).toHaveLength(1);
+    expect(data.onChainIdentity.linkedWallets[0]).toMatchObject({
+      address: VALID_ADDRESS,
+      type: 'eoa',
+      isWalletActive: true,
+    });
+
+    const syncDocs = await admin.firestore().collection('blockchainSyncQueue').get();
+    expect(syncDocs.size).toBe(1);
+    expect(syncDocs.docs[0]!.data()).toMatchObject({
+      status: 'confirmed',
+      contract: 'MemberRoleManager',
+      action: 'addMember',
+      userId: 'uid-1',
+      userWalletAddress: VALID_ADDRESS,
+      txHash: '0xtxhash',
+      blockNumber: 100,
+    });
+  });
+
+  it('treats a wallet already registered on-chain as a graceful success, and still tracks the failed attempt', async () => {
+    await admin.firestore().collection('users').doc('uid-1').set({});
+    mockContract.addMember.mockRejectedValueOnce(new Error('Wallet already registered'));
+
+    const result: any = await registerMemberOnChain.run(
+      buildRequest({ walletAddress: VALID_ADDRESS }, 'uid-1')
+    );
+
+    expect(result).toEqual({ success: true, message: 'Wallet already registered on chain' });
+
+    const syncDocs = await admin.firestore().collection('blockchainSyncQueue').get();
+    expect(syncDocs.size).toBe(1);
+    expect(syncDocs.docs[0]!.data()).toMatchObject({
+      status: 'failed',
+      action: 'addMember',
+      error: 'Wallet already registered',
+    });
+  });
+
+  it('records a failed sync-queue entry and rethrows on a genuine chain failure', async () => {
+    await admin.firestore().collection('users').doc('uid-1').set({});
+    mockContract.addMember.mockRejectedValueOnce(new Error('RPC timeout'));
+
+    await expect(
+      registerMemberOnChain.run(buildRequest({ walletAddress: VALID_ADDRESS }, 'uid-1'))
+    ).rejects.toThrow('RPC timeout');
+
+    const syncDocs = await admin.firestore().collection('blockchainSyncQueue').get();
+    expect(syncDocs.size).toBe(1);
+    expect(syncDocs.docs[0]!.data()).toMatchObject({ status: 'failed', error: 'RPC timeout' });
   });
 });
 
@@ -301,9 +404,21 @@ describe('updateMemberStatus', () => {
     );
   });
 
-  it('throws invalid-argument when status is outside the 1-5 enum', async () => {
+  it('throws invalid-argument when status is outside the 1-4 enum', async () => {
     await expect(
       updateMemberStatus.run(buildRequest({ userId: 'uid-1', status: 99 }))
+    ).rejects.toThrow('Invalid userId or status');
+  });
+
+  it('throws invalid-argument for status 5 — there is no on-chain "Guest" status', async () => {
+    await expect(
+      updateMemberStatus.run(buildRequest({ userId: 'uid-1', status: 5 }))
+    ).rejects.toThrow('Invalid userId or status');
+  });
+
+  it('throws invalid-argument for status 0 (NotRegistered) — not a settable status', async () => {
+    await expect(
+      updateMemberStatus.run(buildRequest({ userId: 'uid-1', status: 0 }))
     ).rejects.toThrow('Invalid userId or status');
   });
 
@@ -320,5 +435,30 @@ describe('updateMemberStatus', () => {
     const snap = await admin.firestore().collection('users').doc('uid-1').get();
     const statuses = snap.data()!.onChainIdentity.onChainStatus;
     expect(statuses[statuses.length - 1].status).toBe('Verified');
+
+    const syncDocs = await admin.firestore().collection('blockchainSyncQueue').get();
+    expect(syncDocs.size).toBe(1);
+    expect(syncDocs.docs[0]!.data()).toMatchObject({
+      status: 'confirmed',
+      contract: 'MemberRoleManager',
+      action: 'setUserStatus',
+      userId: 'uid-1',
+      context: expect.objectContaining({ type: 'memberRegistry', newStatus: 'Verified' }),
+      txHash: '0xtxhash',
+      blockNumber: 100,
+    });
+  });
+
+  it('records a failed sync-queue entry and rethrows when the chain call fails', async () => {
+    await admin.firestore().collection('users').doc('uid-1').set({});
+    mockContract.setUserStatus.mockRejectedValueOnce(new Error('RPC timeout'));
+
+    await expect(
+      updateMemberStatus.run(buildRequest({ userId: 'uid-1', status: 3 }))
+    ).rejects.toThrow('RPC timeout');
+
+    const syncDocs = await admin.firestore().collection('blockchainSyncQueue').get();
+    expect(syncDocs.size).toBe(1);
+    expect(syncDocs.docs[0]!.data()).toMatchObject({ status: 'failed', error: 'RPC timeout' });
   });
 });

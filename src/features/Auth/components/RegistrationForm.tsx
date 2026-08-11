@@ -10,6 +10,10 @@ import { RecoveryKeyDisplay } from './RecoveryKeyDisplay';
 import { getFirestore, doc, updateDoc } from 'firebase/firestore';
 import { EncryptionKeyManager } from '@/features/Encryption/services/encryptionKeyManager';
 import { AccountEncryptionService } from '../services/accountEncryptionService';
+import {
+  BlockchainSyncQueueService,
+  getUserFacingErrorMessage,
+} from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
 import RegistrationProgressDialog, {
   RegistrationPhase,
   RegistrationProgress,
@@ -109,13 +113,43 @@ const RegistrationForm: React.FC<RegistrationFormProps> = ({ onSwitchToLogin }) 
         // 6. Store master key in session
         EncryptionKeyManager.setSessionKey(bundle.masterKey);
 
-        // 7. Generate wallet + register both wallets on-chain in one transaction
+        // 7. Generate wallet + register both wallets on-chain in one transaction — best-effort,
+        // tracked via BlockchainSyncQueueService. Does not block registration from completing: a
+        // failure here just means the account proceeds without a wallet, picked up later by
+        // reconciliation, same as every other best-effort blockchain write in the app (see
+        // GuestClaimService for the same pattern on the guest-claim side).
         console.log('💼 Generating wallet and registering on-chain...');
-        const { walletAddress, smartAccountAddress } =
-          await AccountEncryptionService.registerWalletOnChain(bundle.masterKey);
-        console.log('✓ Wallet generated and registered:', walletAddress);
+        let walletAddress = '';
+        let smartAccountAddress = '';
+        const syncRef = await BlockchainSyncQueueService.startAttempt({
+          contract: 'MemberRoleManager',
+          action: 'registerMemberOnChainComplete',
+          userId: data.userId,
+          context: { type: 'memberRegistry', newStatus: 'Active' },
+        });
+        try {
+          const registrationResult = await AccountEncryptionService.registerWalletOnChain(
+            bundle.masterKey
+          );
+          walletAddress = registrationResult.walletAddress;
+          smartAccountAddress = registrationResult.smartAccountAddress;
+          console.log('✓ Wallet generated and registered:', walletAddress);
+          await BlockchainSyncQueueService.recordSuccess(syncRef, {
+            txHash: registrationResult.blockchainRef.txHash,
+            blockNumber: registrationResult.blockchainRef.blockNumber,
+          });
+        } catch (chainError) {
+          console.error('❌ Wallet registration failed — proceeding without a wallet:', chainError);
+          const errorMessage = getUserFacingErrorMessage(
+            chainError,
+            'Blockchain transaction failed'
+          );
+          await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
+        }
 
-        // 8. Single state update with everything
+        // 8. Single state update with everything — walletGenerationComplete now means "step 1
+        // processing finished," not "the chain call succeeded"; it still gates whether the user
+        // can move on to step 2, and a chain failure shouldn't strand them there.
         setRegistrationData(prev => ({
           ...prev,
           ...data,
@@ -133,9 +167,16 @@ const RegistrationForm: React.FC<RegistrationFormProps> = ({ onSwitchToLogin }) 
           walletGenerationComplete: true,
         }));
 
-        toast.success('Account and encryption setup complete!', {
-          description: 'Your security is configured',
-        });
+        if (walletAddress) {
+          toast.success('Account and encryption setup complete!', {
+            description: 'Your security is configured',
+          });
+        } else {
+          toast.warning('Account and encryption set up — network registration pending', {
+            description:
+              "We'll finish setting up your distributed network account shortly. You can continue in the meantime.",
+          });
+        }
       } catch (error) {
         console.error('❌ Error setting up encryption:', error);
         toast.error('Failed to set up encryption');

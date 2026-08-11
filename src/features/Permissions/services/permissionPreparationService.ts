@@ -453,6 +453,12 @@ export class PermissionPreparationService {
   ): Promise<InitializeRecordResult> {
     console.log('🔗 Initializing record on network...', { recordId, role });
 
+    // No client-side BlockchainSyncQueueService tracking here — initializeRoleOnChain fires as a
+    // silent prerequisite inside usePermissionFlow's grant handler (only when
+    // verifyPrerequisites reports the record isn't initialized yet), never something the user
+    // directly triggers. Tracked server-side instead, inside the Cloud Function itself. See
+    // blockchainSyncQueueService.ts's header for the full client-vs-server rule.
+
     try {
       const functions = getFunctions();
       const initFn = httpsCallable<
@@ -464,6 +470,8 @@ export class PermissionPreparationService {
 
       console.log('✅ Record initialized:', result.data.blockchainRef);
 
+      const userId = getAuth().currentUser?.uid;
+
       // Log for audit trail (BackendChainParity needs a tx hash here) — only on a genuine new
       // initialization. The "already exists" catch branch below returns no blockchainRef, so it's
       // naturally skipped there. Same doc-ID scheme + event shape as every other
@@ -473,7 +481,6 @@ export class PermissionPreparationService {
       // written directly instead of starting null and getting filled in later. Fire-and-forget,
       // same as before: a failed audit-log write must never surface as a failure of the
       // initialization itself, which already succeeded on-chain.
-      const userId = getAuth().currentUser?.uid;
       if (userId && result.data.blockchainRef) {
         try {
           const db = getFirestore();

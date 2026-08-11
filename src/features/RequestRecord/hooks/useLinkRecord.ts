@@ -8,12 +8,15 @@
  *   pick-records  — multi-select from accessible records
  *   pick-role     — choose Viewer / Admin / Owner for all selected records
  *   confirm-deny  — select deny reason + optional note
- *   executing     — async in flight (prepareBatch + grantRoleBatch happen here)
- *   error         — something failed, can retry or cancel
+ *   executing     — blocks only on prepareRecordsForLinking (local smart-account setup)
+ *   submitted     — grant tx has been fired (not awaited) and handed to OnChainActivityTray;
+ *                   auto-dismisses back to pick-records after a few seconds
+ *   error         — preparation failed, can retry or cancel
  *
- * All blockchain preparation and batch-grant logic lives in linkRecordService
- * (which delegates to PermissionPreparationService + PermissionsService).
- * This hook only manages UI state.
+ * submitAddRecords blocks the UI on prepareRecordsForLinking only — once that resolves, the
+ * actual grantRoleBatch transaction (addRecordsToRequest) fires without being awaited, tracked
+ * via OnChainActivityTray instead of a second blocking spinner. Same fire-and-forget shape as
+ * usePermissionFlow.confirmGrant.
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -23,14 +26,30 @@ import { FileObject } from '@/types/core';
 import { Role } from '@/features/Permissions/services/permissionsService';
 import { RecordDecryptionService } from '@/features/Encryption/services/recordDecryptionService';
 import {
+  prepareRecordsForLinking,
   addRecordsToRequest,
   markRequestComplete,
   denyRequest,
 } from '../services/linkRecordService';
 import { DenyReasonValue } from '../services/fulfillRequestService';
 import { RecordRequest } from '@belrose/shared';
+import { useOnChainActivityTray } from '@/features/OnChainActivityTray/OnChainActivityTrayContext';
+import { getUserFacingErrorMessage } from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
 
-export type LinkPhase = 'pick-records' | 'pick-role' | 'confirm-deny' | 'executing' | 'error';
+export type LinkPhase =
+  | 'pick-records'
+  | 'pick-role'
+  | 'confirm-deny'
+  | 'executing'
+  | 'submitted'
+  | 'error';
+
+const roleLabels: Record<Role, string> = {
+  viewer: 'Viewer',
+  sharer: 'Sharer',
+  administrator: 'Administrator',
+  owner: 'Owner',
+};
 
 interface UseLinkRecordReturn {
   // Records
@@ -57,6 +76,8 @@ interface UseLinkRecordReturn {
   // Phase
   phase: LinkPhase;
   error: string | null;
+  /** Label shown on the 'submitted' success card (OnChainSubmittedContent) */
+  submittedLabel: string;
 
   // Linked so far in this session (for the "X records linked" counter)
   linkedThisSession: string[];
@@ -64,6 +85,7 @@ interface UseLinkRecordReturn {
   // Actions
   goToRolePicker: () => void;
   goBackToRecordPicker: () => void;
+  dismissSubmitted: () => void;
   goToDenyConfirm: () => void;
   goBackFromDeny: () => void;
   submitAddRecords: () => Promise<void>;
@@ -78,6 +100,10 @@ export function useLinkRecord(
 ): UseLinkRecordReturn {
   const { user } = useAuthContext();
 
+  // OnChainActivityTray — surfaces the grant transaction in the bottom-right tray, same as
+  // usePermissionFlow, while this modal still blocks on it via the 'executing' phase.
+  const { addActivity, updateActivity } = useOnChainActivityTray();
+
   const [records, setRecords] = useState<FileObject[]>([]);
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -87,6 +113,7 @@ export function useLinkRecord(
   const [phase, setPhase] = useState<LinkPhase>('pick-records');
   const [error, setError] = useState<string | null>(null);
   const [linkedThisSession, setLinkedThisSession] = useState<string[]>([]);
+  const [submittedLabel, setSubmittedLabel] = useState('');
 
   // Fetch + decrypt records when modal opens
   useEffect(() => {
@@ -137,21 +164,53 @@ export function useLinkRecord(
     setError(null);
   }, []);
 
+  // Dismiss the 'submitted' success card (auto-fires after 3s, or via "Got it") — returns to
+  // pick-records rather than closing the whole modal, since a provider typically has more
+  // records left to link.
+  const dismissSubmitted = useCallback(() => {
+    setPhase('pick-records');
+  }, []);
+
   const submitAddRecords = useCallback(async () => {
     if (!request || selectedIds.length === 0) return;
+    const ids = selectedIds;
+    const role = selectedRole;
+
+    // Block only on preparation — local smart-account setup, not the transaction itself.
     setPhase('executing');
     setError(null);
     try {
-      const result = await addRecordsToRequest(selectedIds, request, selectedRole);
-      setLinkedThisSession(prev => [...new Set([...prev, ...result.recordIds])]);
-      setSelectedIds([]);
-      setSelectedRole('viewer');
-      setPhase('pick-records');
+      await prepareRecordsForLinking(ids);
     } catch (err: any) {
-      setError(err.message || 'Failed to link records. Please try again.');
+      setError(getUserFacingErrorMessage(err, 'Failed to prepare records. Please try again.'));
       setPhase('error');
+      return;
     }
-  }, [request, selectedIds, selectedRole]);
+
+    // Fire the grant tx — don't await. Hand off to the tray immediately so the modal isn't just
+    // duplicating a "still working" spinner the tray already owns.
+    const roleLabel = roleLabels[role];
+    const activityLabel =
+      ids.length > 1
+        ? `Granting ${roleLabel} access on ${ids.length} records`
+        : `Granting ${roleLabel} access`;
+    const activityId = addActivity({ label: activityLabel, link: '/app/record-requests' });
+
+    setSelectedIds([]);
+    setSelectedRole('viewer');
+    setSubmittedLabel(activityLabel);
+    setPhase('submitted');
+
+    addRecordsToRequest(ids, request, role)
+      .then(result => {
+        updateActivity(activityId, { status: 'confirmed' });
+        setLinkedThisSession(prev => [...new Set([...prev, ...result.recordIds])]);
+      })
+      .catch(err => {
+        const message = getUserFacingErrorMessage(err, 'Failed to link records. Please try again.');
+        updateActivity(activityId, { status: 'failed', errorMessage: message });
+      });
+  }, [request, selectedIds, selectedRole, addActivity, updateActivity]);
 
   const submitMarkComplete = useCallback(async () => {
     if (!request) return;
@@ -188,6 +247,7 @@ export function useLinkRecord(
     setError(null);
     setLinkedThisSession([]);
     setRecords([]);
+    setSubmittedLabel('');
   }, []);
 
   return {
@@ -205,9 +265,11 @@ export function useLinkRecord(
     setDenyNote,
     phase,
     error,
+    submittedLabel,
     linkedThisSession,
     goToRolePicker,
     goBackToRecordPicker,
+    dismissSubmitted,
     goToDenyConfirm,
     goBackFromDeny,
     submitAddRecords,
