@@ -495,42 +495,43 @@ service cloud.firestore {
         allow update: if false; // Immutable audit trail
         allow delete: if false; // Immutable audit trail
       }
+
+      // --- VERSION HISTORY SUBCOLLECTION ---
+      // Parallel to scoreEvents above — nested under the record since every read/write is
+      // already scoped to exactly one record; recordId comes straight from the parent match
+      // instead of a resource.data lookup. Migrated from the former top-level `recordVersions`
+      // collection — see migrateRecordVersionsToSubcollection.ts.
+      match /versionHistory/{versionId} {
+        allow read: if request.auth != null && hasRoleOnRecord(recordId);
+
+        allow create: if request.auth != null &&
+          isAdminOrOwnerOfRecord(recordId) && (
+            // Path A: Strict Baseline Validation (Version 0)
+            (
+              request.resource.data.versionNumber == 0 &&
+              request.resource.data.encryptedChanges == null &&
+              request.resource.data.commitMessage == 'Original Upload (auto-created baseline)'
+            ) ||
+            // Path B: Standard Edit Validation (Version 1+)
+            (
+              request.resource.data.versionNumber > 0 &&
+              request.resource.data.editedBy == request.auth.uid
+            )
+          );
+
+        allow update: if false; // Versions are immutable
+
+        // No per-entry owner field on a baseline (v0 never sets editedBy) — once the parent
+        // record is gone there's no identity left to check, so any authenticated user may
+        // clean up the orphan. recordId from the path still resolves correctly even when the
+        // parent records/{recordId} doc doesn't exist (subcollection paths don't require it).
+        allow delete: if request.auth != null && (
+          !exists(/databases/$(database)/documents/records/$(recordId)) ||
+          isAdminOrOwnerOfRecord(recordId)
+        );
+      }
     }
 
-    // ============================================
-    // RECORD VERSIONS
-    // ============================================
-
-    match /recordVersions/{versionId} {
-      allow read: if request.auth != null && hasRoleOnRecord(resource.data.recordId);
-
-    allow create: if request.auth != null && 
-      isAdminOrOwnerOfRecord(request.resource.data.recordId) && (
-        // Path A: Strict Baseline Validation (Version 0)
-        (
-          request.resource.data.versionNumber == 0 &&
-          request.resource.data.encryptedChanges == null &&
-          request.resource.data.commitMessage == 'Original Upload (auto-created baseline)'
-        ) || 
-        
-        // Path B: Standard Edit Validation (Version 1+)
-        (
-          request.resource.data.versionNumber > 0 &&
-          request.resource.data.editedBy == request.auth.uid
-        )
-      );
-
-      allow update: if false; // Versions are immutable
-
-      // A version doc has no per-entry owner field (version 0 baselines never set editedBy),
-      // so once its record is gone there's no meaningful identity left to check — treat it as
-      // inert orphaned data any authenticated user may clean up, rather than permanently stuck.
-      allow delete: if request.auth != null && (
-        !exists(/databases/$(database)/documents/records/$(resource.data.recordId)) ||
-        isAdminOrOwnerOfRecord(resource.data.recordId)
-      );
-    }
-    
     // ============================================
     // SUBJECT CONSENT REQUESTS
     // ============================================

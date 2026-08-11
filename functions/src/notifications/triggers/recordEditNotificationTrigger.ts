@@ -3,7 +3,7 @@
 /**
  * Record Edit Notification Trigger
  *
- * Watches recordVersions for new documents and notifies stakeholders.
+ * Watches records/{recordId}/versionHistory for new documents and notifies stakeholders.
  *
  * Who gets notified:
  *   - Owners (it's their record)
@@ -76,8 +76,9 @@ function getNotificationTargets(record: RecordDocument, editedBy: string): strin
 // ============================================================================
 
 export const onRecordVersionCreated = onDocumentCreated(
-  { document: 'recordVersions/{versionId}', secrets: [resendKey] },
+  { document: 'records/{recordId}/versionHistory/{versionId}', secrets: [resendKey] },
   async event => {
+    const recordId = event.params.recordId;
     const versionId = event.params.versionId;
     const data = event.data?.data() as RecordVersion | undefined;
 
@@ -88,19 +89,17 @@ export const onRecordVersionCreated = onDocumentCreated(
 
     // Skip version 0 — it's an auto-created baseline, not a real edit
     if (data.versionNumber === 0) {
-      console.log(
-        `ℹ️ Version 0 baseline created for record ${data.recordId}, skipping notification`
-      );
+      console.log(`ℹ️ Version 0 baseline created for record ${recordId}, skipping notification`);
       return;
     }
 
-    console.log(`📝 Version ${data.versionNumber} created for record ${data.recordId}`);
+    console.log(`📝 Version ${data.versionNumber} created for record ${recordId}`);
 
     // Fetch the record to get owners and subjects
-    const recordSnap = await getFirestore().collection('records').doc(data.recordId).get();
+    const recordSnap = await getFirestore().collection('records').doc(recordId).get();
 
     if (!recordSnap.exists) {
-      console.log(`⚠️ Record ${data.recordId} not found, skipping notification`);
+      console.log(`⚠️ Record ${recordId} not found, skipping notification`);
       return;
     }
 
@@ -116,15 +115,15 @@ export const onRecordVersionCreated = onDocumentCreated(
 
     // Record name: we store encryptedFileName so fall back to a generic label
     // The notification links through to the record so users can see full details
-    const recordName = `Record ${data.recordId.slice(0, 8)}...`;
+    const recordName = `Record ${recordId.slice(0, 8)}...`;
 
     // In-app notifications
     await createNotificationForMultiple(targets, {
       type: 'RECORD_EDITED',
       message: `${editorName} made changes to ${recordName} (version ${data.versionNumber}).`,
-      link: `/app/records/${data.recordId}`,
+      link: `/app/records/${recordId}`,
       payload: {
-        recordId: data.recordId,
+        recordId,
         versionId,
         versionNumber: data.versionNumber,
         editedBy: data.editedBy,
@@ -142,8 +141,8 @@ export const onRecordVersionCreated = onDocumentCreated(
           'RECORD_EDITED',
           {
             subject: `${editorName} edited a record you're connected to`,
-            html: buildRecordEditedHtml(editorName, recordName, data.recordId, data.versionNumber),
-            text: buildRecordEditedText(editorName, recordName, data.recordId, data.versionNumber),
+            html: buildRecordEditedHtml(editorName, recordName, recordId, data.versionNumber),
+            text: buildRecordEditedText(editorName, recordName, recordId, data.versionNumber),
           },
           resend
         )

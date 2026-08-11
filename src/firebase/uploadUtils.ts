@@ -527,9 +527,7 @@ export async function deleteRecordVersions(documentId: string): Promise<void> {
   try {
     console.log('🗑️ Deleting all versions for document:', documentId);
 
-    const q = query(collection(db, 'recordVersions'), where('recordId', '==', documentId));
-
-    const snapshot = await getDocs(q);
+    const snapshot = await getDocs(collection(db, 'records', documentId, 'versionHistory'));
     const deletePromises = snapshot.docs.map(doc => deleteDoc(doc.ref));
     await Promise.all(deletePromises);
 

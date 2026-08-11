@@ -134,25 +134,6 @@
       "density": "SPARSE_ALL"
     },
     {
-      "collectionGroup": "recordVersions",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "recordId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "versionNumber",
-          "order": "DESCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "DESCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
-    },
-    {
       "collectionGroup": "guestInvites",
       "queryScope": "COLLECTION",
       "fields": [

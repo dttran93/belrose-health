@@ -12,7 +12,7 @@
 // which needed the @/firebase/config getter-mock trick.
 
 import { beforeEach, afterEach, afterAll, describe, it, expect, vi } from 'vitest';
-import { doc, getDoc, getDocs, setDoc, collection, query, where } from 'firebase/firestore';
+import { doc, getDoc, getDocs, setDoc, collection } from 'firebase/firestore';
 import { deleteApp, getApps } from 'firebase/app';
 import { connectTestFirestore, clearTestFirestore } from './helpers/testFirestore';
 import { arrayBufferToBase64, base64ToArrayBuffer } from '../../src/utils/dataFormattingUtils';
@@ -218,7 +218,7 @@ describe('VersionControlService.createVersion — first edit (creator)', () => {
 
     expect(newVersionId).toBe(`${RECORD_ID}_v1`);
 
-    const v0Snap = await getDoc(doc(db, 'recordVersions', `${RECORD_ID}_v0`));
+    const v0Snap = await getDoc(doc(db, 'records', RECORD_ID, 'versionHistory', `${RECORD_ID}_v0`));
     expect(v0Snap.exists()).toBe(true);
     const v0 = v0Snap.data()!;
     expect(v0.versionNumber).toBe(0);
@@ -226,7 +226,7 @@ describe('VersionControlService.createVersion — first edit (creator)', () => {
     expect(v0.recordHash).toBe('hash-v0');
     expect(v0.recordSnapshot.encryptedFileName).toMatchObject(originalEncryptedFileName);
 
-    const v1Snap = await getDoc(doc(db, 'recordVersions', `${RECORD_ID}_v1`));
+    const v1Snap = await getDoc(doc(db, 'records', RECORD_ID, 'versionHistory', `${RECORD_ID}_v1`));
     expect(v1Snap.exists()).toBe(true);
     const v1 = v1Snap.data()!;
     expect(v1.versionNumber).toBe(1);
@@ -272,7 +272,7 @@ describe('VersionControlService.createVersion — first edit (creator)', () => {
     );
 
     expect(v2Id).toBe(`${RECORD_ID}_v2`);
-    const v2 = (await getDoc(doc(db, 'recordVersions', v2Id))).data()!;
+    const v2 = (await getDoc(doc(db, 'records', RECORD_ID, 'versionHistory', v2Id))).data()!;
     const changes = await service.getVersionChanges(v2 as any);
     const fileNameChange = changes.find(c => c.path === 'fileName');
     // Diffed against v1 ("v1-name.pdf"), not v0 ("v0-name.pdf")
@@ -302,7 +302,7 @@ describe('VersionControlService.createVersion — shared (non-creator) user', ()
       (await buildUpdatedRecord(fileKey, { fileName: 'shared-v1.pdf' }, 'hash-v1')) as any
     );
 
-    const v1 = (await getDoc(doc(db, 'recordVersions', v1Id))).data()!;
+    const v1 = (await getDoc(doc(db, 'records', RECORD_ID, 'versionHistory', v1Id))).data()!;
     const changes = await service.getVersionChanges(v1 as any);
     expect(changes.find(c => c.path === 'fileName')).toMatchObject({
       oldValue: 'shared-v0.pdf',
@@ -379,16 +379,12 @@ describe('VersionControlService.rollbackToVersion', () => {
   it('creates an undo-point version and calls updateFirestoreRecord with the restored data', async () => {
     const { RECORD_ID, v1Id } = await seedRecordWithTwoVersions();
 
-    const versionsBefore = await getDocs(
-      query(collection(db, 'recordVersions'), where('recordId', '==', RECORD_ID))
-    );
+    const versionsBefore = await getDocs(collection(db, 'records', RECORD_ID, 'versionHistory'));
     expect(versionsBefore.docs).toHaveLength(2); // v0 + v1
 
     await new VersionControlService().rollbackToVersion(RECORD_ID, v1Id, true);
 
-    const versionsAfter = await getDocs(
-      query(collection(db, 'recordVersions'), where('recordId', '==', RECORD_ID))
-    );
+    const versionsAfter = await getDocs(collection(db, 'records', RECORD_ID, 'versionHistory'));
     expect(versionsAfter.docs).toHaveLength(3); // v0 + v1 + undo-point v2
 
     expect(updateFirestoreRecordMock).toHaveBeenCalledTimes(1);
@@ -462,9 +458,7 @@ describe('VersionControlService.deleteAllVersions', () => {
 
     await service.deleteAllVersions(RECORD_ID);
 
-    const remaining = await getDocs(
-      query(collection(db, 'recordVersions'), where('recordId', '==', RECORD_ID))
-    );
+    const remaining = await getDocs(collection(db, 'records', RECORD_ID, 'versionHistory'));
     expect(remaining.docs).toHaveLength(0);
   });
 });
