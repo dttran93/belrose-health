@@ -106,7 +106,7 @@ export const CULPABILITY_MULTIPLIERS: Record<DisputeCulpability, number> = {
   5: 2.0, // Intentional
 };
 
-export const INITIAL_SCORE = 500;
+export const INITIAL_SCORE = 500; //Baynesian BasePrior from which verifications/disputes adjust the score
 
 export const SCORE_BOUNDS = {
   MIN: 0,

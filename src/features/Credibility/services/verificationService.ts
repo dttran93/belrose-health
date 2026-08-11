@@ -131,6 +131,20 @@ export async function getVerificationsByRecordId(recordId: string): Promise<Veri
 }
 
 /**
+ * Fetches all verifications made BY a given user, across every record — this is R(u) from the
+ * whitepaper's AvgRecordCredibility(u) formula. No orderBy (avoids needing a composite index);
+ * callers wanting the full set can sort client-side if needed.
+ *
+ * @param userId - The verifier's user ID
+ */
+export async function getVerificationsByUserId(userId: string): Promise<VerificationDoc[]> {
+  const db = getFirestore();
+  const q = query(collection(db, 'verifications'), where('verifierId', '==', userId));
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map(d => ({ id: d.id, ...d.data() }) as VerificationDoc);
+}
+
+/**
  * Fetches verifications with version information.
  * Groups verifications by hash and includes version numbers.
  *

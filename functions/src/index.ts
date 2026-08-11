@@ -8,6 +8,7 @@ if (!admin.apps.length) {
 
 // ==================== ADMIN FUNCTIONS ====================
 export { setPlatformAdmin } from './handlers/setAdminClaim';
+export { setCredentialFloor } from './handlers/setCredentialFloor';
 
 // ==================== IMAGE ANALYSIS FUNCTIONS ====================
 export { analyzeImageWithAI } from './handlers/image';

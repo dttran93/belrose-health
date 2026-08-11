@@ -120,15 +120,31 @@ service cloud.firestore {
       // Any authenticated user can read profiles (needed for sharing/search)
       allow read: if request.auth != null;
 
-      // Owner can create their own profile, but cannot self-assign platform admin
+      // Owner can create their own profile, but cannot self-assign platform admin, a
+      // credibility score, or a credentialFloor — all three are server-only.
       allow create: if request.auth != null &&
         request.auth.uid == userId &&
-        request.resource.data.get('isPlatformAdmin', false) != true;
+        request.resource.data.get('isPlatformAdmin', false) != true &&
+        !('credibility' in request.resource.data) &&
+        !('credentialFloor' in request.resource.data);
 
-      // Owner can update their own profile, but cannot change isPlatformAdmin
+      // Owner can update their own profile, but cannot change isPlatformAdmin, credibility, or
+      // credentialFloor — credibility is a global batch computation (unlike records, where any
+      // role-holder can write the cached score client-side — see records/{recordId} BRANCH 4),
+      // and credentialFloor is an admin-curated input (see setCredentialFloor callable). Both
+      // are server-only writes, handled by the next allow update block below.
       allow update: if request.auth != null &&
         request.auth.uid == userId &&
-        request.resource.data.get('isPlatformAdmin', false) == resource.data.get('isPlatformAdmin', false);
+        request.resource.data.get('isPlatformAdmin', false) == resource.data.get('isPlatformAdmin', false) &&
+        request.resource.data.get('credibility', null) == resource.data.get('credibility', null) &&
+        request.resource.data.get('credentialFloor', null) == resource.data.get('credentialFloor', null);
+
+      // Server-only: the UserCredibility batch job writes `credibility` wholesale each cycle;
+      // the setCredentialFloor admin callable writes `credentialFloor`. Never both in one write,
+      // and never any other field via this branch.
+      allow update: if isServerWrite() &&
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['credibility']) ||
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['credentialFloor']));
 
       // Owner can delete their own profile
       allow delete: if request.auth != null && request.auth.uid == userId;
@@ -761,7 +777,12 @@ service cloud.firestore {
         request.resource.data.isActive == true &&
         request.resource.data.severity in [1, 2, 3] &&
         request.resource.data.culpability in [0, 1, 2, 3, 4, 5] &&
-        request.resource.data.createdAt is timestamp;
+        request.resource.data.createdAt is timestamp &&
+        // recordScoreAtCreation is the ValidationWeight baseline — a dispute can only ever be
+        // filed as pending; the server decides validated/unvalidated later, once, after the
+        // evaluation window elapses (see the update rule below).
+        request.resource.data.recordScoreAtCreation is number &&
+        request.resource.data.validationWeight == 0;
 
       // Only the original disputer can modify their dispute
       allow update: if request.auth != null &&
@@ -770,7 +791,26 @@ service cloud.firestore {
         request.resource.data.disputerId == resource.data.disputerId &&
         request.resource.data.recordId == resource.data.recordId &&
         request.resource.data.recordHash == resource.data.recordHash &&
-        request.resource.data.createdAt == resource.data.createdAt;
+        request.resource.data.createdAt == resource.data.createdAt &&
+        (
+          // Normal modify (severity/culpability) or retraction — validation state and the
+          // score baseline stay exactly as they were; the disputer cannot touch either.
+          (request.resource.data.validationWeight == resource.data.validationWeight &&
+           request.resource.data.recordScoreAtCreation == resource.data.recordScoreAtCreation) ||
+          // Reactivation after retraction — functionally a fresh filing: fresh baseline,
+          // validation resets to pending.
+          (resource.data.isActive == false &&
+           request.resource.data.isActive == true &&
+           request.resource.data.validationWeight == 0)
+        );
+
+      // Server-only: the batch UserCredibility computation evaluates ValidationWeight once the
+      // fixed evaluation window has elapsed and freezes the result — validationWeight can only
+      // move off pending (0), and only that one field may change. Never touched again after.
+      allow update: if isServerWrite() &&
+        resource.data.validationWeight == 0 &&
+        request.resource.data.validationWeight in [-1, 1] &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['validationWeight']);
 
       // DELETE: Not allowed - use isActive flag instead
       allow delete: if false;

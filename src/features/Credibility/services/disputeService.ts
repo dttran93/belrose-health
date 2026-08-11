@@ -20,7 +20,12 @@ import { RecordDecryptionService } from '@/features/Encryption/services/recordDe
 import { blockchainHealthRecordService } from './blockchainHealthRecordService';
 import { arrayBufferToBase64, base64ToArrayBuffer } from '@/utils/dataFormattingUtils';
 import { getVerificationId } from './verificationService';
-import { onDisputeCreated, onDisputeModified, onDisputeRevoked } from './credibilityScoreService';
+import {
+  onDisputeCreated,
+  onDisputeModified,
+  onDisputeRevoked,
+  INITIAL_SCORE,
+} from './credibilityScoreService';
 import { BlockchainSyncQueueService } from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
 import {
   DisputeCulpability,
@@ -268,6 +273,20 @@ export async function getDisputesByRecordId(
 }
 
 /**
+ * Fetches all disputes filed BY a given user, across every record — this is D(u) from the
+ * whitepaper's DisputeAccuracy(u) formula. No orderBy (avoids needing a composite index);
+ * callers wanting the full set can sort client-side if needed.
+ *
+ * @param userId - The disputer's user ID
+ */
+export async function getDisputesByUserId(userId: string): Promise<DisputeDoc[]> {
+  const db = getFirestore();
+  const q = query(collection(db, 'disputes'), where('disputerId', '==', userId));
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map(d => ({ id: d.id, ...d.data() }) as DisputeDoc);
+}
+
+/**
  * Fetches disputes with version information.
  *
  * @param recordId - The record ID
@@ -321,6 +340,12 @@ export async function createDispute(
   if (!recordSnap.exists()) {
     throw new Error('Record not found.');
   }
+
+  // Snapshot the record's current credibility score — the "before" baseline that
+  // ValidationWeight compares against once the evaluation window elapses. Falls back to
+  // INITIAL_SCORE for records with no verification/dispute activity yet (credibility field
+  // not written until the first scoreEvent).
+  const recordScoreAtCreation: number = recordSnap.data()?.credibility?.score ?? INITIAL_SCORE;
 
   // CHECK 2: Ensure there isn't already an existing active dispute
   const disputeId = getDisputeId(recordHash, disputerId);
@@ -402,6 +427,9 @@ export async function createDispute(
   try {
     const disputedEvent = { action: 'disputed' as const, at: Timestamp.now(), blockchainRef };
     if (existing.exists()) {
+      // Reactivating a previously-retracted/failed dispute is functionally a fresh filing —
+      // reset the score baseline and validation state to as-of-now rather than carrying
+      // forward a stale snapshot/outcome from the earlier (already-inactive) filing.
       await updateDoc(docRef, {
         severity,
         culpability,
@@ -412,6 +440,8 @@ export async function createDispute(
         onChainHistory: arrayUnion(disputedEvent),
         error: null,
         lastModified: Timestamp.now(),
+        recordScoreAtCreation,
+        validationWeight: 0,
       });
       console.log('✅ Firestore: Dispute reactivated');
     } else {
@@ -428,6 +458,8 @@ export async function createDispute(
         createdAt: Timestamp.now(),
         chainStatus: 'confirmed',
         onChainHistory: [disputedEvent],
+        recordScoreAtCreation,
+        validationWeight: 0,
         ...(titleData ?? {}),
       });
       console.log('✅ Firestore: Dispute created');
