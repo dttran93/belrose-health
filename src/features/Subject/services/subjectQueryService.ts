@@ -22,7 +22,6 @@ import {
   getFirestore,
   query,
   QueryDocumentSnapshot,
-  Timestamp,
   where,
 } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
@@ -31,7 +30,12 @@ import {
   RemovalRequestStatus,
   getRemovalRequestId,
 } from './subjectRemovalService';
-import { RejectionReasons, SubjectConsentRequest, SubjectRequestStatus } from '@belrose/shared';
+import {
+  RejectionReasons,
+  SubjectConsentRequest,
+  SubjectRequestStatus,
+  TimestampLike,
+} from '@belrose/shared';
 
 // ============================================================================
 // TYPES
@@ -43,7 +47,7 @@ export interface IncomingSubjectRequest {
   recordTitle?: string;
   requestedBy: string;
   requestedSubjectRole: 'sharer' | 'administrator' | 'owner';
-  requestedAt: Timestamp;
+  requestedAt: TimestampLike;
   status: SubjectRequestStatus;
 }
 
@@ -53,7 +57,7 @@ export interface IncomingRemovalRequest {
   recordTitle?: string;
   requestedBy: string;
   reason?: string;
-  requestedAt: Timestamp;
+  requestedAt: TimestampLike;
   status: RemovalRequestStatus;
 }
 
@@ -61,14 +65,14 @@ export interface PendingRejectionResponse {
   recordId: string;
   subjectId: string;
   subjectName?: string;
-  rejectedAt: Timestamp;
+  rejectedAt: TimestampLike;
   reason: RejectionReasons;
   recordTitle?: string;
 }
 
 export interface PendingRemovalRequest {
   recordId: string;
-  requestedAt: Timestamp;
+  requestedAt: TimestampLike;
   requestedBy: string;
   reason?: string;
   recordTitle?: string;
