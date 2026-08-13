@@ -12,7 +12,7 @@
  * in the collapsed header for fulfilled/denied status display.
  */
 
-import { formatTimestamp } from '@/utils/dataFormattingUtils';
+import { formatTimestamp, getDaysUntil } from '@/utils/dataFormattingUtils';
 import {
   Ban,
   CheckCircle2,
@@ -25,14 +25,7 @@ import {
   Upload,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
-import {
-  doc,
-  getFirestore,
-  increment,
-  serverTimestamp,
-  Timestamp,
-  updateDoc,
-} from 'firebase/firestore';
+import { doc, getFirestore, increment, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { RequestNoteService } from '../../services/requestNoteService';
 import { useEffect, useState } from 'react';
 import { RequestNote } from '../Request/NewRequestForm';
@@ -48,11 +41,6 @@ interface InboundRequestCardProps {
   /** Immediately marks the request complete without opening the modal */
   onMarkComplete: (request: RecordRequest) => void;
   onViewRecord: (recordIds: string[]) => void;
-}
-
-function getDaysUntil(ts: Timestamp): number {
-  const ms = ts.toMillis() - Date.now();
-  return Math.ceil(ms / (1000 * 60 * 60 * 24));
 }
 
 // Status badge for terminal states

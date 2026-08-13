@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/Button';
 import { FileObject } from '@/types/core';
 import HealthRecordMenu from '@/features/ViewEditRecord/components/View/RecordMenu';
 import { RecordIdentifiersPopover } from '@/features/ViewEditRecord/components/View/RecordIdentifiersPopover';
-import { CredibilityBadge } from '@/features/Credibility/components/ui/CredibilityBadge';
+import { CredibilityBadge } from '@/features/CredibilityRecord/components/ui/CredibilityBadge';
 import { formatTimestamp } from '@/utils/dataFormattingUtils';
 import SubjectBadge from '@/features/Subject/components/SubjectBadge';
 import FollowUpBadge from '@/features/RecordFollowUp/components/ui/FollowUpBadge';

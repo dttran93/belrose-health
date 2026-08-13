@@ -5,8 +5,7 @@ import { collection, getDocs, orderBy, query, limit, getFirestore } from 'fireba
 import { getMemberContract } from '../lib/contracts';
 import type { IntegrityStatus } from '../lib/types';
 import type { FileObject } from '@/types/core';
-import type { BlockchainRef, PermissionChangeEvent } from '@belrose/shared';
-import type { Timestamp } from 'firebase/firestore';
+import type { BlockchainRef, PermissionChangeEvent, TimestampLike } from '@belrose/shared';
 
 // ============================================================================
 // TYPES
@@ -25,7 +24,7 @@ export interface PermissionMemberComparison {
   onChainRole: string | null;
   syncStatus: PermSyncStatus;
   lastBlockchainRef?: BlockchainRef;
-  lastChangedAt?: Timestamp | null;
+  lastChangedAt?: TimestampLike | null;
 }
 
 export interface RecordPermissionIntegrityItem {
@@ -115,7 +114,7 @@ export async function checkRecordPermissionsIntegrity(
     // History is already desc by changedAt — first hit per user is the most recent
     const lastTxMap = new Map<
       string,
-      { blockchainRef: BlockchainRef; changedAt: Timestamp | null }
+      { blockchainRef: BlockchainRef; changedAt: TimestampLike | null }
     >();
     for (const event of recentHistory) {
       for (const userId of event.affectedUserIds ?? []) {

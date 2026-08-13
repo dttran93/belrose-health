@@ -21,7 +21,7 @@
 import { FileObject } from '@/types/core';
 import React, { useEffect, useState } from 'react';
 import { FollowUpItem, FollowUpItemId } from '../components/ui/FollowUpItems';
-import { useReviewedByCurrentUser } from '@/features/Credibility/hooks/useReviewedByCurrentUser';
+import { useReviewedByCurrentUser } from '@/features/CredibilityRecord/hooks/useReviewedByCurrentUser';
 import { LinkIcon, ShieldCheck, User, UserX } from 'lucide-react';
 import { useInboundRequests } from '@/features/RequestRecord/hooks/useInboundRequests';
 import useAuth from '@/features/Auth/hooks/useAuth';

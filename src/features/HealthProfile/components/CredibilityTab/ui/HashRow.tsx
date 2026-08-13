@@ -1,6 +1,6 @@
 //src/features/HealthProfile/components/CredibilityTab/ui/HashRow.tsx
 
-import { DisputeDocDecrypted } from '@/features/Credibility/services/disputeService';
+import { DisputeDocDecrypted } from '@/features/CredibilityRecord/services/disputeService';
 import { UserBadge } from '@/features/Users/components/ui/UserBadge';
 import VersionReviewBadge from '@/features/ViewEditRecord/components/Edit/VersionReviewBadge';
 import { VerificationDoc } from '@belrose/shared';

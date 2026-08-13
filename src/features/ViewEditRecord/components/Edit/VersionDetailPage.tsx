@@ -20,21 +20,21 @@ import { useAuth } from '@/features/Auth/hooks/useAuth';
 import { getUserProfiles } from '@/features/Users/services/userProfileService';
 
 // Verification imports
-import { getVerificationsByRecordId } from '@/features/Credibility/services/verificationService';
-import VerificationDetailModal from '@/features/Credibility/components/Verifications/VerificationDetailModal';
-import VerificationUserCard from '@/features/Credibility/components/Verifications/VerificationUserCard';
+import { getVerificationsByRecordId } from '@/features/CredibilityRecord/services/verificationService';
+import VerificationDetailModal from '@/features/CredibilityRecord/components/Verifications/VerificationDetailModal';
+import VerificationUserCard from '@/features/CredibilityRecord/components/Verifications/VerificationUserCard';
 
 // Dispute imports
 import {
   getDisputesByRecordId,
   DisputeDocDecrypted,
-} from '@/features/Credibility/services/disputeService';
-import DisputeDetailModal from '@/features/Credibility/components/Disputes/DisputeDetailModal';
-import DisputeUserCard from '@/features/Credibility/components/Disputes/DisputeUserCard';
+} from '@/features/CredibilityRecord/services/disputeService';
+import DisputeDetailModal from '@/features/CredibilityRecord/components/Disputes/DisputeDetailModal';
+import DisputeUserCard from '@/features/CredibilityRecord/components/Disputes/DisputeUserCard';
 
 // Credibility flow hook for actions
-import { useCredibilityFlow } from '@/features/Credibility/hooks/useCredibilityFlow';
-import CredibilityActionDialog from '@/features/Credibility/components/ui/CredibilityActionDialog';
+import { useCredibilityFlow } from '@/features/CredibilityRecord/hooks/useCredibilityFlow';
+import CredibilityActionDialog from '@/features/CredibilityRecord/components/ui/CredibilityActionDialog';
 import { formatTimestamp } from '@/utils/dataFormattingUtils';
 import { VerificationDoc } from '@belrose/shared';
 

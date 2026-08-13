@@ -462,7 +462,7 @@ export const updateFirestoreRecord = async (
     // hash has no scoreEvents yet, so this recompute naturally resolves to INITIAL_SCORE.
     try {
       const { updateRecordScore } =
-        await import('@/features/Credibility/services/credibilityScoreService');
+        await import('@/features/CredibilityRecord/services/credibilityScoreService');
       await updateRecordScore(documentId, newRecordHash);
       console.log('✅ Credibility score reset for new version');
     } catch (credibilityError) {

@@ -54,7 +54,7 @@ import NetworkPreparingContent from '@/features/BlockchainWallet/components/Netw
 import RequesterSuggestions from '@/features/RequestRecord/components/ui/RequesterSuggestions';
 import { OnChainSubmittedContent } from '@/features/OnChainActivityTray/components/OnChainSubmittedModal';
 import { RejectionReasons, VerificationLevelOptions } from '@belrose/shared';
-import { VERIFICATION_OPTIONS } from '@/features/Credibility/services/verificationService';
+import { VERIFICATION_OPTIONS } from '@/features/CredibilityRecord/services/verificationService';
 
 // ============================================================================
 // TYPES

@@ -44,11 +44,11 @@ import { WalletService } from '@/features/BlockchainWallet/services/walletServic
 import {
   blockchainHealthRecordService,
   VerificationLevel,
-} from '@/features/Credibility/services/blockchainHealthRecordService';
+} from '@/features/CredibilityRecord/services/blockchainHealthRecordService';
 import {
   createVerification,
   recordSelfVerification,
-} from '@/features/Credibility/services/verificationService';
+} from '@/features/CredibilityRecord/services/verificationService';
 import { SubjectRejectionService } from './subjectRejectionService';
 import { getConsentRequestId, SubjectConsentService } from './subjectConsentService';
 import SubjectPermissionService from './subjectPermissionService';

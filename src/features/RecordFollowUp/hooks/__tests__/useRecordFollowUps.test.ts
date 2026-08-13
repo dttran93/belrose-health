@@ -30,7 +30,7 @@ const {
 
 vi.mock('@/features/Auth/hooks/useAuth', () => ({ default: useAuthMock }));
 
-vi.mock('@/features/Credibility/hooks/useReviewedByCurrentUser', () => ({
+vi.mock('@/features/CredibilityRecord/hooks/useReviewedByCurrentUser', () => ({
   useReviewedByCurrentUser: useReviewedByCurrentUserMock,
 }));
 
