@@ -236,6 +236,20 @@ export const formatRelativeTime = (timestamp: any): string => {
 };
 
 /**
+ * Number of whole days between now and the given timestamp (ceil, so "in 3.2 days" reads as
+ * "4 days" remaining — matches how a deadline countdown should round). Negative once the
+ * timestamp has passed. Accepts any format toDate() understands (Firestore Timestamp,
+ * TimestampLike, Date, ISO string, Unix ms/seconds). Returns 0 for a null/unparseable timestamp —
+ * a safe default that reads as "due now" rather than silently hiding a malformed deadline.
+ */
+export const getDaysUntil = (timestamp: any): number => {
+  const date = toDate(timestamp);
+  if (!date) return 0;
+  const ms = date.getTime() - Date.now();
+  return Math.ceil(ms / (1000 * 60 * 60 * 24));
+};
+
+/**
  * Formats a Date as a local YYYY-MM-DD string for `<input type="date">` values.
  * Unlike `date.toISOString().split('T')[0]`, this uses local time components,
  * so it won't shift to the previous/next day for users off UTC.
