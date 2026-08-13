@@ -185,7 +185,7 @@ describe('firestore.rules — disputes — modify (disputer changes severity/cul
     );
   });
 
-  it('denies the disputer rewriting recordScoreAtCreation on a plain modify (no isActive transition)', async () => {
+  it('denies the disputer rewriting recordScoreAtCreation on a plain modify', async () => {
     const recordId = 'disputes-modify-fake-baseline-denied';
     await seedRecord(recordId);
     await seedDispute(recordId);
@@ -199,7 +199,7 @@ describe('firestore.rules — disputes — modify (disputer changes severity/cul
     );
   });
 
-  it('lets the disputer reactivate a retracted dispute with a fresh baseline and reset-to-pending validation', async () => {
+  it('lets the disputer reactivate a retracted dispute while leaving the baseline/validation untouched', async () => {
     const recordId = 'disputes-reactivate-allowed';
     await seedRecord(recordId);
     await seedDispute(recordId, { isActive: false });
@@ -209,7 +209,23 @@ describe('firestore.rules — disputes — modify (disputer changes severity/cul
         .authenticatedContext(SHARER)
         .firestore()
         .doc(`disputes/${disputeId(RECORD_HASH, SHARER)}`)
-        .update({ isActive: true, recordScoreAtCreation: 620, validationWeight: 0 })
+        .update({ isActive: true })
+    );
+  });
+
+  it('denies reactivation that also tries to reset recordScoreAtCreation to a fresh baseline', async () => {
+    // The exact gaming vector this immutability guards against: a disputer picking a favorable
+    // comparison baseline by choosing *when* to reactivate.
+    const recordId = 'disputes-reactivate-fresh-baseline-denied';
+    await seedRecord(recordId);
+    await seedDispute(recordId, { isActive: false });
+
+    await assertFails(
+      testEnv
+        .authenticatedContext(SHARER)
+        .firestore()
+        .doc(`disputes/${disputeId(RECORD_HASH, SHARER)}`)
+        .update({ isActive: true, recordScoreAtCreation: 620 })
     );
   });
 

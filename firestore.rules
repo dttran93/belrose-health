@@ -787,22 +787,17 @@ service cloud.firestore {
       // Only the original disputer can modify their dispute
       allow update: if request.auth != null &&
         resource.data.disputerId == request.auth.uid &&
-        // Immutable fields - cannot be changed
+        // Immutable fields - cannot be changed. recordScoreAtCreation/validationWeight are
+        // included here (not just for a plain modify, but also across retract/reactivate) —
+        // letting a disputer reset either on reactivation would let them pick a favorable
+        // ValidationWeight comparison baseline by choosing *when* to reactivate. A stale
+        // baseline on a reactivated dispute is fine and ungameable.
         request.resource.data.disputerId == resource.data.disputerId &&
         request.resource.data.recordId == resource.data.recordId &&
         request.resource.data.recordHash == resource.data.recordHash &&
         request.resource.data.createdAt == resource.data.createdAt &&
-        (
-          // Normal modify (severity/culpability) or retraction — validation state and the
-          // score baseline stay exactly as they were; the disputer cannot touch either.
-          (request.resource.data.validationWeight == resource.data.validationWeight &&
-           request.resource.data.recordScoreAtCreation == resource.data.recordScoreAtCreation) ||
-          // Reactivation after retraction — functionally a fresh filing: fresh baseline,
-          // validation resets to pending.
-          (resource.data.isActive == false &&
-           request.resource.data.isActive == true &&
-           request.resource.data.validationWeight == 0)
-        );
+        request.resource.data.recordScoreAtCreation == resource.data.recordScoreAtCreation &&
+        request.resource.data.validationWeight == resource.data.validationWeight;
 
       // Server-only: the batch UserCredibility computation evaluates ValidationWeight once the
       // fixed evaluation window has elapsed and freezes the result — validationWeight can only

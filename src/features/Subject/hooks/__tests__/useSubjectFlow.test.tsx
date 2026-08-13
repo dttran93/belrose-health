@@ -66,7 +66,7 @@ vi.mock('@/features/Trustee/services/trusteeRelationshipService', () => ({
   },
 }));
 
-vi.mock('@/features/Credibility/services/credibilityPreparationService', () => ({
+vi.mock('@/features/CredibilityRecord/services/credibilityPreparationService', () => ({
   CredibilityPreparationService: {
     prepare: vi.fn(),
   },
