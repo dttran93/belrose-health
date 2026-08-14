@@ -110,8 +110,14 @@ export type SyncContext =
       newSeverity: DisputeSeverityOptions;
       newCulpability: DisputeCulpability;
     }
-  | { type: 'flagUnacceptedUpdate'; recordId: string; recordHash: string; disputeId: string }
-  | { type: 'resolveUnacceptedUpdate'; recordId: string; recordHash: string; disputeId: string }
+  | {
+      type: 'flagUnacceptedUpdate';
+      recordId: string;
+      recordHash: string;
+      subjectId: string;
+      reporterId: string;
+    }
+  | { type: 'revokeUnacceptedFlag'; recordId: string; subjectId: string }
   | {
       type: 'trustee-propose';
       trustorId: string;

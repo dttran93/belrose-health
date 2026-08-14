@@ -10,6 +10,10 @@ if (!admin.apps.length) {
 export { setPlatformAdmin } from './handlers/setAdminClaim';
 export { setCredentialFloor } from './handlers/setCredentialFloor';
 
+// ==================== USER CREDIBILITY BATCH ====================
+export { runUserCredibilityBatch, recomputeUserCredibility } from './handlers/userCredibilityBatch';
+export { flagUnacceptedUpdate, revokeUnacceptedFlag } from './handlers/unacceptedFlags';
+
 // ==================== IMAGE ANALYSIS FUNCTIONS ====================
 export { analyzeImageWithAI } from './handlers/image';
 

@@ -40,11 +40,17 @@ import {
 import { getAuth } from 'firebase/auth';
 import type { VerificationLevel } from './verificationService';
 import type { DisputeSeverity } from './disputeService';
-import { BlockchainRef, DisputeCulpability, INITIAL_SCORE, SCORE_BOUNDS } from '@belrose/shared';
+import {
+  BlockchainRef,
+  DisputeCulpability,
+  INITIAL_SCORE,
+  SCORE_BOUNDS,
+  clampScore,
+} from '@belrose/shared';
 
-// Re-exported for existing importers — INITIAL_SCORE/SCORE_BOUNDS now live in @belrose/shared
-// (single source of truth) since the User Credibility batch computation in functions/ needs them
-// too and cannot import from src/.
+// Re-exported for existing importers — INITIAL_SCORE/SCORE_BOUNDS/clampScore now live in
+// @belrose/shared (single source of truth) since the User Credibility batch computation in
+// functions/ needs them too and cannot import from src/.
 export { INITIAL_SCORE, SCORE_BOUNDS };
 
 // ==================== TYPES ====================
@@ -112,10 +118,6 @@ export const CULPABILITY_MULTIPLIERS: Record<DisputeCulpability, number> = {
 };
 
 // ==================== HELPER FUNCTIONS ====================
-
-function clampScore(score: number): number {
-  return Math.max(SCORE_BOUNDS.MIN, Math.min(SCORE_BOUNDS.MAX, Math.round(score)));
-}
 
 function getVerificationDelta(level: VerificationLevel): number {
   return VERIFICATION_DELTAS[level] ?? 0;

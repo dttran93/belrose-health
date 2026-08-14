@@ -153,6 +153,11 @@ export const UserCredibilityBreakdown: React.FC<UserCredibilityBreakdownProps> =
           hint="Deduction from disputes against records you've verified"
         />
         <ComponentRow
+          label="Unaccepted records penalty"
+          value={-credibility.components.unacceptedRecordsPenalty}
+          hint="Deduction for records flagged as refused when a provider requested anchoring"
+        />
+        <ComponentRow
           label="Credential floor"
           value={credibility.components.credentialFloor}
           hint="Minimum from verified professional credentials, if any"

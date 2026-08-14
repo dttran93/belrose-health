@@ -713,8 +713,8 @@ export class blockchainHealthRecordService {
 
   // ==========================================================================
   // UNACCEPTED UPDATE FLAGS - VIEW FUNCTIONS
-  // Note: Write functions (flagUnacceptedUpdate, resolveUnacceptedUpdate)
-  // are admin-only and handled by Cloud Functions
+  // Note: Write functions (flagUnacceptedUpdate, revokeUnacceptedFlag) are admin-only and
+  // handled by Cloud Functions — see functions/src/handlers/unacceptedFlags.ts.
   // ==========================================================================
 
   /** Get all flags for a subject */

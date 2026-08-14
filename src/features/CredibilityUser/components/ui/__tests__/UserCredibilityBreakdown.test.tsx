@@ -16,6 +16,7 @@ function makeCredibility(overrides: Partial<UserCredibilityScore> = {}): UserCre
       avgRecordCredibility: 700,
       disputeAccuracy: null,
       culpabilityPenalty: 0,
+      unacceptedRecordsPenalty: 0,
       credentialFloor: 0,
     },
     vouchPropagated: 70,
@@ -49,6 +50,7 @@ describe('UserCredibilityBreakdown', () => {
             avgRecordCredibility: null,
             disputeAccuracy: null,
             culpabilityPenalty: 0,
+            unacceptedRecordsPenalty: 0,
             credentialFloor: 0,
           },
         })}
@@ -66,12 +68,30 @@ describe('UserCredibilityBreakdown', () => {
             avgRecordCredibility: 600,
             disputeAccuracy: null,
             culpabilityPenalty: 150,
+            unacceptedRecordsPenalty: 0,
             credentialFloor: 0,
           },
         })}
       />
     );
     expect(screen.getByText('-150')).toBeInTheDocument();
+  });
+
+  it('renders the unaccepted records penalty as a negative deduction', () => {
+    render(
+      <UserCredibilityBreakdown
+        credibility={makeCredibility({
+          components: {
+            avgRecordCredibility: 600,
+            disputeAccuracy: null,
+            culpabilityPenalty: 0,
+            unacceptedRecordsPenalty: 250,
+            credentialFloor: 0,
+          },
+        })}
+      />
+    );
+    expect(screen.getByText('-250')).toBeInTheDocument();
   });
 
   it('labels a low score as Poor', () => {
