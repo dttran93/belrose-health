@@ -850,6 +850,33 @@ service cloud.firestore {
     }
 
     // ============================================
+    // UNACCEPTED RECORD FLAGS
+    // ============================================
+
+    match /unacceptedFlags/{flagId} {
+      // READ: Any authenticated user — same "public trust signal" precedent as vouches. A
+      // role-scoped rule (like disputes) would hide the signal exactly when it matters most:
+      // a provider seeing this patient for the first time has no role on any of their records
+      // yet, which is precisely the moment this flag is meant to inform their judgement.
+      allow read: if request.auth != null;
+
+      // WRITE: Admin-SDK-only in practice — flagUnacceptedUpdate/revokeUnacceptedFlag use the
+      // platform's own admin wallet + Admin SDK, which bypasses rules entirely. This branch is
+      // defense-in-depth only, mirroring users/{uid}.credibility's isServerWrite() gate.
+      allow create: if isServerWrite() &&
+        flagId == request.resource.data.subjectId + '_' + request.resource.data.recordId &&
+        request.resource.data.isActive == true &&
+        request.resource.data.createdAt is timestamp &&
+        request.resource.data.chainStatus in ['pending', 'confirmed', 'failed'];
+
+      allow update: if isServerWrite();
+
+      // DELETE: Not allowed — permanent audit trail, mirrors vouches and the contract's own
+      // flag-then-revoke (never delete) semantics.
+      allow delete: if false;
+    }
+
+    // ============================================
     // RECORD DELETION EVENTS
     // ============================================
 
