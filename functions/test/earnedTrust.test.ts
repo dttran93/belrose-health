@@ -27,6 +27,7 @@ function makeVerification(overrides: Partial<VerificationDoc> = {}): Verificatio
     chainStatus: 'confirmed',
     onChainHistory: [],
     encryptedRecordTitleIv: '',
+    normalizedCredibilityAtCreation: 1.0,
     ...overrides,
   };
 }
@@ -48,6 +49,7 @@ function makeDispute(overrides: Partial<DisputeDoc> = {}): DisputeDoc {
     onChainHistory: [],
     recordScoreAtCreation: 500,
     validationWeight: 0,
+    normalizedCredibilityAtCreation: 1.0,
     ...overrides,
   };
 }

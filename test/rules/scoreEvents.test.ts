@@ -44,7 +44,7 @@ function validEvent(overrides: Record<string, unknown> = {}) {
     recordId: 'placeholder', // callers should override to match the seeded recordId
     recordHash: '0xhash',
     eventType: 'verification',
-    scoreDelta: 50,
+    contributionDelta: 50,
     createdBy: SHARER,
     createdAt: new Date(),
     ...overrides,
@@ -104,8 +104,8 @@ describe('firestore.rules — scoreEvents subcollection', () => {
     );
   });
 
-  it('denies create with a non-numeric scoreDelta', async () => {
-    const recordId = 'score-events-create-bad-scoredelta-denied';
+  it('denies create with a non-numeric contributionDelta', async () => {
+    const recordId = 'score-events-create-bad-contributiondelta-denied';
     await seedRecord(recordId);
 
     await assertFails(
@@ -113,7 +113,7 @@ describe('firestore.rules — scoreEvents subcollection', () => {
         .authenticatedContext(SHARER)
         .firestore()
         .doc(`records/${recordId}/scoreEvents/event-1`)
-        .set(validEvent({ recordId, createdBy: SHARER, scoreDelta: 'fifty' }))
+        .set(validEvent({ recordId, createdBy: SHARER, contributionDelta: 'fifty' }))
     );
   });
 
@@ -180,7 +180,7 @@ describe('firestore.rules — scoreEvents subcollection', () => {
         .authenticatedContext(SHARER)
         .firestore()
         .doc(`records/${recordId}/scoreEvents/event-1`)
-        .update({ scoreDelta: 999 })
+        .update({ contributionDelta: 999 })
     );
   });
 });

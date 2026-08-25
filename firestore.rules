@@ -113,6 +113,22 @@ service cloud.firestore {
     }
 
     // ============================================
+    // NETWORK-WIDE CREDIBILITY STATS
+    // ============================================
+
+    // First non-per-resource-ID doc in this schema — always exactly one doc, id 'global'.
+    // Written wholesale by the UserCredibility batch cycle (see CredibilityStatsDoc's doc
+    // comment in packages/shared/src/credibility.ts). Read by any authenticated client, since
+    // computing NormalizedCredibility for a new verification/dispute happens client-side.
+    match /credibilityStats/{statId} {
+      allow read: if request.auth != null;
+
+      // Single-purpose doc, wholly owned by the batch cycle — no other writer, no other fields
+      // to protect, so (unlike users/{uid}.credibility) no field-diffing is needed.
+      allow write: if isServerWrite();
+    }
+
+    // ============================================
     // USER PROFILES/NOTIFICATIONS/CHATS
     // ============================================
 
@@ -505,7 +521,7 @@ service cloud.firestore {
             'dispute_revoked',
             'dispute_modified'
           ] &&
-          request.resource.data.scoreDelta is number &&
+          request.resource.data.contributionDelta is number &&
           request.resource.data.createdAt is timestamp;
 
         allow update: if false; // Immutable audit trail
@@ -733,16 +749,24 @@ service cloud.firestore {
         // Validate required fields
         request.resource.data.isActive == true &&
         request.resource.data.level in [1, 2, 3] &&
-        request.resource.data.createdAt is timestamp;
+        request.resource.data.createdAt is timestamp &&
+        // NormalizedCredibility(verifier), frozen at creation — see the field's doc comment
+        // in packages/shared/src/credibility.ts for why this must never be recomputed later.
+        request.resource.data.normalizedCredibilityAtCreation is number;
 
       // Only the original verifier can modify their verification
       allow update: if request.auth != null &&
         resource.data.verifierId == request.auth.uid &&
-        // Immutable fields - cannot be changed
+        // Immutable fields - cannot be changed. normalizedCredibilityAtCreation is included
+        // here (not just for a plain modify, but also across retract/reactivate) for the same
+        // anti-gaming reason as disputes' recordScoreAtCreation/validationWeight below — letting
+        // it reset would let the verifier pick a more favorable weighting by choosing when to
+        // reactivate.
         request.resource.data.verifierId == resource.data.verifierId &&
         request.resource.data.recordId == resource.data.recordId &&
         request.resource.data.recordHash == resource.data.recordHash &&
-        request.resource.data.createdAt == resource.data.createdAt;
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.normalizedCredibilityAtCreation == resource.data.normalizedCredibilityAtCreation;
 
       // DELETE: Not allowed - use isActive flag instead
       allow delete: if false;
@@ -782,22 +806,27 @@ service cloud.firestore {
         // filed as pending; the server decides validated/unvalidated later, once, after the
         // evaluation window elapses (see the update rule below).
         request.resource.data.recordScoreAtCreation is number &&
-        request.resource.data.validationWeight == 0;
+        request.resource.data.validationWeight == 0 &&
+        // NormalizedCredibility(disputer), frozen at creation — same rationale as verifications'
+        // field above.
+        request.resource.data.normalizedCredibilityAtCreation is number;
 
       // Only the original disputer can modify their dispute
       allow update: if request.auth != null &&
         resource.data.disputerId == request.auth.uid &&
-        // Immutable fields - cannot be changed. recordScoreAtCreation/validationWeight are
-        // included here (not just for a plain modify, but also across retract/reactivate) —
-        // letting a disputer reset either on reactivation would let them pick a favorable
-        // ValidationWeight comparison baseline by choosing *when* to reactivate. A stale
-        // baseline on a reactivated dispute is fine and ungameable.
+        // Immutable fields - cannot be changed. recordScoreAtCreation/validationWeight/
+        // normalizedCredibilityAtCreation are included here (not just for a plain modify, but
+        // also across retract/reactivate) — letting a disputer reset any of these on
+        // reactivation would let them pick a favorable comparison/weighting baseline by
+        // choosing *when* to reactivate. A stale baseline on a reactivated dispute is fine and
+        // ungameable.
         request.resource.data.disputerId == resource.data.disputerId &&
         request.resource.data.recordId == resource.data.recordId &&
         request.resource.data.recordHash == resource.data.recordHash &&
         request.resource.data.createdAt == resource.data.createdAt &&
         request.resource.data.recordScoreAtCreation == resource.data.recordScoreAtCreation &&
-        request.resource.data.validationWeight == resource.data.validationWeight;
+        request.resource.data.validationWeight == resource.data.validationWeight &&
+        request.resource.data.normalizedCredibilityAtCreation == resource.data.normalizedCredibilityAtCreation;
 
       // Server-only: the batch UserCredibility computation evaluates ValidationWeight once the
       // fixed evaluation window has elapsed and freezes the result — validationWeight can only

@@ -11,7 +11,7 @@ import * as admin from 'firebase-admin';
 import { Timestamp } from 'firebase-admin/firestore';
 import { clearFirestore } from './helpers/testAdmin';
 import { runUserCredibilityCycle } from '../src/credibility/userCredibilityBatchService';
-import { INITIAL_SCORE } from '../src/_shared';
+import type { ScoreEventType } from '../src/_shared';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -40,7 +40,12 @@ async function seedRecord(
     });
 }
 
-async function seedScoreEvent(recordId: string, recordHash: string, scoreDelta: number) {
+async function seedScoreEvent(
+  recordId: string,
+  recordHash: string,
+  eventType: ScoreEventType,
+  contributionDelta: number
+) {
   await admin
     .firestore()
     .collection('records')
@@ -50,8 +55,8 @@ async function seedScoreEvent(recordId: string, recordHash: string, scoreDelta: 
     .set({
       recordId,
       recordHash,
-      eventType: 'verification',
-      scoreDelta,
+      eventType,
+      contributionDelta,
       createdBy: 'someone',
       createdAt: Timestamp.now(),
     });
@@ -181,11 +186,12 @@ describe('runUserCredibilityCycle — ValidationWeight evaluation', () => {
 
   it('validates a dispute past its window when the record score declined since filing', async () => {
     await seedUser('disputer-1');
-    await seedRecord('record-1', 'hash-1', 300); // now lower than at filing
+    await seedRecord('record-1', 'hash-1', 500); // cached value unused by the replay itself
     const filedAt = Timestamp.fromMillis(Date.now() - 91 * DAY_MS);
     await seedDispute('disputer-1', 'record-1', 'hash-1', 500, filedAt);
-    // Score replay for hash-1 must reflect the CURRENT score: seed a scoreEvent bringing it there.
-    await seedScoreEvent('record-1', 'hash-1', 300 - INITIAL_SCORE);
+    // Score replay for hash-1 must reflect the CURRENT evidence: a dispute event pulls the
+    // Bayesian-average score below the 500 BasePrior baseline recordScoreAtCreation was set at.
+    await seedScoreEvent('record-1', 'hash-1', 'dispute', 300);
 
     await runUserCredibilityCycle(admin.firestore());
 
@@ -195,10 +201,12 @@ describe('runUserCredibilityCycle — ValidationWeight evaluation', () => {
 
   it('unvalidates a dispute past its window when the record score increased since filing', async () => {
     await seedUser('disputer-1');
-    await seedRecord('record-1', 'hash-1', 700);
+    await seedRecord('record-1', 'hash-1', 500); // cached value unused by the replay itself
     const filedAt = Timestamp.fromMillis(Date.now() - 91 * DAY_MS);
     await seedDispute('disputer-1', 'record-1', 'hash-1', 500, filedAt);
-    await seedScoreEvent('record-1', 'hash-1', 700 - INITIAL_SCORE);
+    // A verification event with a weight above BasePrior raises the Bayesian-average score
+    // above the 500 baseline recordScoreAtCreation was set at.
+    await seedScoreEvent('record-1', 'hash-1', 'verification', 950);
 
     await runUserCredibilityCycle(admin.firestore());
 
@@ -278,6 +286,31 @@ describe('runUserCredibilityCycle — UnacceptedRecordsPenalty write-back', () =
 
     const user = await admin.firestore().collection('users').doc('subject-1').get();
     expect(user.data()!.credibility.components.unacceptedRecordsPenalty).toBe(0);
+  });
+});
+
+describe('runUserCredibilityCycle — AvgUserCredibility write-back', () => {
+  it('writes credibilityStats/global as the mean of every scored user', async () => {
+    await seedUser('user-1'); // EarnedTrust 0, no evidence
+    await seedUser('user-2'); // EarnedTrust 0, no evidence
+
+    await runUserCredibilityCycle(admin.firestore());
+
+    const stats = await admin.firestore().collection('credibilityStats').doc('global').get();
+    expect(stats.exists).toBe(true);
+    expect(stats.data()!.scoredUserCount).toBe(2);
+    // Both users score identically (no evidence, no vouches) — mean == that shared score.
+    const user1 = await admin.firestore().collection('users').doc('user-1').get();
+    expect(stats.data()!.avgUserCredibility).toBeCloseTo(user1.data()!.credibility.score, 5);
+  });
+
+  it('writes a literal 0/0 (not omitted) when there are no users yet', async () => {
+    await runUserCredibilityCycle(admin.firestore());
+
+    const stats = await admin.firestore().collection('credibilityStats').doc('global').get();
+    expect(stats.exists).toBe(true);
+    expect(stats.data()!.avgUserCredibility).toBe(0);
+    expect(stats.data()!.scoredUserCount).toBe(0);
   });
 });
 

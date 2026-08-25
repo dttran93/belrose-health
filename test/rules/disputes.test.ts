@@ -62,6 +62,7 @@ function validDispute(recordId: string, overrides: Record<string, unknown> = {})
     onChainHistory: [],
     recordScoreAtCreation: 500,
     validationWeight: 0,
+    normalizedCredibilityAtCreation: 1.0,
     ...overrides,
   };
 }
@@ -116,6 +117,19 @@ describe('firestore.rules — disputes — create', () => {
         .firestore()
         .doc(`disputes/${disputeId(RECORD_HASH, SHARER)}`)
         .set(validDispute(recordId, { recordScoreAtCreation: 'five-hundred' }))
+    );
+  });
+
+  it('denies create with a non-numeric normalizedCredibilityAtCreation', async () => {
+    const recordId = 'disputes-create-bad-normalized-credibility-denied';
+    await seedRecord(recordId);
+
+    await assertFails(
+      testEnv
+        .authenticatedContext(SHARER)
+        .firestore()
+        .doc(`disputes/${disputeId(RECORD_HASH, SHARER)}`)
+        .set(validDispute(recordId, { normalizedCredibilityAtCreation: 'one-point-oh' }))
     );
   });
 
@@ -226,6 +240,34 @@ describe('firestore.rules — disputes — modify (disputer changes severity/cul
         .firestore()
         .doc(`disputes/${disputeId(RECORD_HASH, SHARER)}`)
         .update({ isActive: true, recordScoreAtCreation: 620 })
+    );
+  });
+
+  it('denies the disputer rewriting normalizedCredibilityAtCreation on a plain modify', async () => {
+    const recordId = 'disputes-modify-fake-normalized-credibility-denied';
+    await seedRecord(recordId);
+    await seedDispute(recordId);
+
+    await assertFails(
+      testEnv
+        .authenticatedContext(SHARER)
+        .firestore()
+        .doc(`disputes/${disputeId(RECORD_HASH, SHARER)}`)
+        .update({ normalizedCredibilityAtCreation: 5.0 })
+    );
+  });
+
+  it('denies reactivation that also tries to reset normalizedCredibilityAtCreation — same timing-gaming vector as recordScoreAtCreation', async () => {
+    const recordId = 'disputes-reactivate-fresh-normalized-credibility-denied';
+    await seedRecord(recordId);
+    await seedDispute(recordId, { isActive: false });
+
+    await assertFails(
+      testEnv
+        .authenticatedContext(SHARER)
+        .firestore()
+        .doc(`disputes/${disputeId(RECORD_HASH, SHARER)}`)
+        .update({ isActive: true, normalizedCredibilityAtCreation: 5.0 })
     );
   });
 
