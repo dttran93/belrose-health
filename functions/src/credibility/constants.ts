@@ -35,9 +35,12 @@ export const DEFAULT_CREDENTIAL_FLOOR = 0;
 // =========================================================
 
 // EarnedTrust's dispute-facing weights — distinct from record-credibility's
-// DISPUTE_SEVERITY_PENALTIES / CULPABILITY_MULTIPLIERS (src/features/CredibilityRecord's
-// credibilityScoreService.ts). Those move a RECORD's score; these move a USER's own EarnedTrust
-// via DisputeAccuracy(u)/CulpabilityPenalty(u), on the same 0-1000 scale
+// RECORD_DISPUTE_SEVERITY_WEIGHTS (packages/shared/src/credibility.ts, used by
+// src/features/CredibilityRecord's credibilityScoreService.ts). Those move a RECORD's score
+// (severity only, per the whitepaper — culpability plays no part there); these move a USER's own
+// EarnedTrust via DisputeAccuracy(u)/CulpabilityPenalty(u), on the same 0-1000 scale. Same name
+// pattern, same-looking Record<severity/culpability, number> shape, genuinely different
+// constants — do not conflate or try to merge them.
 export const DISPUTE_SEVERITY_WEIGHTS: Record<DisputeSeverityOptions, number> = {
   1: 50, // Negligible
   2: 150, // Moderate

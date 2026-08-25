@@ -45,6 +45,7 @@ export interface EarnedTrustResult {
   credentialFloor: number;
 }
 
+// Edge is a graph theory terminology for a directed connection between two nodes. Nodes are the users. The direction is voucher --> vouchee.
 export interface VouchEdge {
   voucherId: string;
   voucheeId: string;
