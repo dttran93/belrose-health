@@ -60,14 +60,13 @@ export const RECORD_SCORE_C = 5;
  * (500), not added to a running total — so a weight has to sit ABOVE BasePrior to raise the
  * score at all; a weight below BasePrior would dilute the average DOWN even for a genuine,
  * positive verification (the same reason a single low-value rating drags down an IMDB-style
- * weighted average). Semantics: VerificationLevel(v) is what an infinite stream of same-level,
- * average-credibility verifications would converge the score toward with no disputes present —
- * e.g. 3 ("Full") verifications alone should drive a record close to the top of the scale.
- * 0 stands for "no verification" (a lookup fallback, never a real on-chain level; deliberately
- * kept below BasePrior — an eventType this function is never actually called with in practice).
- * Named RECORD_* (not VERIFICATION_WEIGHTS) to stay distinct from anything USER-credibility-
- * scoped that might be added to functions/src/credibility/constants.ts later. Magnitudes are
- * placeholders, tuning-pending like every other constant in this system (RECORD_SCORE_C,
+ * weighted average).
+ *
+ * For example: imagine base prior 500, C=5, and a single verification of weight 500. The score would go from
+ * 500 (5*500/5) to 500 (5*500 + 500)/6 = 500. No change, despite a verification. So the weights must start above
+ * 500 to have a positive effect.
+ *
+ * Magnitudes are placeholders, tuning-pending like every other constant in this system (RECORD_SCORE_C,
  * VOUCH_MIXING_WEIGHT, etc.) — only the ABOVE-BasePrior ordering is load-bearing, not these
  * exact numbers.
  */

@@ -33,8 +33,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getStripeSessionStatus = exports.createStripeVerificationSession = exports.refineRecord = exports.checkEmailRegistrationStatus = exports.aiChat = exports.getSponsorshipStatus = exports.signSponsorship = exports.onRecordRequestUpdated = exports.onRecordRequestCreated = exports.onTrusteeRelationshipUpdated = exports.onTrusteeRelationshipCreated = exports.onDisputeUpdated = exports.onDisputeWritten = exports.onVerificationUpdated = exports.onVerificationWritten = exports.onPermissionChangeEventCreated = exports.onSubjectConsentRequestUpdated = exports.onSubjectConsentRequestCreated = exports.onRecordDeletionEventCreated = exports.onRecordVersionCreated = exports.initializeRoleOnChainForRequester = exports.initializeRoleOnChain = exports.reactivateWalletOnChain = exports.deactivateWalletOnChain = exports.updateMemberStatus = exports.registerMemberOnChainComplete = exports.registerMemberOnChain = exports.healthDetailed = exports.health = exports.guestPasswordUpdate = exports.createRecordRequest = exports.redeemGuestInvite = exports.createGuestInvite = exports.initiateHandoff = exports.claimDependentAccount = exports.switchToGuardian = exports.switchToDependent = exports.createDependentAccount = exports.deleteOwnAccount = exports.addToMailingList = exports.sendPasswordChangeEmail = exports.sendWaitlistConfirmationEmail = exports.sendAlphaApprovalEmail = exports.sendShareInvitationEmail = exports.getEncryptedWallet = exports.createEOAWallet = exports.createBelroseFields = exports.convertToFHIR = exports.analyzeImageWithAI = exports.setPlatformAdmin = void 0;
-exports.stripeIdentityWebhook = void 0;
+exports.getSponsorshipStatus = exports.signSponsorship = exports.onRecordRequestUpdated = exports.onRecordRequestCreated = exports.onTrusteeRelationshipUpdated = exports.onTrusteeRelationshipCreated = exports.onDisputeUpdated = exports.onDisputeWritten = exports.onVerificationUpdated = exports.onVerificationWritten = exports.onPermissionChangeEventCreated = exports.onSubjectConsentRequestUpdated = exports.onSubjectConsentRequestCreated = exports.onRecordDeletionEventCreated = exports.onRecordVersionCreated = exports.initializeRoleOnChainForRequester = exports.initializeRoleOnChain = exports.reactivateWalletOnChain = exports.deactivateWalletOnChain = exports.updateMemberStatus = exports.registerMemberOnChainComplete = exports.registerMemberOnChain = exports.healthDetailed = exports.health = exports.guestPasswordUpdate = exports.createRecordRequest = exports.redeemGuestInvite = exports.createGuestInvite = exports.initiateHandoff = exports.claimDependentAccount = exports.switchToGuardian = exports.switchToDependent = exports.createDependentAccount = exports.deleteOwnAccount = exports.addToMailingList = exports.sendPasswordChangeEmail = exports.sendWaitlistConfirmationEmail = exports.sendAlphaApprovalEmail = exports.sendShareInvitationEmail = exports.getEncryptedWallet = exports.createEOAWallet = exports.createBelroseFields = exports.convertToFHIR = exports.analyzeImageWithAI = exports.revokeUnacceptedFlag = exports.flagUnacceptedUpdate = exports.recomputeUserCredibility = exports.runUserCredibilityBatch = exports.setCredentialFloor = exports.setPlatformAdmin = void 0;
+exports.stripeIdentityWebhook = exports.getStripeSessionStatus = exports.createStripeVerificationSession = exports.refineRecord = exports.checkEmailRegistrationStatus = exports.aiChat = void 0;
 // functions/src/index.ts
 const admin = __importStar(require("firebase-admin"));
 // Initialize Firebase Admin
@@ -44,6 +44,15 @@ if (!admin.apps.length) {
 // ==================== ADMIN FUNCTIONS ====================
 var setAdminClaim_1 = require("./handlers/setAdminClaim");
 Object.defineProperty(exports, "setPlatformAdmin", { enumerable: true, get: function () { return setAdminClaim_1.setPlatformAdmin; } });
+var setCredentialFloor_1 = require("./handlers/setCredentialFloor");
+Object.defineProperty(exports, "setCredentialFloor", { enumerable: true, get: function () { return setCredentialFloor_1.setCredentialFloor; } });
+// ==================== USER CREDIBILITY BATCH ====================
+var userCredibilityBatch_1 = require("./handlers/userCredibilityBatch");
+Object.defineProperty(exports, "runUserCredibilityBatch", { enumerable: true, get: function () { return userCredibilityBatch_1.runUserCredibilityBatch; } });
+Object.defineProperty(exports, "recomputeUserCredibility", { enumerable: true, get: function () { return userCredibilityBatch_1.recomputeUserCredibility; } });
+var unacceptedFlags_1 = require("./handlers/unacceptedFlags");
+Object.defineProperty(exports, "flagUnacceptedUpdate", { enumerable: true, get: function () { return unacceptedFlags_1.flagUnacceptedUpdate; } });
+Object.defineProperty(exports, "revokeUnacceptedFlag", { enumerable: true, get: function () { return unacceptedFlags_1.revokeUnacceptedFlag; } });
 // ==================== IMAGE ANALYSIS FUNCTIONS ====================
 var image_1 = require("./handlers/image");
 Object.defineProperty(exports, "analyzeImageWithAI", { enumerable: true, get: function () { return image_1.analyzeImageWithAI; } });
