@@ -102,8 +102,25 @@ export async function runUserCredibilityCycle(db: Firestore = getFirestore()): P
     await batch.commit();
   }
 
+  // AvgUserCredibility — the denominator of NormalizedCredibility(u), computed once per cycle
+  // over the same inputs.users set fetchEarnedTrustInputs already scoped "all users" to (no
+  // activity/suspension concept exists elsewhere in this codebase to narrow "active" further).
+  // Written as a literal 0/0 rather than omitted when there are no users yet, so readers never
+  // need an !exists() branch — see CredibilityStatsDoc's doc comment.
+  const avgUserCredibility =
+    inputs.users.length === 0
+      ? 0
+      : inputs.users.reduce((sum, user) => sum + propagationResults.get(user.uid)!.score, 0) /
+        inputs.users.length;
+
+  await db.collection('credibilityStats').doc('global').set({
+    avgUserCredibility,
+    scoredUserCount: inputs.users.length,
+    lastUpdated: now,
+  });
+
   console.log(
-    `✅ User Credibility cycle complete: ${disputesEvaluated} dispute(s) evaluated, ${usersUpdated} user(s) updated`
+    `✅ User Credibility cycle complete: ${disputesEvaluated} dispute(s) evaluated, ${usersUpdated} user(s) updated, AvgUserCredibility=${avgUserCredibility.toFixed(2)}`
   );
 
   return { disputesEvaluated, usersUpdated };
