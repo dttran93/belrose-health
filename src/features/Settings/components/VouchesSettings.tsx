@@ -5,7 +5,7 @@ import { useLocation } from 'react-router';
 import {
   VouchManagement,
   VouchManagementInitialTarget,
-} from '@/features/Credibility/components/Vouches/VouchManagement';
+} from '@/features/CredibilityUser/components/Vouches/VouchManagement';
 
 const VouchesSettings = () => {
   const auth = getAuth();

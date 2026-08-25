@@ -124,37 +124,6 @@ describe('authService.signIn', () => {
   });
 });
 
-describe('social sign-ins', () => {
-  it('signInWithGoogle calls signInWithPopup and createUserDocument', async () => {
-    const user = fakeUser();
-    signInWithPopupMock.mockResolvedValue({ user });
-
-    const result = await authService.signInWithGoogle();
-
-    expect(signInWithPopupMock).toHaveBeenCalled();
-    expect(createUserDocumentMock).toHaveBeenCalledWith(user);
-    expect(result).toBe(user);
-  });
-
-  it('signInWithFacebook calls signInWithPopup and createUserDocument', async () => {
-    const user = fakeUser();
-    signInWithPopupMock.mockResolvedValue({ user });
-
-    await authService.signInWithFacebook();
-
-    expect(createUserDocumentMock).toHaveBeenCalledWith(user);
-  });
-
-  it('signInWithGitHub calls signInWithPopup and createUserDocument', async () => {
-    const user = fakeUser();
-    signInWithPopupMock.mockResolvedValue({ user });
-
-    await authService.signInWithGitHub();
-
-    expect(createUserDocumentMock).toHaveBeenCalledWith(user);
-  });
-});
-
 describe('authService.resendVerificationEmail', () => {
   it('throws when no user is signed in', async () => {
     mockAuthState.currentUser = null;

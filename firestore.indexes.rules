@@ -1,6 +1,20 @@
 {
   "indexes": [
     {
+      "collectionGroup": "disputes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "validationWeight",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
       "collectionGroup": "conversations",
       "queryScope": "COLLECTION",
       "fields": [
@@ -129,44 +143,6 @@
         {
           "fieldPath": "__name__",
           "order": "DESCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
-    },
-    {
-      "collectionGroup": "recordVersions",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "recordId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "versionNumber",
-          "order": "DESCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "DESCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
-    },
-    {
-      "collectionGroup": "scoreEvents",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "recordId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "createdAt",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "ASCENDING"
         }
       ],
       "density": "SPARSE_ALL"

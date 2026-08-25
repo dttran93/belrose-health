@@ -5,7 +5,7 @@ exports.onRecordVersionCreated = void 0;
 /**
  * Record Edit Notification Trigger
  *
- * Watches recordVersions for new documents and notifies stakeholders.
+ * Watches records/{recordId}/versionHistory for new documents and notifies stakeholders.
  *
  * Who gets notified:
  *   - Owners (it's their record)
@@ -43,7 +43,8 @@ function getNotificationTargets(record, editedBy) {
 // ============================================================================
 // TRIGGER: NEW VERSION CREATED
 // ============================================================================
-exports.onRecordVersionCreated = (0, firestore_1.onDocumentCreated)({ document: 'recordVersions/{versionId}', secrets: [resendKey] }, async (event) => {
+exports.onRecordVersionCreated = (0, firestore_1.onDocumentCreated)({ document: 'records/{recordId}/versionHistory/{versionId}', secrets: [resendKey] }, async (event) => {
+    const recordId = event.params.recordId;
     const versionId = event.params.versionId;
     const data = event.data?.data();
     if (!data) {
@@ -52,14 +53,14 @@ exports.onRecordVersionCreated = (0, firestore_1.onDocumentCreated)({ document: 
     }
     // Skip version 0 — it's an auto-created baseline, not a real edit
     if (data.versionNumber === 0) {
-        console.log(`ℹ️ Version 0 baseline created for record ${data.recordId}, skipping notification`);
+        console.log(`ℹ️ Version 0 baseline created for record ${recordId}, skipping notification`);
         return;
     }
-    console.log(`📝 Version ${data.versionNumber} created for record ${data.recordId}`);
+    console.log(`📝 Version ${data.versionNumber} created for record ${recordId}`);
     // Fetch the record to get owners and subjects
-    const recordSnap = await (0, firestore_2.getFirestore)().collection('records').doc(data.recordId).get();
+    const recordSnap = await (0, firestore_2.getFirestore)().collection('records').doc(recordId).get();
     if (!recordSnap.exists) {
-        console.log(`⚠️ Record ${data.recordId} not found, skipping notification`);
+        console.log(`⚠️ Record ${recordId} not found, skipping notification`);
         return;
     }
     const record = recordSnap.data();
@@ -71,14 +72,14 @@ exports.onRecordVersionCreated = (0, firestore_1.onDocumentCreated)({ document: 
     const editorName = data.editedByName ?? (await (0, notificationUtils_1.getUserDisplayName)(data.editedBy));
     // Record name: we store encryptedFileName so fall back to a generic label
     // The notification links through to the record so users can see full details
-    const recordName = `Record ${data.recordId.slice(0, 8)}...`;
+    const recordName = `Record ${recordId.slice(0, 8)}...`;
     // In-app notifications
     await (0, notificationUtils_1.createNotificationForMultiple)(targets, {
         type: 'RECORD_EDITED',
         message: `${editorName} made changes to ${recordName} (version ${data.versionNumber}).`,
-        link: `/app/records/${data.recordId}`,
+        link: `/app/records/${recordId}`,
         payload: {
-            recordId: data.recordId,
+            recordId,
             versionId,
             versionNumber: data.versionNumber,
             editedBy: data.editedBy,
@@ -90,8 +91,8 @@ exports.onRecordVersionCreated = (0, firestore_1.onDocumentCreated)({ document: 
     const resend = new resend_1.Resend(resendKey.value());
     await Promise.all(targets.map(uid => (0, emailUtils_1.sendEmailIfEnabled)(uid, 'RECORD_EDITED', {
         subject: `${editorName} edited a record you're connected to`,
-        html: (0, recordEditEmailTemplate_1.buildRecordEditedHtml)(editorName, recordName, data.recordId, data.versionNumber),
-        text: (0, recordEditEmailTemplate_1.buildRecordEditedText)(editorName, recordName, data.recordId, data.versionNumber),
+        html: (0, recordEditEmailTemplate_1.buildRecordEditedHtml)(editorName, recordName, recordId, data.versionNumber),
+        text: (0, recordEditEmailTemplate_1.buildRecordEditedText)(editorName, recordName, recordId, data.versionNumber),
     }, resend)));
     console.log(`✅ Edit notifications sent to ${targets.length} stakeholder(s)`);
 });

@@ -1,4 +1,4 @@
-import { BelroseFields, BlockchainRef, NotificationPrefs } from '@belrose/shared';
+import { BelroseFields, BlockchainRef, NotificationPrefs, UserCredibilityScore } from '@belrose/shared';
 import { Timestamp } from 'firebase/firestore';
 import { ReactNode } from 'react';
 
@@ -39,7 +39,13 @@ export interface BelroseUserProfile extends User {
   identityVerifiedAt?: Timestamp | null;
   healthcareProviderVerified?: boolean; //if Belrose has verified they are a certified healthcare provider
   healthcareProviderVerifiedAt?: Timestamp; //if Belrose has verified they are a certified healthcare provider
-  credibility?: CredibilityScore;
+  // Fully server-computed by the batch UserCredibility job — richer than records' CredibilityScore
+  // since it carries the EarnedTrust breakdown, not just the final score. Never client-written.
+  credibility?: UserCredibilityScore;
+  // Admin-set input to EarnedTrust's CredentialFloor term (whitepaper's pre-trusted set). Separate
+  // from `credibility` (a rarely-changing input vs. a wholesale-overwritten computed output) —
+  // settable only via the setCredentialFloor admin callable, never by the user themselves.
+  credentialFloor?: number;
   isGuest?: boolean; //For guest accounts
   isPlatformAdmin?: boolean; // For platform admin privileges
   isDependent?: boolean; // Account created by a guardian on behalf of someone else

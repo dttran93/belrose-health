@@ -3,21 +3,21 @@
 import {
   DisputeDocDecrypted,
   getDisputesByRecordId,
-} from '@/features/Credibility/services/disputeService';
-import { getVerificationsByRecordId } from '@/features/Credibility/services/verificationService';
+} from '@/features/CredibilityRecord/services/disputeService';
+import { getVerificationsByRecordId } from '@/features/CredibilityRecord/services/verificationService';
 import { RecordCompletenessResult } from '@/features/HealthProfile/hooks/useBlockchainCompleteness';
 import { getUserProfiles } from '@/features/Users/services/userProfileService';
 import { AlertTriangle, ChevronDown, Shield } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import HashRow from './HashRow';
 import { BelroseUserProfile } from '@/types/core';
-import VerificationUserCard from '@/features/Credibility/components/Verifications/VerificationUserCard';
-import VerificationDetailModal from '@/features/Credibility/components/Verifications/VerificationDetailModal';
+import VerificationUserCard from '@/features/CredibilityRecord/components/Verifications/VerificationUserCard';
+import VerificationDetailModal from '@/features/CredibilityRecord/components/Verifications/VerificationDetailModal';
 import useAuth from '@/features/Auth/hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
-import DisputeUserCard from '@/features/Credibility/components/Disputes/DisputeUserCard';
-import DisputeDetailModal from '@/features/Credibility/components/Disputes/DisputeDetailModal';
-import CredibilityBadge from '@/features/Credibility/components/ui/CredibilityBadge';
+import DisputeUserCard from '@/features/CredibilityRecord/components/Disputes/DisputeUserCard';
+import DisputeDetailModal from '@/features/CredibilityRecord/components/Disputes/DisputeDetailModal';
+import CredibilityBadge from '@/features/CredibilityRecord/components/ui/CredibilityBadge';
 import { VerificationDoc } from '@belrose/shared';
 
 type SectionTab = 'hashes' | 'verifications' | 'disputes';

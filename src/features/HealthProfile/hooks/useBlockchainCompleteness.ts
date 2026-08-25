@@ -26,9 +26,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ethers } from 'ethers';
 import { FileObject } from '@/types/core';
-import { blockchainHealthRecordService } from '@/features/Credibility/services/blockchainHealthRecordService';
+import { blockchainHealthRecordService } from '@/features/CredibilityRecord/services/blockchainHealthRecordService';
 import { RecordHashService } from '@/features/ViewEditRecord/services/generateRecordHash';
 import { BlockchainRoleManagerService } from '@/features/Permissions/services/blockchainRoleManagerService';
 

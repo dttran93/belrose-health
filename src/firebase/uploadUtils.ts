@@ -456,6 +456,18 @@ export const updateFirestoreRecord = async (
     console.log('🔍 FINAL DATA BEING SENT TO FIRESTORE:', removeUndefinedValues(filteredData));
     await updateDoc(docRef, removeUndefinedValues(filteredData));
     console.log('✅ Firestore record updated successfully');
+
+    // 10. Reset the cached credibility score for the new hash — content changed, so prior
+    // verifications/disputes no longer speak to what's actually in the record now. The new
+    // hash has no scoreEvents yet, so this recompute naturally resolves to INITIAL_SCORE.
+    try {
+      const { updateRecordScore } =
+        await import('@/features/CredibilityRecord/services/credibilityScoreService');
+      await updateRecordScore(documentId, newRecordHash);
+      console.log('✅ Credibility score reset for new version');
+    } catch (credibilityError) {
+      console.warn('⚠️ Failed to reset credibility score for new version:', credibilityError);
+    }
   } catch (error: any) {
     console.error('❌ Error updating Firestore record:', error);
     throw new Error(`Failed to update record: ${error.message}`);
@@ -527,9 +539,7 @@ export async function deleteRecordVersions(documentId: string): Promise<void> {
   try {
     console.log('🗑️ Deleting all versions for document:', documentId);
 
-    const q = query(collection(db, 'recordVersions'), where('recordId', '==', documentId));
-
-    const snapshot = await getDocs(q);
+    const snapshot = await getDocs(collection(db, 'records', documentId, 'versionHistory'));
     const deletePromises = snapshot.docs.map(doc => deleteDoc(doc.ref));
     await Promise.all(deletePromises);
 

@@ -113,6 +113,22 @@ service cloud.firestore {
     }
 
     // ============================================
+    // NETWORK-WIDE CREDIBILITY STATS
+    // ============================================
+
+    // First non-per-resource-ID doc in this schema — always exactly one doc, id 'global'.
+    // Written wholesale by the UserCredibility batch cycle (see CredibilityStatsDoc's doc
+    // comment in packages/shared/src/credibility.ts). Read by any authenticated client, since
+    // computing NormalizedCredibility for a new verification/dispute happens client-side.
+    match /credibilityStats/{statId} {
+      allow read: if request.auth != null;
+
+      // Single-purpose doc, wholly owned by the batch cycle — no other writer, no other fields
+      // to protect, so (unlike users/{uid}.credibility) no field-diffing is needed.
+      allow write: if isServerWrite();
+    }
+
+    // ============================================
     // USER PROFILES/NOTIFICATIONS/CHATS
     // ============================================
 
@@ -120,15 +136,31 @@ service cloud.firestore {
       // Any authenticated user can read profiles (needed for sharing/search)
       allow read: if request.auth != null;
 
-      // Owner can create their own profile, but cannot self-assign platform admin
+      // Owner can create their own profile, but cannot self-assign platform admin, a
+      // credibility score, or a credentialFloor — all three are server-only.
       allow create: if request.auth != null &&
         request.auth.uid == userId &&
-        request.resource.data.get('isPlatformAdmin', false) != true;
+        request.resource.data.get('isPlatformAdmin', false) != true &&
+        !('credibility' in request.resource.data) &&
+        !('credentialFloor' in request.resource.data);
 
-      // Owner can update their own profile, but cannot change isPlatformAdmin
+      // Owner can update their own profile, but cannot change isPlatformAdmin, credibility, or
+      // credentialFloor — credibility is a global batch computation (unlike records, where any
+      // role-holder can write the cached score client-side — see records/{recordId} BRANCH 4),
+      // and credentialFloor is an admin-curated input (see setCredentialFloor callable). Both
+      // are server-only writes, handled by the next allow update block below.
       allow update: if request.auth != null &&
         request.auth.uid == userId &&
-        request.resource.data.get('isPlatformAdmin', false) == resource.data.get('isPlatformAdmin', false);
+        request.resource.data.get('isPlatformAdmin', false) == resource.data.get('isPlatformAdmin', false) &&
+        request.resource.data.get('credibility', null) == resource.data.get('credibility', null) &&
+        request.resource.data.get('credentialFloor', null) == resource.data.get('credentialFloor', null);
+
+      // Server-only: the UserCredibility batch job writes `credibility` wholesale each cycle;
+      // the setCredentialFloor admin callable writes `credentialFloor`. Never both in one write,
+      // and never any other field via this branch.
+      allow update: if isServerWrite() &&
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['credibility']) ||
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['credentialFloor']));
 
       // Owner can delete their own profile
       allow delete: if request.auth != null && request.auth.uid == userId;
@@ -465,42 +497,73 @@ service cloud.firestore {
 
         allow delete: if false;
       }
+
+      // --- SCORE EVENTS SUBCOLLECTION (Credibility Audit Trail) ---
+      // Parallel to permissionHistory/subjectHistory above — an append-only ledger of
+      // verification/dispute events behind this record's cached credibility.score. Nested
+      // under the record (rather than a top-level collection keyed by a recordId field) since
+      // every read/write is already scoped to exactly one record; recordId is available
+      // straight from the parent match here instead of needing a resource.data lookup.
+      match /scoreEvents/{eventId} {
+        // Read: platform admins or any user with a role on this record
+        allow read: if request.auth != null && (isPlatformAdmin() || hasRoleOnRecord(recordId));
+
+        // Create: must have a role and must be the one recording the event
+        allow create: if request.auth != null &&
+          hasRoleOnRecord(recordId) &&
+          request.resource.data.createdBy == request.auth.uid &&
+          request.resource.data.recordHash != null &&
+          request.resource.data.eventType in [
+            'verification',
+            'verification_revoked',
+            'verification_modified',
+            'dispute',
+            'dispute_revoked',
+            'dispute_modified'
+          ] &&
+          request.resource.data.contributionDelta is number &&
+          request.resource.data.createdAt is timestamp;
+
+        allow update: if false; // Immutable audit trail
+        allow delete: if false; // Immutable audit trail
+      }
+
+      // --- VERSION HISTORY SUBCOLLECTION ---
+      // Parallel to scoreEvents above — nested under the record since every read/write is
+      // already scoped to exactly one record; recordId comes straight from the parent match
+      // instead of a resource.data lookup. Migrated from the former top-level `recordVersions`
+      // collection — see migrateRecordVersionsToSubcollection.ts.
+      match /versionHistory/{versionId} {
+        allow read: if request.auth != null && hasRoleOnRecord(recordId);
+
+        allow create: if request.auth != null &&
+          isAdminOrOwnerOfRecord(recordId) && (
+            // Path A: Strict Baseline Validation (Version 0)
+            (
+              request.resource.data.versionNumber == 0 &&
+              request.resource.data.encryptedChanges == null &&
+              request.resource.data.commitMessage == 'Original Upload (auto-created baseline)'
+            ) ||
+            // Path B: Standard Edit Validation (Version 1+)
+            (
+              request.resource.data.versionNumber > 0 &&
+              request.resource.data.editedBy == request.auth.uid
+            )
+          );
+
+        allow update: if false; // Versions are immutable
+
+        // No per-entry owner field on a baseline (v0 never sets editedBy) — once the parent
+        // record is gone there's no identity left to check, so any authenticated user may
+        // clean up the orphan. recordId from the path still resolves correctly even when the
+        // parent records/{recordId} doc doesn't exist (subcollection paths don't require it).
+        allow delete: if request.auth != null && (
+          !exists(/databases/$(database)/documents/records/$(recordId)) ||
+          isAdminOrOwnerOfRecord(recordId)
+        );
+      }
     }
 
-    // ============================================
-    // RECORD VERSIONS
-    // ============================================
-
-    match /recordVersions/{versionId} {
-      allow read: if request.auth != null && hasRoleOnRecord(resource.data.recordId);
-
-    allow create: if request.auth != null && 
-      isAdminOrOwnerOfRecord(request.resource.data.recordId) && (
-        // Path A: Strict Baseline Validation (Version 0)
-        (
-          request.resource.data.versionNumber == 0 &&
-          request.resource.data.encryptedChanges == null &&
-          request.resource.data.commitMessage == 'Original Upload (auto-created baseline)'
-        ) || 
-        
-        // Path B: Standard Edit Validation (Version 1+)
-        (
-          request.resource.data.versionNumber > 0 &&
-          request.resource.data.editedBy == request.auth.uid
-        )
-      );
-
-      allow update: if false; // Versions are immutable
-
-      // A version doc has no per-entry owner field (version 0 baselines never set editedBy),
-      // so once its record is gone there's no meaningful identity left to check — treat it as
-      // inert orphaned data any authenticated user may clean up, rather than permanently stuck.
-      allow delete: if request.auth != null && (
-        !exists(/databases/$(database)/documents/records/$(resource.data.recordId)) ||
-        isAdminOrOwnerOfRecord(resource.data.recordId)
-      );
-    }
-    
     // ============================================
     // SUBJECT CONSENT REQUESTS
     // ============================================
@@ -686,16 +749,24 @@ service cloud.firestore {
         // Validate required fields
         request.resource.data.isActive == true &&
         request.resource.data.level in [1, 2, 3] &&
-        request.resource.data.createdAt is timestamp;
+        request.resource.data.createdAt is timestamp &&
+        // NormalizedCredibility(verifier), frozen at creation — see the field's doc comment
+        // in packages/shared/src/credibility.ts for why this must never be recomputed later.
+        request.resource.data.normalizedCredibilityAtCreation is number;
 
       // Only the original verifier can modify their verification
       allow update: if request.auth != null &&
         resource.data.verifierId == request.auth.uid &&
-        // Immutable fields - cannot be changed
+        // Immutable fields - cannot be changed. normalizedCredibilityAtCreation is included
+        // here (not just for a plain modify, but also across retract/reactivate) for the same
+        // anti-gaming reason as disputes' recordScoreAtCreation/validationWeight below — letting
+        // it reset would let the verifier pick a more favorable weighting by choosing when to
+        // reactivate.
         request.resource.data.verifierId == resource.data.verifierId &&
         request.resource.data.recordId == resource.data.recordId &&
         request.resource.data.recordHash == resource.data.recordHash &&
-        request.resource.data.createdAt == resource.data.createdAt;
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.normalizedCredibilityAtCreation == resource.data.normalizedCredibilityAtCreation;
 
       // DELETE: Not allowed - use isActive flag instead
       allow delete: if false;
@@ -730,16 +801,40 @@ service cloud.firestore {
         request.resource.data.isActive == true &&
         request.resource.data.severity in [1, 2, 3] &&
         request.resource.data.culpability in [0, 1, 2, 3, 4, 5] &&
-        request.resource.data.createdAt is timestamp;
+        request.resource.data.createdAt is timestamp &&
+        // recordScoreAtCreation is the ValidationWeight baseline — a dispute can only ever be
+        // filed as pending; the server decides validated/unvalidated later, once, after the
+        // evaluation window elapses (see the update rule below).
+        request.resource.data.recordScoreAtCreation is number &&
+        request.resource.data.validationWeight == 0 &&
+        // NormalizedCredibility(disputer), frozen at creation — same rationale as verifications'
+        // field above.
+        request.resource.data.normalizedCredibilityAtCreation is number;
 
       // Only the original disputer can modify their dispute
       allow update: if request.auth != null &&
         resource.data.disputerId == request.auth.uid &&
-        // Immutable fields - cannot be changed
+        // Immutable fields - cannot be changed. recordScoreAtCreation/validationWeight/
+        // normalizedCredibilityAtCreation are included here (not just for a plain modify, but
+        // also across retract/reactivate) — letting a disputer reset any of these on
+        // reactivation would let them pick a favorable comparison/weighting baseline by
+        // choosing *when* to reactivate. A stale baseline on a reactivated dispute is fine and
+        // ungameable.
         request.resource.data.disputerId == resource.data.disputerId &&
         request.resource.data.recordId == resource.data.recordId &&
         request.resource.data.recordHash == resource.data.recordHash &&
-        request.resource.data.createdAt == resource.data.createdAt;
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.recordScoreAtCreation == resource.data.recordScoreAtCreation &&
+        request.resource.data.validationWeight == resource.data.validationWeight &&
+        request.resource.data.normalizedCredibilityAtCreation == resource.data.normalizedCredibilityAtCreation;
+
+      // Server-only: the batch UserCredibility computation evaluates ValidationWeight once the
+      // fixed evaluation window has elapsed and freezes the result — validationWeight can only
+      // move off pending (0), and only that one field may change. Never touched again after.
+      allow update: if isServerWrite() &&
+        resource.data.validationWeight == 0 &&
+        request.resource.data.validationWeight in [-1, 1] &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['validationWeight']);
 
       // DELETE: Not allowed - use isActive flag instead
       allow delete: if false;
@@ -784,42 +879,30 @@ service cloud.firestore {
     }
 
     // ============================================
-    // SCORE EVENTS (Credibility Audit Trail)
+    // UNACCEPTED RECORD FLAGS
     // ============================================
-    
-    match /scoreEvents/{eventId} {
-      // READ: Allow if user has a role on the associated record
-      // This allows users to see the credibility history for records they can access
-      allow read: if request.auth != null && (
-        !exists(/databases/$(database)/documents/scoreEvents/$(eventId)) ||
-        hasRoleOnRecord(resource.data.recordId)
-      );
 
-      // CREATE: User must:
-      // 1. Have a role on the record
-      // 2. Be the one creating the event (createdBy matches auth uid)
-      // 3. Document ID must start with recordId (format: recordId_timestamp)
-      // 4. Include required fields
-      allow create: if request.auth != null &&
-        hasRoleOnRecord(request.resource.data.recordId) &&
-        request.resource.data.createdBy == request.auth.uid &&
-        // Enforce document ID starts with recordId_
-        eventId.matches(request.resource.data.recordId + '_[0-9]+') &&
-        request.resource.data.recordId != null &&
-        request.resource.data.recordHash != null &&
-        request.resource.data.eventType in [
-          'verification', 
-          'verification_revoked', 
-          'verification_modified',
-          'dispute',
-          'dispute_revoked',
-          'dispute_modified'
-        ] &&
-        request.resource.data.scoreDelta is number &&
-        request.resource.data.createdAt is timestamp;
+    match /unacceptedFlags/{flagId} {
+      // READ: Any authenticated user — same "public trust signal" precedent as vouches. A
+      // role-scoped rule (like disputes) would hide the signal exactly when it matters most:
+      // a provider seeing this patient for the first time has no role on any of their records
+      // yet, which is precisely the moment this flag is meant to inform their judgement.
+      allow read: if request.auth != null;
 
-      allow update: if false; // Immutable audit trail
-      allow delete: if false; // Immutable audit trail
+      // WRITE: Admin-SDK-only in practice — flagUnacceptedUpdate/revokeUnacceptedFlag use the
+      // platform's own admin wallet + Admin SDK, which bypasses rules entirely. This branch is
+      // defense-in-depth only, mirroring users/{uid}.credibility's isServerWrite() gate.
+      allow create: if isServerWrite() &&
+        flagId == request.resource.data.subjectId + '_' + request.resource.data.recordId &&
+        request.resource.data.isActive == true &&
+        request.resource.data.createdAt is timestamp &&
+        request.resource.data.chainStatus in ['pending', 'confirmed', 'failed'];
+
+      allow update: if isServerWrite();
+
+      // DELETE: Not allowed — permanent audit trail, mirrors vouches and the contract's own
+      // flag-then-revoke (never delete) semantics.
+      allow delete: if false;
     }
 
     // ============================================

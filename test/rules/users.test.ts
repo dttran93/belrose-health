@@ -97,6 +97,57 @@ describe('firestore.rules — users — create', () => {
   });
 });
 
+describe('firestore.rules — users — credibility / credentialFloor (server-only fields)', () => {
+  it('denies the owner self-assigning a credibility score on create', async () => {
+    await assertFails(
+      testEnv
+        .authenticatedContext(OWNER)
+        .firestore()
+        .doc(userPath(OWNER))
+        .set(profilePayload({ credibility: { score: 999, lastUpdated: new Date() } }))
+    );
+  });
+
+  it('denies the owner self-assigning a credentialFloor on create', async () => {
+    await assertFails(
+      testEnv
+        .authenticatedContext(OWNER)
+        .firestore()
+        .doc(userPath(OWNER))
+        .set(profilePayload({ credentialFloor: 900 }))
+    );
+  });
+
+  it('denies the owner setting their own credibility via update', async () => {
+    await seedProfile(OWNER);
+    await assertFails(
+      testEnv
+        .authenticatedContext(OWNER)
+        .firestore()
+        .doc(userPath(OWNER))
+        .update({ credibility: { score: 999, lastUpdated: new Date() } })
+    );
+  });
+
+  it('denies the owner setting their own credentialFloor via update', async () => {
+    await seedProfile(OWNER);
+    await assertFails(
+      testEnv.authenticatedContext(OWNER).firestore().doc(userPath(OWNER)).update({ credentialFloor: 900 })
+    );
+  });
+
+  it('lets the owner update an unrelated field while an existing credibility score is left untouched', async () => {
+    await seedProfile(OWNER, { credibility: { score: 700, lastUpdated: new Date() } });
+    await assertSucceeds(
+      testEnv
+        .authenticatedContext(OWNER)
+        .firestore()
+        .doc(userPath(OWNER))
+        .update({ displayName: 'New Name' })
+    );
+  });
+});
+
 describe('firestore.rules — users — read', () => {
   it('lets any authenticated user read any profile', async () => {
     await seedProfile(OWNER);

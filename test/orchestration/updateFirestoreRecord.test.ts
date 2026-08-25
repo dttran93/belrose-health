@@ -171,37 +171,49 @@ describe('updateFirestoreRecord — guard clauses', () => {
 });
 
 describe('updateFirestoreRecord — creator happy path', () => {
-  it('re-encrypts only the changed field, regenerates the hash, and updates version history', async () => {
-    setCaller('creator-1');
-    const fileKey = await EncryptionService.generateFileKey();
-    const masterKey = await EncryptionKeyManager.generateMasterKey();
-    const { encryptedFileName: originalEncryptedFileName, encryptedExtractedText } =
-      await seedCreatorRecord('doc-1', 'creator-1', fileKey, masterKey, {
-        fileName: 'original.pdf',
-        extractedText: 'original extracted text',
-      });
-    EncryptionKeyManager.setSessionKey(masterKey);
+  // Custom timeout: real RSA/AES key gen + encrypt/decrypt + hashing, plus (since the
+  // credibility-reset step landed) an extra scoreEvents query + write — consistently the
+  // heaviest single test in this suite. Passes comfortably in isolation under the 20s default
+  // but occasionally exceeds it under the full orchestration suite's concurrent emulator load.
+  it(
+    're-encrypts only the changed field, regenerates the hash, and updates version history',
+    async () => {
+      setCaller('creator-1');
+      const fileKey = await EncryptionService.generateFileKey();
+      const masterKey = await EncryptionKeyManager.generateMasterKey();
+      const { encryptedFileName: originalEncryptedFileName, encryptedExtractedText } =
+        await seedCreatorRecord('doc-1', 'creator-1', fileKey, masterKey, {
+          fileName: 'original.pdf',
+          extractedText: 'original extracted text',
+        });
+      EncryptionKeyManager.setSessionKey(masterKey);
 
-    await updateFirestoreRecord('doc-1', { fileName: 'renamed.pdf' }, 'renamed the file');
+      await updateFirestoreRecord('doc-1', { fileName: 'renamed.pdf' }, 'renamed the file');
 
-    const updatedDoc = (await getDoc(doc(testDb, 'records', 'doc-1'))).data()!;
-    expect(updatedDoc.encryptedFileName).not.toEqual(originalEncryptedFileName);
-    expect(updatedDoc.recordHash).not.toBe('hash-original');
-    expect(updatedDoc.previousRecordHash).toEqual(['hash-original']);
-    expect(updatedDoc.versionNumber).toBe(1);
-    // Untouched field's ciphertext is preserved as-is (not re-encrypted).
-    expect(updatedDoc.encryptedExtractedText).toMatchObject(encryptedExtractedText);
+      const updatedDoc = (await getDoc(doc(testDb, 'records', 'doc-1'))).data()!;
+      expect(updatedDoc.encryptedFileName).not.toEqual(originalEncryptedFileName);
+      expect(updatedDoc.recordHash).not.toBe('hash-original');
+      expect(updatedDoc.previousRecordHash).toEqual(['hash-original']);
+      expect(updatedDoc.versionNumber).toBe(1);
+      // Untouched field's ciphertext is preserved as-is (not re-encrypted).
+      expect(updatedDoc.encryptedExtractedText).toMatchObject(encryptedExtractedText);
+      // New recordHash has no scoreEvents yet, so the cached credibility score resets to
+      // INITIAL_SCORE rather than carrying forward whatever the pre-edit hash had.
+      expect(updatedDoc.credibility?.score).toBe(500);
 
-    // Regression check for the encryptedUpdatedFileObject plaintext-fields fix: the object
-    // passed to createVersion must carry the actual plaintext for diffing, not just ciphertext.
-    expect(createVersionMock).toHaveBeenCalledTimes(1);
-    const [calledDocId, updatedFileObjectArg, recordTitle, commitMessage] = createVersionMock.mock.calls[0]!;
-    expect(calledDocId).toBe('doc-1');
-    expect(updatedFileObjectArg.fileName).toBe('renamed.pdf');
-    expect(updatedFileObjectArg.extractedText).toBe('original extracted text');
-    expect(recordTitle).toBe('renamed.pdf');
-    expect(commitMessage).toBe('renamed the file');
-  });
+      // Regression check for the encryptedUpdatedFileObject plaintext-fields fix: the object
+      // passed to createVersion must carry the actual plaintext for diffing, not just ciphertext.
+      expect(createVersionMock).toHaveBeenCalledTimes(1);
+      const [calledDocId, updatedFileObjectArg, recordTitle, commitMessage] =
+        createVersionMock.mock.calls[0]!;
+      expect(calledDocId).toBe('doc-1');
+      expect(updatedFileObjectArg.fileName).toBe('renamed.pdf');
+      expect(updatedFileObjectArg.extractedText).toBe('original extracted text');
+      expect(recordTitle).toBe('renamed.pdf');
+      expect(commitMessage).toBe('renamed the file');
+    },
+    45000
+  );
 });
 
 describe('updateFirestoreRecord — shared (non-creator) user', () => {

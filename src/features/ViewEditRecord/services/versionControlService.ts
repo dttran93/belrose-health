@@ -149,7 +149,7 @@ export class VersionControlService {
     const cleanedV0 = this.cleanUndefinedValues(version0);
 
     // Use setDoc with semantic ID instead of addDoc
-    await setDoc(doc(this.db, 'recordVersions', version0Id), cleanedV0);
+    await setDoc(doc(this.db, 'records', recordId, 'versionHistory', version0Id), cleanedV0);
     console.log(`🆕 Initial version 0 created with ID: ${version0Id}`);
     console.log('🆕 Continuing to Version 1...');
 
@@ -267,7 +267,7 @@ export class VersionControlService {
       const cleanedVersion = this.cleanUndefinedValues(version);
 
       // Use setDoc with semantic ID instead of addDoc
-      await setDoc(doc(this.db, 'recordVersions', newVersionId), cleanedVersion);
+      await setDoc(doc(this.db, 'records', recordId, 'versionHistory', newVersionId), cleanedVersion);
 
       console.log(`✅ Version ${versionNumber} created with ID: ${newVersionId}`);
       return newVersionId;
@@ -309,10 +309,9 @@ export class VersionControlService {
     }
 
     try {
-      // Query recordVersions collection
+      // Query the record's versionHistory subcollection
       let q = query(
-        collection(this.db, 'recordVersions'),
-        where('recordId', '==', recordId),
+        collection(this.db, 'records', recordId, 'versionHistory'),
         orderBy('versionNumber', 'desc')
       );
 
@@ -341,9 +340,9 @@ export class VersionControlService {
   /**
    * Get a specific version by ID
    */
-  async getVersion(versionId: string): Promise<RecordVersion | null> {
+  async getVersion(recordId: string, versionId: string): Promise<RecordVersion | null> {
     try {
-      const versionRef = doc(this.db, 'recordVersions', versionId);
+      const versionRef = doc(this.db, 'records', recordId, 'versionHistory', versionId);
       const versionSnap = await getDoc(versionRef);
 
       if (!versionSnap.exists()) {
@@ -445,7 +444,7 @@ export class VersionControlService {
 
     try {
       // Get the version
-      const version = await this.getVersion(versionId);
+      const version = await this.getVersion(recordId, versionId);
       if (!version) {
         throw new Error('Version not found');
       }
@@ -513,9 +512,7 @@ export class VersionControlService {
       console.log('🗑️ Deleting all versions for record:', recordId);
 
       // Get all versions
-      const q = query(collection(this.db, 'recordVersions'), where('recordId', '==', recordId));
-
-      const snapshot = await getDocs(q);
+      const snapshot = await getDocs(collection(this.db, 'records', recordId, 'versionHistory'));
 
       const deletePromises = snapshot.docs.map(doc => deleteDoc(doc.ref));
       await Promise.all(deletePromises);
@@ -535,8 +532,8 @@ export class VersionControlService {
     versionId1: string,
     versionId2: string
   ): Promise<VersionDiff> {
-    const version1 = await this.getVersion(versionId1);
-    const version2 = await this.getVersion(versionId2);
+    const version1 = await this.getVersion(recordId, versionId1);
+    const version2 = await this.getVersion(recordId, versionId2);
 
     if (!version1 || !version2) {
       throw new Error('One or both versions not found');

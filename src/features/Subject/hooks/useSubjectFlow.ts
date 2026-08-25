@@ -36,7 +36,7 @@ import { useOnChainActivityTray } from '@/features/OnChainActivityTray/OnChainAc
 import { getUserFacingErrorMessage } from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
 import { RejectionReasons, SubjectConsentRequest, VerificationLevelOptions } from '@belrose/shared';
 import { TrusteeRelationshipService } from '@/features/Trustee/services/trusteeRelationshipService';
-import { CredibilityPreparationService } from '@/features/Credibility/services/credibilityPreparationService';
+import { CredibilityPreparationService } from '@/features/CredibilityRecord/services/credibilityPreparationService';
 
 // ============================================================================
 // TYPES

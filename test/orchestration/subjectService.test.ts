@@ -48,7 +48,7 @@ vi.mock('@/features/BlockchainWallet/services/walletService', () => ({
   WalletService: walletMocks,
 }));
 
-vi.mock('@/features/Credibility/services/blockchainHealthRecordService', () => ({
+vi.mock('@/features/CredibilityRecord/services/blockchainHealthRecordService', () => ({
   blockchainHealthRecordService: healthRecordMocks,
   VerificationLevel: { None: 0, Provenance: 1, Full: 2 },
 }));
@@ -57,14 +57,14 @@ vi.mock('@/features/Trustee/services/trusteePermissionService', () => ({
   TrusteePermissionService: trusteeMocks,
 }));
 
-vi.mock('@/features/Credibility/services/verificationService', () => ({
+vi.mock('@/features/CredibilityRecord/services/verificationService', () => ({
   createVerification: verificationMocks.createVerification,
   recordSelfVerification: verificationMocks.recordSelfVerification,
 }));
 
 import { SubjectService } from '../../src/features/Subject/services/subjectService';
 import { getConsentRequestId } from '../../src/features/Subject/services/subjectConsentService';
-import { VerificationLevel } from '@/features/Credibility/services/blockchainHealthRecordService';
+import { VerificationLevel } from '@/features/CredibilityRecord/services/blockchainHealthRecordService';
 
 const RECORD_ID = 'subject-service-record';
 const OWNER = 'subject-service-owner';
