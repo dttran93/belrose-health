@@ -1,6 +1,6 @@
 //src/features/CredibilityRecord/services/disputeService.ts
 
-import { ethers, id } from 'ethers';
+import { ethers } from 'ethers';
 import {
   getFirestore,
   collection,
@@ -24,7 +24,7 @@ import {
   onDisputeCreated,
   onDisputeModified,
   onDisputeRevoked,
-  INITIAL_SCORE,
+  computeNormalizedCredibility,
 } from './credibilityScoreService';
 import { BlockchainSyncQueueService } from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
 import {
@@ -32,6 +32,7 @@ import {
   DisputeDoc,
   DisputeSeverityOptions,
   EncryptedField,
+  INITIAL_SCORE,
 } from '@belrose/shared';
 import { buildHealthRecordRef } from '@belrose/shared';
 import { encryptNotificationTitle } from '@/features/Notifications/services/encryptNotificationTitle';
@@ -390,6 +391,13 @@ export async function createDispute(
   // Encrypt title for notifications
   const titleData = recordTitle ? await encryptNotificationTitle(recordTitle, recordId) : null;
 
+  // NormalizedCredibility(disputer), frozen at TRUE first creation only — reactivating an
+  // existing (retracted) dispute reuses the value already on the doc rather than recomputing,
+  // same anti-gaming rationale as recordScoreAtCreation/validationWeight below.
+  const normalizedCredibilityAtCreation = existing.exists()
+    ? ((existing.data()?.normalizedCredibilityAtCreation as number | undefined) ?? 1.0)
+    : await computeNormalizedCredibility(disputerId);
+
   // Step 1: Write to blockchain FIRST
   let blockchainRef;
   try {
@@ -463,6 +471,7 @@ export async function createDispute(
         onChainHistory: [disputedEvent],
         recordScoreAtCreation,
         validationWeight: 0,
+        normalizedCredibilityAtCreation,
         ...(titleData ?? {}),
       });
       console.log('✅ Firestore: Dispute created');
@@ -475,7 +484,14 @@ export async function createDispute(
   }
 
   // Step 3: Update credibility score
-  await onDisputeCreated(recordId, recordHash, severity, culpability, blockchainRef);
+  await onDisputeCreated(
+    recordId,
+    recordHash,
+    severity,
+    culpability,
+    normalizedCredibilityAtCreation,
+    blockchainRef
+  );
 
   console.log('✅ Dispute created successfully');
   return disputeId;
@@ -533,7 +549,11 @@ export async function retractDispute(recordHash: string, disputerId: string): Pr
       isActive: false,
       lastModified: Timestamp.now(),
       chainStatus: 'confirmed',
-      onChainHistory: arrayUnion({ action: 'retracted' as const, at: Timestamp.now(), blockchainRef }),
+      onChainHistory: arrayUnion({
+        action: 'retracted' as const,
+        at: Timestamp.now(),
+        blockchainRef,
+      }),
     });
     console.log('✅ Firestore: Dispute marked inactive');
   } catch (error) {
@@ -542,7 +562,16 @@ export async function retractDispute(recordHash: string, disputerId: string): Pr
   }
 
   // Step 3: Credibility score
-  await onDisputeRevoked(data.recordId, recordHash, data.severity, data.culpability, blockchainRef);
+  const normalizedCredibilityAtCreation =
+    (data.normalizedCredibilityAtCreation as number | undefined) ?? 1.0;
+  await onDisputeRevoked(
+    data.recordId,
+    recordHash,
+    data.severity,
+    data.culpability,
+    normalizedCredibilityAtCreation,
+    blockchainRef
+  );
   console.log('✅ Dispute retracted successfully');
 }
 
@@ -649,6 +678,8 @@ export async function modifyDispute(
   }
 
   // Step 3: Credibility score
+  const normalizedCredibilityAtCreation =
+    (data.normalizedCredibilityAtCreation as number | undefined) ?? 1.0;
   await onDisputeModified(
     data.recordId,
     recordHash,
@@ -656,6 +687,7 @@ export async function modifyDispute(
     oldCulpability,
     newSeverity,
     newCulpability,
+    normalizedCredibilityAtCreation,
     blockchainRef
   );
   console.log('✅ Dispute modified successfully');

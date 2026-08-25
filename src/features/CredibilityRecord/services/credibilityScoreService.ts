@@ -1,15 +1,25 @@
 // src/features/CredibilityRecord/services/credibilityScoreService.ts
 
 /**
- * CredibilityScoreService (MVP)
+ * CredibilityScoreService
  *
- * Manages credibility scores for records.
- * Creates ScoreEvents for audit trail and updates the cached score on records.
+ * Manages credibility scores for records via the whitepaper's Bayesian-average formula:
  *
- * MVP Scope:
- * - Verifications and disputes affect the record's score
- * - ScoreEvents provide audit trail
- * - Record.credibility is the cached score shown to users
+ *   RecordScore(r) = [C·BasePrior + ΣVerificationContribution(v) − ΣDisputeContribution(d)]
+ *                    / [C + |verifications| + |disputes|]
+ *   VerificationContribution(v) = VerificationLevel(v) · NormalizedCredibility(verifier)
+ *   DisputeContribution(d)      = DisputeSeverity(d) · NormalizedCredibility(disputer)
+ *
+ * Per the whitepaper, severity alone drives record credibility — culpability is scoped
+ * exclusively to CulpabilityPenalty(u) in the User Credibility system, not here.
+ *
+ * ScoreEvents provide the audit trail (records/{recordId}/scoreEvents) and are the source of
+ * truth this file replays via the shared aggregateRecordScore — record.credibility is just the
+ * cached result. Score events are tagged with the recordHash they apply to, and the cached score
+ * is always recomputed scoped to the record's CURRENT recordHash — see updateRecordScore. This
+ * means editing a record's content (new recordHash) resets its cached score back to a fresh
+ * BasePrior: uploadUtils.ts calls updateRecordScore(recordId, newRecordHash) right after the
+ * hash bump, and a hash with no events yet naturally resolves back to INITIAL_SCORE.
  *
  * Score Range: 0-1000
  * - 0-299: Poor
@@ -17,12 +27,6 @@
  * - 500-699: Good
  * - 700-849: Very Good
  * - 850-1000: Excellent
- *
- * Score events are tagged with the recordHash they apply to, and the cached score is
- * always recomputed scoped to the record's CURRENT recordHash — see updateRecordScore.
- * This means editing a record's content (new recordHash) resets its cached score back
- * to INITIAL_SCORE: uploadUtils.ts calls updateRecordScore(recordId, newRecordHash) right
- * after the hash bump, and a hash with no events yet naturally resolves to INITIAL_SCORE.
  */
 
 import {
@@ -43,25 +47,18 @@ import type { DisputeSeverity } from './disputeService';
 import {
   BlockchainRef,
   DisputeCulpability,
-  INITIAL_SCORE,
-  SCORE_BOUNDS,
-  clampScore,
+  ScoreEventType,
+  ScoreEventContribution,
+  RECORD_VERIFICATION_WEIGHTS,
+  RECORD_DISPUTE_SEVERITY_WEIGHTS,
+  aggregateRecordScore,
 } from '@belrose/shared';
-
-// Re-exported for existing importers — INITIAL_SCORE/SCORE_BOUNDS/clampScore now live in
-// @belrose/shared (single source of truth) since the User Credibility batch computation in
-// functions/ needs them too and cannot import from src/.
-export { INITIAL_SCORE, SCORE_BOUNDS };
+import { getUserCredibility } from '@/features/CredibilityUser/services/userCredibilityService';
+import { getAvgUserCredibility } from '@/features/CredibilityUser/services/networkCredibilityStatsService';
 
 // ==================== TYPES ====================
 
-export type ScoreEventType =
-  | 'verification'
-  | 'verification_revoked'
-  | 'verification_modified'
-  | 'dispute'
-  | 'dispute_revoked'
-  | 'dispute_modified';
+export type { ScoreEventType };
 
 export interface ScoreEvent {
   id?: string;
@@ -69,7 +66,10 @@ export interface ScoreEvent {
   recordHash: string;
 
   eventType: ScoreEventType;
-  scoreDelta: number;
+  // weight(level|severity) × frozen NormalizedCredibility(actor). Always a positive magnitude
+  // on create/revoke events (calculateContributionDelta below decides the sign via eventType);
+  // already signed (new − old) on _modified events.
+  contributionDelta: number;
 
   createdBy: string;
   createdAt: Timestamp;
@@ -84,49 +84,32 @@ export interface ScoreEventMetadata {
 
   // Dispute context
   disputeSeverity?: DisputeSeverity;
+  // disputeCulpability/previousDisputeCulpability are audit/display-only here — per the
+  // whitepaper, culpability drives CulpabilityPenalty(u) in User Credibility, not record
+  // scoring, so they no longer factor into contributionDelta. Kept so a record's per-event
+  // history still shows what culpability was recorded at that moment, independent of
+  // DisputeDoc.culpability (which only reflects the dispute's *current* value).
   disputeCulpability?: DisputeCulpability;
   previousDisputeSeverity?: DisputeSeverity;
   previousDisputeCulpability?: DisputeCulpability;
+
+  // The verifier's/disputer's NormalizedCredibility, frozen at the time of the underlying
+  // VerificationDoc/DisputeDoc's true first creation — see that field's doc comment in
+  // packages/shared/src/credibility.ts.
+  normalizedCredibilityAtCreation?: number;
 
   // Blockchain reference
   blockchainRef?: BlockchainRef;
 }
 
-// ==================== CONSTANTS ====================
-
-export const VERIFICATION_DELTAS: Record<VerificationLevel, number> = {
-  0: 0, // None
-  1: 50, // Provenance
-  2: 75, // Content
-  3: 100, // Full
-};
-
-export const DISPUTE_SEVERITY_PENALTIES: Record<DisputeSeverity, number> = {
-  0: 0, // None
-  1: -25, // Negligible
-  2: -75, // Moderate
-  3: -150, // Major
-};
-
-export const CULPABILITY_MULTIPLIERS: Record<DisputeCulpability, number> = {
-  0: 1.0, // None/Unknown
-  1: 0.5, // No Fault
-  2: 0.75, // Systemic
-  3: 1.0, // Preventable
-  4: 1.5, // Reckless
-  5: 2.0, // Intentional
-};
-
 // ==================== HELPER FUNCTIONS ====================
 
-function getVerificationDelta(level: VerificationLevel): number {
-  return VERIFICATION_DELTAS[level] ?? 0;
+function getVerificationWeight(level: VerificationLevel): number {
+  return RECORD_VERIFICATION_WEIGHTS[level] ?? 0;
 }
 
-function getDisputeDelta(severity: DisputeSeverity, culpability: DisputeCulpability): number {
-  const basePenalty = DISPUTE_SEVERITY_PENALTIES[severity] ?? 0;
-  const multiplier = CULPABILITY_MULTIPLIERS[culpability] ?? 1;
-  return Math.round(basePenalty * multiplier);
+function getDisputeWeight(severity: DisputeSeverity): number {
+  return RECORD_DISPUTE_SEVERITY_WEIGHTS[severity] ?? 0;
 }
 
 function getCurrentUser(): { userId: string; displayName: string } {
@@ -143,44 +126,56 @@ function getCurrentUser(): { userId: string; displayName: string } {
   };
 }
 
-function calculateScoreDelta(eventType: ScoreEventType, metadata?: ScoreEventMetadata): number {
+function calculateContributionDelta(
+  eventType: ScoreEventType,
+  normalizedCredibilityAtCreation: number,
+  metadata?: ScoreEventMetadata
+): number {
   switch (eventType) {
     case 'verification':
-      return getVerificationDelta(metadata?.verificationLevel ?? 0);
+      return getVerificationWeight(metadata?.verificationLevel ?? 0) * normalizedCredibilityAtCreation;
 
     case 'verification_revoked':
-      return -getVerificationDelta(metadata?.previousVerificationLevel ?? 0);
+      return getVerificationWeight(metadata?.previousVerificationLevel ?? 0) * normalizedCredibilityAtCreation;
 
     case 'verification_modified': {
-      const oldDelta = getVerificationDelta(metadata?.previousVerificationLevel ?? 0);
-      const newDelta = getVerificationDelta(metadata?.verificationLevel ?? 0);
-      return newDelta - oldDelta;
+      const oldWeight = getVerificationWeight(metadata?.previousVerificationLevel ?? 0);
+      const newWeight = getVerificationWeight(metadata?.verificationLevel ?? 0);
+      return (newWeight - oldWeight) * normalizedCredibilityAtCreation;
     }
 
     case 'dispute':
-      return getDisputeDelta(metadata?.disputeSeverity ?? 0, metadata?.disputeCulpability ?? 0);
+      return getDisputeWeight(metadata?.disputeSeverity ?? 0) * normalizedCredibilityAtCreation;
 
     case 'dispute_revoked':
-      return -getDisputeDelta(
-        metadata?.previousDisputeSeverity ?? 0,
-        metadata?.previousDisputeCulpability ?? 0
-      );
+      return getDisputeWeight(metadata?.previousDisputeSeverity ?? 0) * normalizedCredibilityAtCreation;
 
     case 'dispute_modified': {
-      const oldPenalty = getDisputeDelta(
-        metadata?.previousDisputeSeverity ?? 0,
-        metadata?.previousDisputeCulpability ?? 0
-      );
-      const newPenalty = getDisputeDelta(
-        metadata?.disputeSeverity ?? 0,
-        metadata?.disputeCulpability ?? 0
-      );
-      return newPenalty - oldPenalty;
+      const oldWeight = getDisputeWeight(metadata?.previousDisputeSeverity ?? 0);
+      const newWeight = getDisputeWeight(metadata?.disputeSeverity ?? 0);
+      return (newWeight - oldWeight) * normalizedCredibilityAtCreation;
     }
 
     default:
       return 0;
   }
+}
+
+/**
+ * NormalizedCredibility(u) = UserCredibility(u) / AvgUserCredibility. Neutral (1.0) whenever
+ * either input is missing — the actor hasn't been through a UserCredibility batch cycle yet, or
+ * the network doesn't have an AvgUserCredibility yet (e.g. a very early network with no scored
+ * users). Matches this codebase's "no data ≠ worst case" convention rather than penalizing an
+ * actor for a gap in the data, not their behavior.
+ */
+export async function computeNormalizedCredibility(userId: string): Promise<number> {
+  const [userCredibility, avgUserCredibility] = await Promise.all([
+    getUserCredibility(userId),
+    getAvgUserCredibility(),
+  ]);
+
+  if (userCredibility === null || !avgUserCredibility) return 1.0;
+  return userCredibility.score / avgUserCredibility;
 }
 
 // ==================== CORE FUNCTIONS ====================
@@ -192,12 +187,13 @@ async function createScoreEvent(
   recordId: string,
   recordHash: string,
   eventType: ScoreEventType,
-  metadata?: ScoreEventMetadata
+  normalizedCredibilityAtCreation: number,
+  metadata?: Omit<ScoreEventMetadata, 'normalizedCredibilityAtCreation'>
 ): Promise<string> {
   const db = getFirestore();
-  const { userId, displayName } = getCurrentUser();
+  const { userId } = getCurrentUser();
 
-  const scoreDelta = calculateScoreDelta(eventType, metadata);
+  const contributionDelta = calculateContributionDelta(eventType, normalizedCredibilityAtCreation, metadata);
   const timestamp = Timestamp.now();
 
   // recordId now comes from the doc path, so the ID just needs to be unique within
@@ -208,17 +204,19 @@ async function createScoreEvent(
     recordId,
     recordHash,
     eventType,
-    scoreDelta,
+    contributionDelta,
     createdBy: userId,
     createdAt: timestamp,
-    metadata,
+    metadata: { ...metadata, normalizedCredibilityAtCreation },
   };
 
   // Use setDoc with explicit ID instead of addDoc
   const eventRef = doc(db, 'records', recordId, 'scoreEvents', eventId);
   await setDoc(eventRef, scoreEvent);
 
-  console.log(`📊 Score event created: ${eventType} (${scoreDelta > 0 ? '+' : ''}${scoreDelta})`);
+  console.log(
+    `📊 Score event created: ${eventType} (${contributionDelta > 0 ? '+' : ''}${contributionDelta.toFixed(2)})`
+  );
 
   // Update the record's cached score
   await updateRecordScore(recordId, recordHash);
@@ -230,11 +228,11 @@ async function createScoreEvent(
  * Recalculate and update a record's credibility score.
  * Scoped to a single recordHash — events made against a previous (now-superseded) hash
  * are excluded, so a record with no events yet for its current hash correctly resolves
- * back to INITIAL_SCORE rather than inheriting a prior version's accumulated score.
+ * back to the BasePrior rather than inheriting a prior version's accumulated score.
  *
  * Exported directly (rather than behind a same-shaped wrapper) because callers like
  * uploadUtils.ts's version-bump flow want exactly this: "recompute for this hash" — a new
- * hash with no events yet just resolves to INITIAL_SCORE, which is the reset behavior.
+ * hash with no events yet just resolves to the BasePrior, which is the reset behavior.
  */
 export async function updateRecordScore(recordId: string, recordHash: string): Promise<number> {
   const db = getFirestore();
@@ -247,14 +245,12 @@ export async function updateRecordScore(recordId: string, recordHash: string): P
   );
   const eventsSnap = await getDocs(eventsQuery);
 
-  // Sum all deltas starting from initial score
-  let score = INITIAL_SCORE;
-  eventsSnap.docs.forEach(eventDoc => {
+  const contributions: ScoreEventContribution[] = eventsSnap.docs.map(eventDoc => {
     const event = eventDoc.data() as ScoreEvent;
-    score += event.scoreDelta;
+    return { eventType: event.eventType, contributionDelta: event.contributionDelta };
   });
 
-  score = clampScore(score);
+  const { score } = aggregateRecordScore(contributions);
 
   // Update the record document
   await updateDoc(doc(db, 'records', recordId), {
@@ -275,9 +271,10 @@ export async function onVerificationCreated(
   recordId: string,
   recordHash: string,
   level: VerificationLevel,
+  normalizedCredibilityAtCreation: number,
   blockchainRef?: BlockchainRef
 ): Promise<void> {
-  await createScoreEvent(recordId, recordHash, 'verification', {
+  await createScoreEvent(recordId, recordHash, 'verification', normalizedCredibilityAtCreation, {
     verificationLevel: level,
     blockchainRef,
   });
@@ -287,9 +284,10 @@ export async function onVerificationRevoked(
   recordId: string,
   recordHash: string,
   previousLevel: VerificationLevel,
+  normalizedCredibilityAtCreation: number,
   blockchainRef?: BlockchainRef
 ): Promise<void> {
-  await createScoreEvent(recordId, recordHash, 'verification_revoked', {
+  await createScoreEvent(recordId, recordHash, 'verification_revoked', normalizedCredibilityAtCreation, {
     previousVerificationLevel: previousLevel,
     blockchainRef,
   });
@@ -300,9 +298,10 @@ export async function onVerificationModified(
   recordHash: string,
   previousLevel: VerificationLevel,
   newLevel: VerificationLevel,
+  normalizedCredibilityAtCreation: number,
   blockchainRef?: BlockchainRef
 ): Promise<void> {
-  await createScoreEvent(recordId, recordHash, 'verification_modified', {
+  await createScoreEvent(recordId, recordHash, 'verification_modified', normalizedCredibilityAtCreation, {
     previousVerificationLevel: previousLevel,
     verificationLevel: newLevel,
     blockchainRef,
@@ -316,9 +315,10 @@ export async function onDisputeCreated(
   recordHash: string,
   severity: DisputeSeverity,
   culpability: DisputeCulpability,
+  normalizedCredibilityAtCreation: number,
   blockchainRef?: BlockchainRef
 ): Promise<void> {
-  await createScoreEvent(recordId, recordHash, 'dispute', {
+  await createScoreEvent(recordId, recordHash, 'dispute', normalizedCredibilityAtCreation, {
     disputeSeverity: severity,
     disputeCulpability: culpability,
     blockchainRef,
@@ -330,9 +330,10 @@ export async function onDisputeRevoked(
   recordHash: string,
   previousSeverity: DisputeSeverity,
   previousCulpability: DisputeCulpability,
+  normalizedCredibilityAtCreation: number,
   blockchainRef?: BlockchainRef
 ): Promise<void> {
-  await createScoreEvent(recordId, recordHash, 'dispute_revoked', {
+  await createScoreEvent(recordId, recordHash, 'dispute_revoked', normalizedCredibilityAtCreation, {
     previousDisputeSeverity: previousSeverity,
     previousDisputeCulpability: previousCulpability,
     blockchainRef,
@@ -346,9 +347,10 @@ export async function onDisputeModified(
   previousCulpability: DisputeCulpability,
   newSeverity: DisputeSeverity,
   newCulpability: DisputeCulpability,
+  normalizedCredibilityAtCreation: number,
   blockchainRef?: BlockchainRef
 ): Promise<void> {
-  await createScoreEvent(recordId, recordHash, 'dispute_modified', {
+  await createScoreEvent(recordId, recordHash, 'dispute_modified', normalizedCredibilityAtCreation, {
     previousDisputeSeverity: previousSeverity,
     previousDisputeCulpability: previousCulpability,
     disputeSeverity: newSeverity,

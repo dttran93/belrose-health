@@ -39,8 +39,8 @@
 // CulpabilityPenalty. This is how ValidationWeight factors into UserCredibility.
 
 import { Firestore, Timestamp } from 'firebase-admin/firestore';
-import type { DisputeDoc } from '../_shared';
-import { INITIAL_SCORE, clampScore } from '../_shared';
+import type { DisputeDoc, ScoreEventContribution } from '../_shared';
+import { aggregateRecordScore } from '../_shared';
 import { EVALUATION_WINDOW_DAYS } from './constants';
 
 const BATCH_COMMIT_SIZE = 450; // headroom under Firestore's 500-writes-per-batch limit
@@ -66,12 +66,15 @@ export async function computeRecordScoreForHash(
     .where('recordHash', '==', recordHash)
     .get();
 
-  let score = INITIAL_SCORE;
-  eventsSnap.docs.forEach(eventDoc => {
-    score += (eventDoc.data().scoreDelta as number) ?? 0;
+  const contributions: ScoreEventContribution[] = eventsSnap.docs.map(eventDoc => {
+    const data = eventDoc.data();
+    return {
+      eventType: data.eventType as ScoreEventContribution['eventType'],
+      contributionDelta: (data.contributionDelta as number) ?? 0,
+    };
   });
 
-  return clampScore(score);
+  return aggregateRecordScore(contributions).score;
 }
 
 /**

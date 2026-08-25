@@ -20,6 +20,7 @@ import {
   onVerificationCreated,
   onVerificationModified,
   onVerificationRevoked,
+  computeNormalizedCredibility,
 } from './credibilityScoreService';
 import { BlockchainSyncQueueService } from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
 import { VerificationDoc, VerificationLevelOptions } from '@belrose/shared';
@@ -228,6 +229,13 @@ export async function createVerification(
 
   const titleData = recordTitle ? await encryptNotificationTitle(recordTitle, recordId) : null;
 
+  // NormalizedCredibility(verifier), frozen at TRUE first creation only — reactivating an
+  // existing (retracted) verification reuses the value already on the doc rather than
+  // recomputing, same anti-gaming rationale as DisputeDoc.recordScoreAtCreation.
+  const normalizedCredibilityAtCreation = existing.exists()
+    ? ((existing.data()?.normalizedCredibilityAtCreation as number | undefined) ?? 1.0)
+    : await computeNormalizedCredibility(verifierId);
+
   // Step 1: Write to blockchain
   let blockchainRef;
   try {
@@ -271,6 +279,7 @@ export async function createVerification(
         createdAt: Timestamp.now(),
         chainStatus: 'confirmed',
         onChainHistory: [verifiedEvent],
+        normalizedCredibilityAtCreation,
         ...(titleData ?? {}),
       });
       console.log('✅ Firestore: Verification created');
@@ -281,7 +290,7 @@ export async function createVerification(
   }
 
   // Step 3: Credibility score
-  await onVerificationCreated(recordId, recordHash, level, blockchainRef!);
+  await onVerificationCreated(recordId, recordHash, level, normalizedCredibilityAtCreation, blockchainRef!);
   console.log('✅ Verification created successfully');
   return verificationId;
 }
@@ -333,6 +342,11 @@ export async function recordSelfVerification(
   const titleData = recordTitle ? await encryptNotificationTitle(recordTitle, recordId) : null;
   const verifiedEvent = { action: 'verified' as const, at: Timestamp.now(), blockchainRef };
 
+  // Same freeze-once-at-true-creation rule as createVerification above.
+  const normalizedCredibilityAtCreation = existing.exists()
+    ? ((existing.data()?.normalizedCredibilityAtCreation as number | undefined) ?? 1.0)
+    : await computeNormalizedCredibility(verifierId);
+
   if (existing.exists()) {
     await updateDoc(docRef, {
       level,
@@ -354,12 +368,13 @@ export async function recordSelfVerification(
       createdAt: Timestamp.now(),
       chainStatus: 'confirmed',
       onChainHistory: [verifiedEvent],
+      normalizedCredibilityAtCreation,
       ...(titleData ?? {}),
     });
     console.log('✅ Firestore: Self-verification created');
   }
 
-  await onVerificationCreated(recordId, recordHash, level, blockchainRef);
+  await onVerificationCreated(recordId, recordHash, level, normalizedCredibilityAtCreation, blockchainRef);
   console.log('✅ Self-verification mirrored successfully');
   return verificationId;
 }
@@ -432,7 +447,15 @@ export async function retractVerification(recordHash: string, verifierId: string
   }
 
   // Step 3: Credibility score
-  await onVerificationRevoked(data.recordId, data.recordHash, data.level, blockchainRef!);
+  const normalizedCredibilityAtCreation =
+    (data.normalizedCredibilityAtCreation as number | undefined) ?? 1.0;
+  await onVerificationRevoked(
+    data.recordId,
+    data.recordHash,
+    data.level,
+    normalizedCredibilityAtCreation,
+    blockchainRef!
+  );
   console.log('✅ Verification retracted successfully');
 }
 
@@ -522,7 +545,16 @@ export async function modifyVerificationLevel(
   }
 
   // Step 3: Credibility score
-  await onVerificationModified(data.recordId, recordHash, oldLevel, newLevel, blockchainRef!);
+  const normalizedCredibilityAtCreation =
+    (data.normalizedCredibilityAtCreation as number | undefined) ?? 1.0;
+  await onVerificationModified(
+    data.recordId,
+    recordHash,
+    oldLevel,
+    newLevel,
+    normalizedCredibilityAtCreation,
+    blockchainRef!
+  );
   console.log('✅ Verification level modified successfully');
 }
 
