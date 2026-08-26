@@ -239,8 +239,7 @@ export async function createVerification(
     }
   }
 
-  // Fails before any write if the caller has no wallet linked — without one the blockchain
-  // step below can never succeed, so don't leave a permanently stuck Firestore doc behind.
+  // CHECK 4: Make sure user has a wallet, otherwise blockchain step will fail
   const userWalletAddress = await WalletService.requireUserWalletAddress(verifierId);
 
   console.log('🔄 Creating verification:', { recordId, recordHash, level });
@@ -411,7 +410,13 @@ export async function recordSelfVerification(
     console.log('✅ Firestore: Self-verification created');
   }
 
-  await onVerificationCreated(recordId, recordHash, level, normalizedCredibilityAtCreation, blockchainRef);
+  await onVerificationCreated(
+    recordId,
+    recordHash,
+    level,
+    normalizedCredibilityAtCreation,
+    blockchainRef
+  );
   console.log('✅ Self-verification mirrored successfully');
   return verificationId;
 }
@@ -468,7 +473,12 @@ export async function retractVerification(recordHash: string, verifierId: string
   // Step 2: Credibility score
   const normalizedCredibilityAtCreation =
     (data.normalizedCredibilityAtCreation as number | undefined) ?? 1.0;
-  await onVerificationRevoked(data.recordId, data.recordHash, data.level, normalizedCredibilityAtCreation);
+  await onVerificationRevoked(
+    data.recordId,
+    data.recordHash,
+    data.level,
+    normalizedCredibilityAtCreation
+  );
 
   // Step 3: Blockchain — best-effort, does not revert the Firestore write above.
   const syncRef = await BlockchainSyncQueueService.startAttempt({
