@@ -53,6 +53,13 @@ export function getVouchId(voucherId: string, voucheeId: string): string {
  * @returns The vouch document ID
  */
 export async function createVouch(voucherId: string, voucheeId: string): Promise<string> {
+  // firestore.rules also rejects this (voucheeId != caller), but that surfaces as a generic
+  // "Missing or insufficient permissions" error — check it here first so the caller gets a
+  // clear, actionable message instead.
+  if (voucherId === voucheeId) {
+    throw new Error('You cannot vouch for yourself.');
+  }
+
   const db = getFirestore();
   const vouchId = getVouchId(voucherId, voucheeId);
   const docRef = doc(db, 'vouches', vouchId);
