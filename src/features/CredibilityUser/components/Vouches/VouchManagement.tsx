@@ -1,7 +1,7 @@
 // src/features/CredibilityUser/components/Vouches/VouchManagement.tsx
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { ShieldCheck, ShieldOff, ShieldAlert, Loader2, Plus, X } from 'lucide-react';
+import { ShieldCheck, ShieldOff, ShieldAlert, Loader2, Plus, X, Clock } from 'lucide-react';
 import { UserCard } from '@/features/Users/components/ui/UserCard';
 import { UserSearch } from '@/features/Users/components/UserSearch';
 import { VouchActionDialog } from './VouchActionDialog';
@@ -124,19 +124,30 @@ const VouchGivenRow: React.FC<{
   });
 
   const isRetracted = vouch.chainStatus === 'Retracted';
+  const isActive = vouch.chainStatus === 'Active';
 
   return (
     <>
       <UserCard
         user={profile}
         userId={vouch.voucheeId}
-        color={isRetracted ? 'red' : 'green'}
+        color={isRetracted ? 'red' : isActive ? 'green' : 'yellow'}
         showEmail={false}
         content={
           isRetracted ? (
             <span className="flex items-center gap-1 text-xs text-red-600 font-medium">
               <ShieldOff className="w-3 h-3" />
               Retracted
+            </span>
+          ) : vouch.chainStatus === 'Failed' ? (
+            <span className="flex items-center gap-1 text-xs text-red-600 font-medium">
+              <ShieldOff className="w-3 h-3" />
+              Failed to confirm — try again
+            </span>
+          ) : vouch.chainStatus === 'Pending' ? (
+            <span className="flex items-center gap-1 text-xs text-yellow-600 font-medium">
+              <Clock className="w-3 h-3" />
+              Awaiting network confirmation
             </span>
           ) : (
             <span className="flex items-center gap-1 text-xs text-complement-3 font-medium">
@@ -146,7 +157,7 @@ const VouchGivenRow: React.FC<{
           )
         }
         additionalItems={
-          !isRetracted
+          isActive
             ? [
                 {
                   key: 'retract-vouch',
@@ -221,7 +232,7 @@ export const VouchManagement: React.FC<VouchManagementProps> = ({ userId, initia
     handledInitialTarget.current = true;
 
     const alreadyVouched = givenVouches.some(
-      v => v.vouch.voucheeId === initialTarget.userId && v.vouch.chainStatus === 'Active'
+      v => v.vouch.voucheeId === initialTarget.userId && v.vouch.chainStatus !== 'Retracted'
     );
 
     if (alreadyVouched) {
@@ -235,7 +246,10 @@ export const VouchManagement: React.FC<VouchManagementProps> = ({ userId, initia
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoading]);
 
-  const activeGiven = givenVouches.filter(v => v.vouch.chainStatus === 'Active');
+  // "Active" here means "given and not retracted" — Pending/Failed vouches stay visible here
+  // (with their own badge, see VouchGivenRow) rather than silently disappearing from the list
+  // while the blockchain confirmation is in flight or needs a retry.
+  const activeGiven = givenVouches.filter(v => v.vouch.chainStatus !== 'Retracted');
   const retractedGiven = givenVouches.filter(v => v.vouch.chainStatus === 'Retracted');
   const activeReceived = receivedVouches.filter(v => v.vouch.chainStatus === 'Active');
   const activeVoucheeIds = new Set(activeGiven.map(v => v.vouch.voucheeId));

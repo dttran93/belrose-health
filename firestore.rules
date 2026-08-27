@@ -854,17 +854,24 @@ service cloud.firestore {
       // - Can't vouch for yourself
       // - Document ID enforces uniqueness: {voucherId}_{voucheeId}
       // - Required fields validated
+      // - chainStatus starts 'Pending' (Firestore-first — see vouchService.ts) and is confirmed
+      //   'Active' by a same-request fast path only; onChainHistory always starts empty, since
+      //   the confirming on-chain event is appended by a later update once the chain call
+      //   resolves, not at creation.
       allow create: if request.auth != null &&
         request.resource.data.voucherId == request.auth.uid &&
         request.resource.data.voucheeId != request.auth.uid &&
         vouchId == request.auth.uid + '_' + request.resource.data.voucheeId &&
-        request.resource.data.chainStatus == 'Active' &&
+        request.resource.data.chainStatus in ['Pending', 'Active'] &&
         request.resource.data.createdAt is timestamp &&
         request.resource.data.onChainHistory is list &&
-        request.resource.data.onChainHistory.size() == 1;
+        request.resource.data.onChainHistory.size() == 0;
 
       // UPDATE: Only the original voucher can update (retract or re-vouch).
       // Core identity fields are immutable after creation.
+      // - 'Pending': awaiting blockchain confirmation (create or retract in flight)
+      // - 'Active'/'Retracted': confirmed on-chain
+      // - 'Failed': the blockchain call didn't confirm — see BlockchainSyncQueueService
       allow update: if request.auth != null &&
         resource.data.voucherId == request.auth.uid &&
         request.resource.data.voucherId == resource.data.voucherId &&
@@ -872,7 +879,7 @@ service cloud.firestore {
         request.resource.data.voucheeId == resource.data.voucheeId &&
         request.resource.data.voucheeIdHash == resource.data.voucheeIdHash &&
         request.resource.data.createdAt == resource.data.createdAt &&
-        request.resource.data.chainStatus in ['Active', 'Retracted'];
+        request.resource.data.chainStatus in ['Pending', 'Active', 'Retracted', 'Failed'];
 
       // DELETE: Not allowed — vouches are a permanent audit trail.
       allow delete: if false;

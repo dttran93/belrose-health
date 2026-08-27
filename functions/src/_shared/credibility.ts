@@ -45,8 +45,7 @@ export function clampScore(score: number): number {
 // Both src/features/CredibilityRecord/services/credibilityScoreService.ts (client SDK) and
 // functions/src/credibility/validationWeightEvaluator.ts (Admin SDK) need to turn a record's
 // scoreEvents into an identical final score — aggregateRecordScore is the one shared
-// implementation both sides call, so the aggregation algorithm itself can never drift between
-// them the way clampScore briefly did before it was consolidated here.
+// implementation both sides call, so the aggregation algorithm doesn't drift
 
 /** Placeholder, tuning-pending like every other constant in this system (VOUCH_MIXING_WEIGHT,
  *  UNACCEPTED_RECORDS_PENALTY_CONSTANT, etc.) — not a researched value. Controls how fast
@@ -66,9 +65,8 @@ export const RECORD_SCORE_C = 5;
  * 500 (5*500/5) to 500 (5*500 + 500)/6 = 500. No change, despite a verification. So the weights must start above
  * 500 to have a positive effect.
  *
- * Magnitudes are placeholders, tuning-pending like every other constant in this system (RECORD_SCORE_C,
- * VOUCH_MIXING_WEIGHT, etc.) — only the ABOVE-BasePrior ordering is load-bearing, not these
- * exact numbers.
+ * Weights are placeholders, tuning-pending like every other constant in this system (RECORD_SCORE_C,
+ * VOUCH_MIXING_WEIGHT, etc.). Only concrete rule is it must be above basePrior
  */
 export const RECORD_VERIFICATION_WEIGHTS: Record<0 | 1 | 2 | 3, number> = {
   0: 0,
@@ -82,7 +80,7 @@ export const RECORD_VERIFICATION_WEIGHTS: Record<0 | 1 | 2 | 3, number> = {
  * SUBTRACTED from the numerator (not blended in as a "vote"), so any positive value already
  * pulls the score below BasePrior once counted — severity's job is to differentiate HOW MUCH,
  * not to clear some above/below-prior threshold the way RECORD_VERIFICATION_WEIGHTS must.
- * Unsigned: the RecordScore formula's own subtraction handles sign, not a pre-negated constant.
+ * Unsigned: the RecordScore formula's is already negative so weights remain unsigned here
  * Deliberately NOT named DISPUTE_SEVERITY_WEIGHTS — functions/src/credibility/constants.ts
  * already exports a DIFFERENT constant under that exact name (EarnedTrust's DisputeAccuracy(u)
  * weights, on a different scale) — the RECORD_ prefix keeps the two from ever being confused or
@@ -256,12 +254,14 @@ export interface DisputeDoc {
   validationWeight: -1 | 0 | 1;
 
   // NormalizedCredibility(disputer) frozen at TRUE first creation only — same rationale and
-  // never-reactivated/never-modified immutability as recordScoreAtCreation/validationWeight
-  // above. Absent on pre-Bayesian-rewrite docs (backfilled to 1.0, neutral, by the migration).
+  // never-reactivated/never-modified immutability as recordScoreAtCreation/validationWeight.
   normalizedCredibilityAtCreation: number;
 }
 
-export type VouchChainStatus = 'None' | 'Active' | 'Retracted';
+// 'Pending'/'Failed' are off-chain-only transient states for the Firestore-first write pattern
+// (see vouchService.ts) — they never come from the chain itself, only 'None'/'Active'/'Retracted'
+// do. Mirrors VerificationDoc/DisputeDoc.chainStatus's 'pending'/'confirmed'/'failed' lifecycle.
+export type VouchChainStatus = 'None' | 'Pending' | 'Active' | 'Retracted' | 'Failed';
 
 export interface VouchDoc {
   id: string;

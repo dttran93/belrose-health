@@ -200,6 +200,17 @@ async function createScoreEvent(
   // the subcollection — mirrors buildPermissionHistoryDocId's scheme.
   const eventId = `${timestamp.toMillis()}_${crypto.randomUUID().slice(0, 8)}`;
 
+  // blockchainRef is threaded through as possibly-undefined (score events now fire immediately
+  // after the Firestore write, before the best-effort blockchain step resolves — see
+  // verificationService.ts/disputeService.ts's Firestore-first pattern) — Firestore rejects an
+  // explicit `undefined` field value, so strip any undefined metadata keys rather than writing
+  // them. A verification/dispute created while its chain call is still pending simply has no
+  // blockchainRef on this score event yet.
+  const rawMetadata = { ...metadata, normalizedCredibilityAtCreation };
+  const metadataToWrite = Object.fromEntries(
+    Object.entries(rawMetadata).filter(([, value]) => value !== undefined)
+  ) as ScoreEventMetadata;
+
   const scoreEvent: Omit<ScoreEvent, 'id'> = {
     recordId,
     recordHash,
@@ -207,7 +218,7 @@ async function createScoreEvent(
     contributionDelta,
     createdBy: userId,
     createdAt: timestamp,
-    metadata: { ...metadata, normalizedCredibilityAtCreation },
+    metadata: metadataToWrite,
   };
 
   // Use setDoc with explicit ID instead of addDoc

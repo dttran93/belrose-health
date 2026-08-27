@@ -1,7 +1,13 @@
 // src/features/CredibilityUser/services/vouchService.ts
 //
-// Orchestrates vouch operations: blockchain first, then Firestore.
-// Mirrors the pattern of verificationService.ts.
+// Firestore-first: createVouch and retractVouch commit their Firestore doc change first —
+// chainStatus starts 'Pending' — before the blockchain call. The blockchain call is a separate,
+// best-effort step afterward, tracked via BlockchainSyncQueueService
+// (startAttempt/recordSuccess/recordFailure): success flips chainStatus to 'Active'/'Retracted'
+// and appends the onChainHistory event (so onChainHistory only ever contains confirmed on-chain
+// events); failure flips it to 'Failed' and leaves a durable sync-queue entry for a future
+// reconciliation engine to retry. It does not gate or revert the Firestore write, matching
+// SubjectService's pattern (see also verificationService.ts / disputeService.ts).
 
 import {
   getFirestore,
@@ -16,9 +22,14 @@ import {
   query,
   getDocs,
 } from 'firebase/firestore';
+import * as Sentry from '@sentry/react';
 import { ethers } from 'ethers';
 import { blockchainVouchService } from './blockchainVouchService';
-import { BlockchainSyncQueueService } from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
+import {
+  BlockchainSyncQueueService,
+  getUserFacingErrorMessage,
+} from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
+import { WalletService } from '@/features/BlockchainWallet/services/walletService';
 import { buildMemberRegistryRef, VouchDoc } from '@belrose/shared';
 
 // ============================================================================
@@ -29,24 +40,26 @@ export function getVouchId(voucherId: string, voucheeId: string): string {
   return `${voucherId}_${voucheeId}`;
 }
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
-
 // ============================================================================
 // WRITE FUNCTIONS
 // ============================================================================
 
 /**
  * Give a vouch to another user.
- * Blockchain first, then Firestore.
+ * Firestore-first: see the file header comment for the full pattern.
  *
  * @param voucherId  - Firebase UID of the voucher (caller)
  * @param voucheeId  - Firebase UID of the vouchee
  * @returns The vouch document ID
  */
 export async function createVouch(voucherId: string, voucheeId: string): Promise<string> {
+  // firestore.rules also rejects this (voucheeId != caller), but that surfaces as a generic
+  // "Missing or insufficient permissions" error — check it here first so the caller gets a
+  // clear, actionable message instead.
+  if (voucherId === voucheeId) {
+    throw new Error('You cannot vouch for yourself.');
+  }
+
   const db = getFirestore();
   const vouchId = getVouchId(voucherId, voucheeId);
   const docRef = doc(db, 'vouches', vouchId);
@@ -56,27 +69,15 @@ export async function createVouch(voucherId: string, voucheeId: string): Promise
     throw new Error('You are already vouching for this user.');
   }
 
+  // Fails before any write if the caller has no wallet linked — without one the blockchain
+  // step below can never succeed, so don't leave a permanently stuck Firestore doc behind.
+  const userWalletAddress = await WalletService.requireUserWalletAddress(voucherId);
+
   console.log('🤝 Creating vouch:', { voucherId, voucheeId });
 
-  // Step 1: Blockchain
-  let blockchainRef;
-  try {
-    const tx = await blockchainVouchService.giveVouch(voucheeId);
-    blockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
-    console.log('✅ Blockchain: Vouch recorded');
-  } catch (error) {
-    console.error('❌ Blockchain vouch failed:', error);
-    await BlockchainSyncQueueService.logFailure({
-      contract: 'MemberRoleManager',
-      action: 'giveVouch',
-      userId: voucherId,
-      error: getErrorMessage(error),
-      context: { type: 'vouch', voucherId, voucheeId },
-    });
-    throw error;
-  }
-
-  // Step 2: Firestore
+  // Step 1: Firestore first — this is what the user experiences as "vouch created".
+  // chainStatus starts 'Pending'; onChainHistory is filled in once the chain call below
+  // resolves, so it only ever contains confirmed on-chain events.
   const voucherIdHash = ethers.id(voucherId);
   const voucheeIdHash = ethers.id(voucheeId);
 
@@ -84,12 +85,7 @@ export async function createVouch(voucherId: string, voucheeId: string): Promise
     if (existing.exists()) {
       // Re-vouching after retraction
       await updateDoc(docRef, {
-        chainStatus: 'Active',
-        onChainHistory: arrayUnion({
-          action: 're-vouched' as const,
-          at: Timestamp.now(),
-          blockchainRef,
-        }),
+        chainStatus: 'Pending',
         lastModified: Timestamp.now(),
       });
       console.log('✅ Firestore: Vouch reactivated');
@@ -99,24 +95,61 @@ export async function createVouch(voucherId: string, voucheeId: string): Promise
         voucherIdHash,
         voucheeId,
         voucheeIdHash,
-        chainStatus: 'Active',
+        chainStatus: 'Pending',
         createdAt: Timestamp.now(),
-        onChainHistory: [{ action: 'vouched' as const, at: Timestamp.now(), blockchainRef }],
+        onChainHistory: [],
       } satisfies Omit<VouchDoc, 'id'>);
       console.log('✅ Firestore: Vouch created');
     }
-  } catch (error) {
-    console.error('❌ Firestore write failed after confirmed blockchain vouch:', error);
-    throw error;
+  } catch (firestoreError) {
+    Sentry.captureException(firestoreError, {
+      tags: { feature: 'credibility', action: 'createVouch' },
+    });
+    throw firestoreError;
   }
 
   console.log('✅ Vouch created successfully');
+
+  // Step 2: Blockchain — best-effort, does not revert the Firestore write above. Failure is
+  // tracked in the sync queue for a future reconciliation engine to retry.
+  const syncRef = await BlockchainSyncQueueService.startAttempt({
+    contract: 'MemberRoleManager',
+    action: 'giveVouch',
+    userId: voucherId,
+    userWalletAddress,
+    permissionHistoryPath: docRef.path,
+    context: { type: 'vouch', voucherId, voucheeId },
+  });
+
+  try {
+    const tx = await blockchainVouchService.giveVouch(voucheeId);
+    const blockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
+    const vouchAction: 'vouched' | 're-vouched' = existing.exists() ? 're-vouched' : 'vouched';
+    const vouchedEvent = { action: vouchAction, at: Timestamp.now(), blockchainRef };
+
+    await updateDoc(docRef, {
+      chainStatus: 'Active',
+      onChainHistory: arrayUnion(vouchedEvent),
+    });
+    await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
+    console.log('✅ Blockchain: Vouch recorded');
+  } catch (error) {
+    console.error('⚠️ Blockchain vouch failed:', error);
+    const errorMessage = getUserFacingErrorMessage(error, 'Blockchain transaction failed');
+    await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
+    try {
+      await updateDoc(docRef, { chainStatus: 'Failed' });
+    } catch {
+      // Non-fatal — the sync queue entry above is the durable record for reconciliation
+    }
+  }
+
   return vouchId;
 }
 
 /**
  * Retract a previously given vouch.
- * Blockchain first, then Firestore.
+ * Firestore-first: see the file header comment for the full pattern.
  *
  * @param voucherId  - Firebase UID of the voucher (caller)
  * @param voucheeId  - Firebase UID of the vouchee
@@ -140,28 +173,39 @@ export async function retractVouch(voucherId: string, voucheeId: string): Promis
     throw new Error('You can only retract your own vouches.');
   }
 
+  // Fails before any write if the caller has no wallet linked.
+  const userWalletAddress = await WalletService.requireUserWalletAddress(voucherId);
+
   console.log('↩️ Retracting vouch:', { voucherId, voucheeId });
 
-  // Step 1: Blockchain
-  let blockchainRef;
+  // Step 1: Firestore first
   try {
-    const tx = await blockchainVouchService.retractVouch(voucheeId);
-    blockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
-    console.log('✅ Blockchain: Vouch retracted');
-  } catch (error) {
-    console.error('❌ Blockchain vouch retraction failed:', error);
-    await BlockchainSyncQueueService.logFailure({
-      contract: 'MemberRoleManager',
-      action: 'retractVouch',
-      userId: voucherId,
-      error: getErrorMessage(error),
-      context: { type: 'vouch-retraction', voucherId, voucheeId },
+    await updateDoc(docRef, {
+      chainStatus: 'Pending',
+      lastModified: Timestamp.now(),
     });
-    throw error;
+    console.log('✅ Firestore: Vouch marked pending retraction');
+  } catch (firestoreError) {
+    Sentry.captureException(firestoreError, {
+      tags: { feature: 'credibility', action: 'retractVouch' },
+    });
+    throw firestoreError;
   }
 
-  // Step 2: Firestore
+  // Step 2: Blockchain — best-effort, does not revert the Firestore write above.
+  const syncRef = await BlockchainSyncQueueService.startAttempt({
+    contract: 'MemberRoleManager',
+    action: 'retractVouch',
+    userId: voucherId,
+    userWalletAddress,
+    permissionHistoryPath: docRef.path,
+    context: { type: 'vouch-retraction', voucherId, voucheeId },
+  });
+
   try {
+    const tx = await blockchainVouchService.retractVouch(voucheeId);
+    const blockchainRef = buildMemberRegistryRef(tx.txHash, tx.blockNumber);
+
     await updateDoc(docRef, {
       chainStatus: 'Retracted',
       onChainHistory: arrayUnion({
@@ -169,12 +213,18 @@ export async function retractVouch(voucherId: string, voucheeId: string): Promis
         at: Timestamp.now(),
         blockchainRef,
       }),
-      lastModified: Timestamp.now(),
     });
-    console.log('✅ Firestore: Vouch marked retracted');
+    await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
+    console.log('✅ Blockchain: Vouch retracted');
   } catch (error) {
-    console.error('❌ Firestore write failed after confirmed blockchain retraction:', error);
-    throw error;
+    console.error('⚠️ Blockchain vouch retraction failed:', error);
+    const errorMessage = getUserFacingErrorMessage(error, 'Blockchain transaction failed');
+    await BlockchainSyncQueueService.recordFailure(syncRef, errorMessage);
+    try {
+      await updateDoc(docRef, { chainStatus: 'Failed' });
+    } catch {
+      // Non-fatal — the sync queue entry above is the durable record for reconciliation
+    }
   }
 
   console.log('✅ Vouch retracted successfully');

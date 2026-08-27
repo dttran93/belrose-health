@@ -246,6 +246,9 @@ export async function checkVouchIntegrity(vouch: VouchDoc): Promise<VouchIntegri
     createdAt: vouch.createdAt,
   };
 
+  if (vouch.chainStatus === 'Pending') return { ...base, integrityStatus: 'pending' };
+  if (vouch.chainStatus === 'Failed') return { ...base, integrityStatus: 'failed' };
+
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const isVouchedOnChain = (await (getMemberContract() as any).hasVouched(

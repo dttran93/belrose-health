@@ -210,3 +210,89 @@ export async function seedGuestInvite(
     ...overrides,
   });
 }
+
+/**
+ * Seeds a verifications/{recordHash}_{verifierId} doc matching the shape verificationService.ts
+ * writes once a chain confirmation has landed (chainStatus:'confirmed', one onChainHistory
+ * entry) — the steady state most tests want to seed directly rather than drive through
+ * createVerification. Id format mirrors verificationService.getVerificationId; kept as an
+ * inline template here (rather than importing the service) to avoid pulling
+ * verificationService's full dependency graph into every orchestration test file that imports
+ * this helper module.
+ */
+export async function seedVerification(
+  testDb: Firestore,
+  recordId: string,
+  recordHash: string,
+  verifierId: string,
+  overrides: Record<string, unknown> = {}
+): Promise<void> {
+  await setDoc(doc(testDb, 'verifications', `${recordHash}_${verifierId}`), {
+    recordId,
+    recordHash,
+    verifierId,
+    verifierIdHash: `hash-${verifierId}`,
+    level: 2,
+    isActive: true,
+    createdAt: new Date(),
+    chainStatus: 'confirmed',
+    onChainHistory: [{ action: 'verified', at: new Date(), blockchainRef: { txHash: '0xseed', blockNumber: 1 } }],
+    normalizedCredibilityAtCreation: 1.0,
+    ...overrides,
+  });
+}
+
+/**
+ * Seeds a disputes/{recordHash}_{disputerId} doc matching the shape disputeService.ts writes
+ * once confirmed. `encryptedNotes` is intentionally omitted by default (real ciphertext needs
+ * real encryption — pass it via overrides for tests that need it). Id format mirrors
+ * disputeService.getDisputeId; kept inline for the same reason as seedVerification above.
+ */
+export async function seedDispute(
+  testDb: Firestore,
+  recordId: string,
+  recordHash: string,
+  disputerId: string,
+  overrides: Record<string, unknown> = {}
+): Promise<void> {
+  await setDoc(doc(testDb, 'disputes', `${recordHash}_${disputerId}`), {
+    recordId,
+    recordHash,
+    disputerId,
+    disputerIdHash: `hash-${disputerId}`,
+    severity: 2,
+    culpability: 0,
+    notesHash: '',
+    isActive: true,
+    createdAt: new Date(),
+    chainStatus: 'confirmed',
+    onChainHistory: [{ action: 'disputed', at: new Date(), blockchainRef: { txHash: '0xseed', blockNumber: 1 } }],
+    recordScoreAtCreation: 500,
+    validationWeight: 0,
+    normalizedCredibilityAtCreation: 1.0,
+    ...overrides,
+  });
+}
+
+/**
+ * Seeds a vouches/{voucherId}_{voucheeId} doc matching the shape vouchService.ts writes once
+ * confirmed (chainStatus:'Active'). Id format mirrors vouchService.getVouchId; kept inline for
+ * the same reason as seedVerification above.
+ */
+export async function seedVouch(
+  testDb: Firestore,
+  voucherId: string,
+  voucheeId: string,
+  overrides: Record<string, unknown> = {}
+): Promise<void> {
+  await setDoc(doc(testDb, 'vouches', `${voucherId}_${voucheeId}`), {
+    voucherId,
+    voucherIdHash: `hash-${voucherId}`,
+    voucheeId,
+    voucheeIdHash: `hash-${voucheeId}`,
+    chainStatus: 'Active',
+    createdAt: new Date(),
+    onChainHistory: [{ action: 'vouched', at: new Date(), blockchainRef: { txHash: '0xseed', blockNumber: 1 } }],
+    ...overrides,
+  });
+}
