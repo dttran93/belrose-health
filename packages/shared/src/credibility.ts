@@ -34,6 +34,36 @@ export function clampScore(score: number): number {
   return Math.max(SCORE_BOUNDS.MIN, Math.min(SCORE_BOUNDS.MAX, Math.round(score)));
 }
 
+// ── Score tiers ──────────────────────────────────────────────────────────────────────────────
+// One five-band system for both Record and User credibility (0-299 Poor / 300-499 Fair /
+// 500-699 Good / 700-849 Very Good / 850-1000 Excellent), so the two don't drift apart. Only the
+// numbers live here — packages/shared is dependency-free (no React/Tailwind), so colors/icons are
+// a frontend-only concern (src/components/ui/CredibilityTierStyle.tsx).
+
+export type ScoreTier = 'poor' | 'fair' | 'good' | 'veryGood' | 'excellent';
+
+export const SCORE_TIER_LABELS: Record<ScoreTier, string> = {
+  poor: 'Poor',
+  fair: 'Fair',
+  good: 'Good',
+  veryGood: 'Very Good',
+  excellent: 'Excellent',
+};
+
+/**
+ * Returns null for a record/user with no score yet — "no data" is deliberately distinct from
+ * "Poor" throughout this system (see AvgRecordCredibility/DisputeAccuracy being null, not 0, when
+ * empty). Callers should render null as its own neutral state, not fall through to 'poor'.
+ */
+export function getScoreTier(score: number | null | undefined): ScoreTier | null {
+  if (score === null || score === undefined) return null;
+  if (score >= 850) return 'excellent';
+  if (score >= 700) return 'veryGood';
+  if (score >= 500) return 'good';
+  if (score >= 300) return 'fair';
+  return 'poor';
+}
+
 // ── Record credibility: Bayesian-average aggregation ────────────────────────────────────────
 // RecordScore(r) = [C·BasePrior + ΣVerificationContribution(v) − ΣDisputeContribution(d)]
 //                  / [C + |verifications| + |disputes|]

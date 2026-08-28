@@ -1,19 +1,23 @@
 // src/features/CredibilityRecord/components/ui/CredibilityBadge.tsx
 
 /**
- * The credibility score (0-1000), or undefined/null if not yet rated
- * Currently just verified, versus disputed if there's a credibility score.
- * If not self-reported.
+ * Compact inline badge for a record's credibility score (0-1000, or null/undefined if not yet
+ * scored). Driven by the same five-tier system as UserCredibilityBreakdown
+ * (packages/shared/src/credibility.ts's getScoreTier + src/components/ui/CredibilityTierStyle.tsx)
+ * rather than its own logic, so Record and User credibility read consistently everywhere they
+ * appear. "Not yet scored" renders as a distinct neutral gray state — it is not the same signal
+ * as a Poor score.
  *
+ * Layout/visual chrome (pill + tooltip) is otherwise unchanged; a denser or differently-shaped
+ * badge is a separate follow-up once a direction is picked.
  */
 
 import React from 'react';
 import * as Tooltip from '@radix-ui/react-tooltip';
-import { ShieldCheck, ShieldAlert } from 'lucide-react';
+import { getScoreTier, type ScoreTier } from '@belrose/shared';
+import { getTierStyle } from '@/components/ui/CredibilityTierStyle';
 
 // ==================== TYPES ====================
-
-export type CredibilityStatus = 'verified' | 'disputed' | 'self-reported';
 
 export interface CredibilityBadgeProps {
   score?: number | null;
@@ -23,79 +27,32 @@ export interface CredibilityBadgeProps {
 // ==================== HELPERS ====================
 
 /**
- * Get the status based on score
+ * Tooltip copy per tier. Not shared with UserCredibilityBreakdown — that component's copy is
+ * about a person's own trust score, this one is about a specific record's content.
  */
-export function getCredibilityStatus(score?: number | null): CredibilityStatus {
-  if (score === undefined || score === null) return 'self-reported';
-  if (score >= 500) return 'verified';
-  return 'disputed';
-}
-
-/**
- * Get the display label for a status
- */
-export function getStatusLabel(status: CredibilityStatus): string {
-  switch (status) {
-    case 'verified':
-      return 'Verified';
-    case 'disputed':
-      return 'Disputed';
-    case 'self-reported':
-      return 'Self-Reported';
-  }
-}
-
-/**
- * Get tooltip description for a status
- */
-function getStatusDescription(status: CredibilityStatus): string {
-  switch (status) {
-    case 'verified':
-      return 'This record has been verified by others.';
-    case 'disputed':
-      return 'This record has been disputed. Review with caution.';
-    case 'self-reported':
+function getStatusDescription(tier: ScoreTier | null): string {
+  switch (tier) {
+    case null:
       return 'This record has not yet been verified or disputed by others.';
+    case 'excellent':
+      return 'This record is strongly verified with no significant disputes.';
+    case 'veryGood':
+      return 'This record is well-verified with no significant disputes.';
+    case 'good':
+      return 'This record has more supporting verification than dispute.';
+    case 'fair':
+      return 'This record has unresolved disputes. Review with caution.';
+    case 'poor':
+      return 'This record has been significantly disputed. Review with caution.';
   }
 }
-
-// ==================== STYLING ====================
-
-interface StatusStyle {
-  bg: string;
-  text: string;
-  border: string;
-  icon: React.ReactNode;
-}
-
-const statusStyles: Record<CredibilityStatus, StatusStyle> = {
-  verified: {
-    bg: 'bg-complement-3/20',
-    text: 'text-complement-3',
-    border: 'border-complement-3',
-    icon: <ShieldCheck className="w-4 h-4" />,
-  },
-  disputed: {
-    bg: 'bg-yellow-100',
-    text: 'text-yellow-600',
-    border: 'border-yellow-500',
-    icon: <ShieldAlert className="w-4 h-4" />,
-  },
-  'self-reported': {
-    bg: 'bg-red-100',
-    text: 'text-red-700',
-    border: 'border-red-700',
-    icon: '',
-  },
-};
 
 // ==================== COMPONENT ====================
 
 export const CredibilityBadge: React.FC<CredibilityBadgeProps> = ({ score, className = '' }) => {
-  const status = getCredibilityStatus(score);
-  const label = getStatusLabel(status);
-  const description = getStatusDescription(status);
-  const style = statusStyles[status];
+  const tier = getScoreTier(score);
+  const style = getTierStyle(tier);
+  const description = getStatusDescription(tier);
 
   const badgeContent = (
     <span
@@ -105,8 +62,8 @@ export const CredibilityBadge: React.FC<CredibilityBadgeProps> = ({ score, class
         ${className}
       `}
     >
-      <span>{style.icon}</span>
-      <span>{label}</span>
+      <style.Icon className="w-4 h-4" />
+      <span>{style.label}</span>
     </span>
   );
 

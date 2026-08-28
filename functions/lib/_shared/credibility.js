@@ -1,7 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.RECORD_DISPUTE_SEVERITY_WEIGHTS = exports.RECORD_VERIFICATION_WEIGHTS = exports.RECORD_SCORE_C = exports.SCORE_BOUNDS = exports.INITIAL_SCORE = void 0;
+exports.RECORD_DISPUTE_SEVERITY_WEIGHTS = exports.RECORD_VERIFICATION_WEIGHTS = exports.RECORD_SCORE_C = exports.SCORE_TIER_LABELS = exports.SCORE_BOUNDS = exports.INITIAL_SCORE = void 0;
 exports.clampScore = clampScore;
+exports.getScoreTier = getScoreTier;
 exports.aggregateRecordScore = aggregateRecordScore;
 // ── Score scale (shared between record and user credibility, frontend and functions) ──────────
 // Single source of truth — functions/ cannot import from src/, so anything both sides need to
@@ -23,6 +24,31 @@ exports.SCORE_BOUNDS = {
 function clampScore(score) {
     return Math.max(exports.SCORE_BOUNDS.MIN, Math.min(exports.SCORE_BOUNDS.MAX, Math.round(score)));
 }
+exports.SCORE_TIER_LABELS = {
+    poor: 'Poor',
+    fair: 'Fair',
+    good: 'Good',
+    veryGood: 'Very Good',
+    excellent: 'Excellent',
+};
+/**
+ * Returns null for a record/user with no score yet — "no data" is deliberately distinct from
+ * "Poor" throughout this system (see AvgRecordCredibility/DisputeAccuracy being null, not 0, when
+ * empty). Callers should render null as its own neutral state, not fall through to 'poor'.
+ */
+function getScoreTier(score) {
+    if (score === null || score === undefined)
+        return null;
+    if (score >= 850)
+        return 'excellent';
+    if (score >= 700)
+        return 'veryGood';
+    if (score >= 500)
+        return 'good';
+    if (score >= 300)
+        return 'fair';
+    return 'poor';
+}
 // ── Record credibility: Bayesian-average aggregation ────────────────────────────────────────
 // RecordScore(r) = [C·BasePrior + ΣVerificationContribution(v) − ΣDisputeContribution(d)]
 //                  / [C + |verifications| + |disputes|]
@@ -34,8 +60,7 @@ function clampScore(score) {
 // Both src/features/CredibilityRecord/services/credibilityScoreService.ts (client SDK) and
 // functions/src/credibility/validationWeightEvaluator.ts (Admin SDK) need to turn a record's
 // scoreEvents into an identical final score — aggregateRecordScore is the one shared
-// implementation both sides call, so the aggregation algorithm itself can never drift between
-// them the way clampScore briefly did before it was consolidated here.
+// implementation both sides call, so the aggregation algorithm doesn't drift
 /** Placeholder, tuning-pending like every other constant in this system (VOUCH_MIXING_WEIGHT,
  *  UNACCEPTED_RECORDS_PENALTY_CONSTANT, etc.) — not a researched value. Controls how fast
  *  BasePrior gets outweighed by real evidence: C=5 means roughly 5 pieces of evidence outweigh
@@ -53,9 +78,8 @@ exports.RECORD_SCORE_C = 5;
  * 500 (5*500/5) to 500 (5*500 + 500)/6 = 500. No change, despite a verification. So the weights must start above
  * 500 to have a positive effect.
  *
- * Magnitudes are placeholders, tuning-pending like every other constant in this system (RECORD_SCORE_C,
- * VOUCH_MIXING_WEIGHT, etc.) — only the ABOVE-BasePrior ordering is load-bearing, not these
- * exact numbers.
+ * Weights are placeholders, tuning-pending like every other constant in this system (RECORD_SCORE_C,
+ * VOUCH_MIXING_WEIGHT, etc.). Only concrete rule is it must be above basePrior
  */
 exports.RECORD_VERIFICATION_WEIGHTS = {
     0: 0,
@@ -68,7 +92,7 @@ exports.RECORD_VERIFICATION_WEIGHTS = {
  * SUBTRACTED from the numerator (not blended in as a "vote"), so any positive value already
  * pulls the score below BasePrior once counted — severity's job is to differentiate HOW MUCH,
  * not to clear some above/below-prior threshold the way RECORD_VERIFICATION_WEIGHTS must.
- * Unsigned: the RecordScore formula's own subtraction handles sign, not a pre-negated constant.
+ * Unsigned: the RecordScore formula's is already negative so weights remain unsigned here
  * Deliberately NOT named DISPUTE_SEVERITY_WEIGHTS — functions/src/credibility/constants.ts
  * already exports a DIFFERENT constant under that exact name (EarnedTrust's DisputeAccuracy(u)
  * weights, on a different scale) — the RECORD_ prefix keeps the two from ever being confused or

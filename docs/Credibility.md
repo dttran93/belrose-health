@@ -63,13 +63,13 @@ All are explicit placeholders pending real-world tuning (see [Known Limitations]
 
 ### Score bands (client display)
 
-| Range    | Label     |
-| -------- | --------- |
-| 0–299    | Poor      |
-| 300–499  | Fair      |
-| 500–699  | Good      |
-| 700–849  | Very Good |
-| 850–1000 | Excellent |
+| Range   | Label     |
+| ------- | --------- |
+| 0–299   | Poor      |
+| 300–499 | Fair      |
+| 500–699 | Good      |
+| 700–849 | Very Good |
+| 850–999 | Excellent |
 
 ### Where it lives
 
@@ -77,7 +77,7 @@ All are explicit placeholders pending real-world tuning (see [Known Limitations]
 - `src/features/CredibilityRecord/services/credibilityScoreService.ts` — client-side: creates `scoreEvents`, freezes `normalizedCredibilityAtCreation`, and caches the replayed score on the record.
 - `functions/src/credibility/validationWeightEvaluator.ts` — server-side replay, used to check whether a disputed record's score has moved (see [ValidationWeight](#validationweight--how-disputes-get-judged)).
 
-**Editing a record resets its score.** Each `scoreEvent` is tagged with the `recordHash` it applies to, and a record's cached score is always recomputed scoped to its _current_ hash. Editing a record's content bumps `recordHash`, and the new hash starts with zero events — i.e. a fresh `INITIAL_SCORE`, even though the record has a verification/dispute history under its old hash.
+**Editing a record resets its score.** Each `scoreEvent` is tagged with the `recordHash` it applies to, and a record's cached score is always recomputed scoped to its _current_ hash. Editing a record's content bumps `recordHash`, and the new hash starts with zero events — i.e. a fresh `INITIAL_SCORE`, even though the record has a verification/dispute history under its old hash. We contemplated having a record credibility score that is some kind of average of the scores of the associated hashes. However, that would open the system up to potential fraud. Because of end-to-end encryption and patient sovereignty over the record, we have no way to know what kind of changes were made to a record. If record credibility took into account previousHashes, a user could potentially take a credible record, completely change the content, and the changed record would inherit the high credibility of the original record. As a result, record credibility is always tied to the latest/current recordHash alone.
 
 ---
 
@@ -94,13 +94,13 @@ EarnedTrust(u) = max(
 )
 ```
 
-| Term                          | Meaning                                                                                                                                                                                                                                                                                                                       |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CredentialFloor(u)`          | Admin-set minimum for pre-trusted/credentialed users (e.g. verified clinicians), bootstrapping the network. Defaults to `DEFAULT_CREDENTIAL_FLOOR = 0`                                                                                                                                                                        |
-| `AvgRecordCredibility(u)`     | Average score of the records `u` has actively verified — scoped to the record's **current** hash only. A verification against a since-superseded version of a record no longer speaks to what the record says now                                                                                                             |
-| `DisputeAccuracy(u)`          | Average of `severity weight × ValidationWeight` over every dispute `u` has ever filed. Pending disputes contribute `0` but still count toward the average, diluting it until resolved                                                                                                                                         |
-| `CulpabilityPenalty(u)`       | Average of `culpability weight × ValidationWeight` over disputes filed against records `u` actively verified (deduped by dispute)                                                                                                                                                                                             |
-| `UnacceptedRecordsPenalty(u)` | **Not in the whitepaper formula — an implementation addition.** `(flagged / everAnchored) × UNACCEPTED_RECORDS_PENALTY_CONSTANT`, penalizing a user who was asked to anchor a record attributed to them and refused. `0` if they've never had a record anchored to them at all (no baseline to judge a refusal ratio against) |
+| Term                          | Meaning                                                                                                                                                                                                                                                       |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CredentialFloor(u)`          | Admin-set minimum for pre-trusted/credentialed users (e.g. verified clinicians), bootstrapping the network. Defaults to `DEFAULT_CREDENTIAL_FLOOR = 0`                                                                                                        |
+| `AvgRecordCredibility(u)`     | Average score of the records `u` has actively verified — scoped to the record's **current** hash only. A verification against a since-superseded version of a record no longer speaks to what the record says now                                             |
+| `DisputeAccuracy(u)`          | Average of `severity weight × ValidationWeight` over every dispute `u` has ever filed. Pending disputes contribute `0` but still count toward the average, diluting it until resolved                                                                         |
+| `CulpabilityPenalty(u)`       | Average of `culpability weight × ValidationWeight` over disputes filed against records `u` actively verified (deduped by dispute)                                                                                                                             |
+| `UnacceptedRecordsPenalty(u)` | `(flagged / everAnchored) × UNACCEPTED_RECORDS_PENALTY_CONSTANT`, penalizing a user who was asked to anchor a record attributed to them and refused. `0` if they've never had a record anchored to them at all (no baseline to judge a refusal ratio against) |
 
 `AvgRecordCredibility` and `DisputeAccuracy` are `null` — not `0` — when the user has no records verified / no disputes filed. "No data" is deliberately distinct from "bad score" throughout this system.
 

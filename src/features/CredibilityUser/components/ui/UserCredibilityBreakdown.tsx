@@ -11,61 +11,10 @@
 // scores to look at.
 
 import React from 'react';
-import { ShieldQuestion, ShieldCheck, ShieldAlert, ShieldX, ShieldPlus } from 'lucide-react';
+import { ShieldQuestion } from 'lucide-react';
 import type { UserCredibilityScore } from '@belrose/shared';
-
-// Score Range: 0-1000 — mirrors credibilityScoreService.ts's documented bands
-// 0-299: Poor / 300-499: Fair / 500-699: Good / 700-849: Very Good / 850-1000: Excellent
-type ScoreTier = 'poor' | 'fair' | 'good' | 'veryGood' | 'excellent';
-
-function getScoreTier(score: number): ScoreTier {
-  if (score >= 850) return 'excellent';
-  if (score >= 700) return 'veryGood';
-  if (score >= 500) return 'good';
-  if (score >= 300) return 'fair';
-  return 'poor';
-}
-
-const TIER_STYLE: Record<
-  ScoreTier,
-  { label: string; bg: string; text: string; border: string; icon: React.ReactNode }
-> = {
-  excellent: {
-    label: 'Excellent',
-    bg: 'bg-complement-3/20',
-    text: 'text-complement-3',
-    border: 'border-complement-3',
-    icon: <ShieldCheck className="w-5 h-5" />,
-  },
-  veryGood: {
-    label: 'Very Good',
-    bg: 'bg-complement-3/10',
-    text: 'text-complement-3',
-    border: 'border-complement-3',
-    icon: <ShieldPlus className="w-5 h-5" />,
-  },
-  good: {
-    label: 'Good',
-    bg: 'bg-blue-100',
-    text: 'text-blue-600',
-    border: 'border-blue-500',
-    icon: <ShieldCheck className="w-5 h-5" />,
-  },
-  fair: {
-    label: 'Fair',
-    bg: 'bg-yellow-100',
-    text: 'text-yellow-600',
-    border: 'border-yellow-500',
-    icon: <ShieldAlert className="w-5 h-5" />,
-  },
-  poor: {
-    label: 'Poor',
-    bg: 'bg-red-100',
-    text: 'text-red-700',
-    border: 'border-red-700',
-    icon: <ShieldX className="w-5 h-5" />,
-  },
-};
+import { getScoreTier } from '@belrose/shared';
+import { getTierStyle } from '@/components/ui/CredibilityTierStyle';
 
 interface ComponentRowProps {
   label: string;
@@ -120,14 +69,13 @@ export const UserCredibilityBreakdown: React.FC<UserCredibilityBreakdownProps> =
     );
   }
 
-  const tier = getScoreTier(credibility.score);
-  const style = TIER_STYLE[tier];
+  const style = getTierStyle(getScoreTier(credibility.score));
 
   return (
     <div className={`rounded-lg border ${style.border} p-4 ${className}`}>
       <div className="flex items-center justify-between mb-4">
         <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1 ${style.bg} ${style.text}`}>
-          {style.icon}
+          <style.Icon className="w-5 h-5" />
           <span className="font-semibold">{style.label}</span>
         </div>
         <div className="text-2xl font-bold text-gray-900 tabular-nums">
