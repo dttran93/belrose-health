@@ -63,7 +63,7 @@ export const CredibilityBadge: React.FC<CredibilityBadgeProps> = ({ score, class
       `}
     >
       <style.Icon className="w-4 h-4" />
-      <span>{style.label}</span>
+      <span>{score === null || score === undefined ? style.label : `${Math.round(score)} · ${style.label}`}</span>
     </span>
   );
 

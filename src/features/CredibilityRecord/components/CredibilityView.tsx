@@ -22,6 +22,7 @@ import { getDisputesByRecordId } from '../services/disputeService';
 import DisputeManagement from './Disputes/DisputeManagement';
 import { useCredibilityFlow } from '../hooks/useCredibilityFlow';
 import CredibilityActionDialog from './ui/CredibilityActionDialog';
+import RecordCredibilityBreakdown from './ui/RecordCredibilityBreakdown';
 import { VerificationDoc } from '@belrose/shared';
 
 type ViewMode = 'loading' | 'empty' | 'list' | 'add';
@@ -210,6 +211,16 @@ export const CredibilityView: React.FC<CredibilityViewProps> = ({
           </Button>
         </div>
       </div>
+
+      {/* Record Credibility Breakdown — always visible regardless of viewMode below */}
+      <RecordCredibilityBreakdown
+        score={record.credibility?.score}
+        lastUpdated={record.credibility?.lastUpdated}
+        verifications={verifications}
+        disputes={disputes}
+        currentRecordHash={recordHash}
+        isLoading={viewMode === 'loading'}
+      />
 
       {/* Loading State */}
       {viewMode === 'loading' && (
