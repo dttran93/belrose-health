@@ -73,3 +73,19 @@ export const NO_SCORE_STYLE: TierStyle = {
 export function getTierStyle(tier: ScoreTier | null): TierStyle {
   return tier === null ? NO_SCORE_STYLE : CREDIBILITY_TIER_STYLE[tier];
 }
+
+// ── Dark-card palette (UserCredibilityGauge) ────────────────────────────────────────────────
+// CREDIBILITY_TIER_STYLE's bg/text/border above are translucent Tailwind classes meant for a
+// pill sitting on a WHITE card — too faint to read as a solid arc/fill on a dark gradient card.
+// Brighter flat hex per tier, same hue family (red/amber/blue/emerald), for UserCredibilityGauge's
+// dark treatment — deliberately the visual opposite of RecordCredibilityBreakdown's white card so
+// the two are never confused, while still tracing back to the same five tiers. Matches the
+// dark-gradient-card convention already used elsewhere for stat widgets in this app
+// (HealthProfile/CredibilityTab's CompletenessBanner, RecordAccessWidget).
+export const DARK_TIER_COLOR: Record<ScoreTier, string> = {
+  poor: '#f87171',
+  fair: '#fbbf24',
+  good: '#60a5fa',
+  veryGood: '#34d399',
+  excellent: '#10b981',
+};

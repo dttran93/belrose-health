@@ -17,6 +17,7 @@ import ChangePasswordModal from '@/features/Settings/components/ChangePasswordMo
 import NotificationSettings from '@/features/Settings/components/NotificationSettings';
 import GuestInvitesSettings from '@/features/Settings/components/GuestInvitesSettings';
 import VouchesSettings from '@/features/Settings/components/VouchesSettings';
+import CredibilitySettings from '@/features/Settings/components/CredibilitySettings';
 import { GuestFeatureGate } from '@/features/GuestAccess/components/GuestFeatureGate';
 
 const SettingsPage = () => {
@@ -167,6 +168,9 @@ const SettingsPage = () => {
 
       case 'vouches':
         return <VouchesSettings />;
+
+      case 'credibility':
+        return <CredibilitySettings />;
 
       case 'privacy':
         return (
