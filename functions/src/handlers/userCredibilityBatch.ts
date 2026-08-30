@@ -8,7 +8,12 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { runUserCredibilityCycle } from '../credibility/userCredibilityBatchService';
 
-export const runUserCredibilityBatch = onSchedule('0 3 * * *', async () => {
+// Monthly (1st of the month, 03:00 UTC) rather than the whitepaper's assumed daily cadence —
+// deliberate cost/activity tradeoff while pre-production: the network is small enough that
+// scores barely move day to day, so a daily run mostly just spends Firestore reads/writes to
+// reproduce the same numbers. recomputeUserCredibility (below) covers the "I need this refreshed
+// now" case in the meantime. Revisit toward daily as real usage grows.
+export const runUserCredibilityBatch = onSchedule('0 3 1 * *', async () => {
   await runUserCredibilityCycle();
 });
 

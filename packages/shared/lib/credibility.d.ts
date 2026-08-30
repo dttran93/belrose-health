@@ -20,11 +20,26 @@ export declare const SCORE_BOUNDS: {
  * a whole point per pass and can prevent convergence from ever settling under a sub-1 epsilon.
  */
 export declare function clampScore(score: number): number;
+export type ScoreTier = 'poor' | 'fair' | 'good' | 'veryGood' | 'excellent';
+export declare const SCORE_TIER_LABELS: Record<ScoreTier, string>;
+export declare const SCORE_TIER_MIN: Record<ScoreTier, number>;
+/**
+ * Returns null for a record/user with no score yet — "no data" is deliberately distinct from
+ * "Poor" throughout this system (see AvgRecordCredibility/DisputeAccuracy being null, not 0, when
+ * empty). Callers should render null as its own neutral state, not fall through to 'poor'.
+ */
+export declare function getScoreTier(score: number | null | undefined): ScoreTier | null;
 /** Placeholder, tuning-pending like every other constant in this system (VOUCH_MIXING_WEIGHT,
  *  UNACCEPTED_RECORDS_PENALTY_CONSTANT, etc.) — not a researched value. Controls how fast
- *  BasePrior gets outweighed by real evidence: C=5 means roughly 5 pieces of evidence outweigh
- *  the neutral prior to about half, given weight magnitudes topping out around 100-150. */
-export declare const RECORD_SCORE_C = 5;
+ *  BasePrior gets outweighed by real evidence: at n = C pieces of evidence, evidence and the
+ *  prior are weighted exactly 50/50 (evidence's share of the blend is n/(n+C)), so C=2 means a
+ *  single reviewer still leaves the prior in the majority (67% prior / 33% evidence) — no one
+ *  reviewer can single-handedly define a record — while a realistic "subject + provider + one
+ *  more" case (n=3) already tips to 60% evidence, and n=5 reaches 71%. Chosen over C=5 (which
+ *  put that same n=3 case at only 38% evidence — a record most records will realistically never
+ *  exceed, permanently under-weighted) since most records won't accumulate many more than a
+ *  handful of reviewers. */
+export declare const RECORD_SCORE_C = 2;
 /**
  * VerificationLevel(v) weights for RECORD scoring, at NormalizedCredibility=1.0. Under the
  * Bayesian-average formula, ΣVerificationContribution is BLENDED against C copies of BasePrior
@@ -33,13 +48,12 @@ export declare const RECORD_SCORE_C = 5;
  * positive verification (the same reason a single low-value rating drags down an IMDB-style
  * weighted average).
  *
- * For example: imagine base prior 500, C=5, and a single verification of weight 500. The score would go from
- * 500 (5*500/5) to 500 (5*500 + 500)/6 = 500. No change, despite a verification. So the weights must start above
- * 500 to have a positive effect.
+ * For example: imagine base prior 500, C=2, and a single verification of weight 500. The score would go from
+ * 500 (2*500/2) to 500 (2*500 + 500)/3 = 500. No change, despite a verification. So the weights must start above
+ * 500 to have a positive effect — true at any value of C, not just this one.
  *
- * Magnitudes are placeholders, tuning-pending like every other constant in this system (RECORD_SCORE_C,
- * VOUCH_MIXING_WEIGHT, etc.) — only the ABOVE-BasePrior ordering is load-bearing, not these
- * exact numbers.
+ * Weights are placeholders, tuning-pending like every other constant in this system (RECORD_SCORE_C,
+ * VOUCH_MIXING_WEIGHT, etc.). Only concrete rule is it must be above basePrior
  */
 export declare const RECORD_VERIFICATION_WEIGHTS: Record<0 | 1 | 2 | 3, number>;
 /**
@@ -47,7 +61,7 @@ export declare const RECORD_VERIFICATION_WEIGHTS: Record<0 | 1 | 2 | 3, number>;
  * SUBTRACTED from the numerator (not blended in as a "vote"), so any positive value already
  * pulls the score below BasePrior once counted — severity's job is to differentiate HOW MUCH,
  * not to clear some above/below-prior threshold the way RECORD_VERIFICATION_WEIGHTS must.
- * Unsigned: the RecordScore formula's own subtraction handles sign, not a pre-negated constant.
+ * Unsigned: the RecordScore formula's is already negative so weights remain unsigned here
  * Deliberately NOT named DISPUTE_SEVERITY_WEIGHTS — functions/src/credibility/constants.ts
  * already exports a DIFFERENT constant under that exact name (EarnedTrust's DisputeAccuracy(u)
  * weights, on a different scale) — the RECORD_ prefix keeps the two from ever being confused or
@@ -136,7 +150,7 @@ export interface DisputeDoc {
     validationWeight: -1 | 0 | 1;
     normalizedCredibilityAtCreation: number;
 }
-export type VouchChainStatus = 'None' | 'Active' | 'Retracted';
+export type VouchChainStatus = 'None' | 'Pending' | 'Active' | 'Retracted' | 'Failed';
 export interface VouchDoc {
     id: string;
     voucherId: string;

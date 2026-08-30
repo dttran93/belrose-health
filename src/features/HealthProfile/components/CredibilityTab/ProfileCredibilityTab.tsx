@@ -22,6 +22,8 @@ import React, { useState, useCallback } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { FileObject } from '@/types/core';
 import { useBlockchainCompleteness } from '../../hooks/useBlockchainCompleteness';
+import { useUserCredibility } from '@/features/CredibilityUser/hooks/useUserCredibility';
+import UserCredibilityGauge from '@/features/CredibilityUser/components/ui/UserCredibilityGauge';
 import RecordRow from './ui/RecordRow';
 import CompletenessBanner from './ui/CompletenessBanner';
 
@@ -48,6 +50,9 @@ export const ProfileCredibilityTab: React.FC<ProfileCredibilityTabProps> = ({
 
   const { results, summary, anchoredRecordIds, privateRecordsSummary, isLoading, error } =
     useBlockchainCompleteness(subjectFirebaseUid, records);
+
+  const { data: userCredibility, isLoading: isUserCredibilityLoading } =
+    useUserCredibility(subjectFirebaseUid);
 
   const circ = 2 * Math.PI * 28;
 
@@ -79,6 +84,31 @@ export const ProfileCredibilityTab: React.FC<ProfileCredibilityTabProps> = ({
 
   return (
     <div className="space-y-4 max-w-7xl">
+      <div className="flex items-center gap-2.5 my-2">
+        <div className="flex-1 h-px bg-border" />
+        <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+          {subjectName}'s user credibility
+        </span>
+        <div className="flex-1 h-px bg-border" />
+      </div>
+
+      <div className="flex items-center justify-center">
+        <UserCredibilityGauge
+          credibility={userCredibility}
+          isLoading={isUserCredibilityLoading}
+          heading={`${subjectName}'s Credibility`}
+          className="max-w-[420px]"
+        />
+      </div>
+
+      <div className="flex items-center gap-2.5 my-2">
+        <div className="flex-1 h-px bg-border" />
+        <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+          {subjectName}'s Record credibility
+        </span>
+        <div className="flex-1 h-px bg-border" />
+      </div>
+
       {/* ── Completeness banner ── */}
       <CompletenessBanner
         summary={summary}
