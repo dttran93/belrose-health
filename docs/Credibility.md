@@ -154,7 +154,7 @@ User Credibility (unlike Record Credibility, which updates live on every verific
 4. **Batched write-back** to `users/{uid}.credibility` — this field is server-write-only; no client can ever set it directly (`firestore.rules`).
 5. **Write `credibilityStats/global`** — `avgUserCredibility` (mean of this cycle's scores) and `scoredUserCount`, always written even when there are no users yet (`0`/`0`, never omitted), so readers never need an existence check.
 
-**Trigger:** `functions/src/handlers/userCredibilityBatch.ts` — `runUserCredibilityBatch` runs on a schedule, daily at 03:00 (`onSchedule('0 3 * * *', ...)`). `recomputeUserCredibility` is an admin-gated (`platformAdmin` custom claim) manual `onCall` trigger for forcing a recompute during ops/dev.
+**Trigger:** `functions/src/handlers/userCredibilityBatch.ts` — `runUserCredibilityBatch` runs on a schedule, monthly on the 1st at 03:00 UTC (`onSchedule('0 3 1 * *', ...)`) — a deliberate cost/activity tradeoff while pre-production, not the whitepaper's assumed daily cadence; revisit as usage grows. `recomputeUserCredibility` is an admin-gated (`platformAdmin` custom claim) manual `onCall` trigger for forcing a recompute in the meantime.
 
 ---
 
