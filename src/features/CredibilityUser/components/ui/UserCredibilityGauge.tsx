@@ -171,8 +171,7 @@ export const UserCredibilityGauge: React.FC<UserCredibilityGaugeProps> = ({
             className="text-base font-bold text-slate-200"
             style={{ fontFamily: 'ui-monospace, monospace' }}
           >
-            {credibility.vouchPropagated >= 0 ? '+' : ''}
-            {Math.round(credibility.vouchPropagated)}
+            {`${credibility.vouchPropagated >= 0 ? '+' : ''}${Math.round(credibility.vouchPropagated)}`}
           </div>
         </div>
       </div>

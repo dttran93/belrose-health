@@ -84,6 +84,31 @@ export const ProfileCredibilityTab: React.FC<ProfileCredibilityTabProps> = ({
 
   return (
     <div className="space-y-4 max-w-7xl">
+      <div className="flex items-center gap-2.5 my-2">
+        <div className="flex-1 h-px bg-border" />
+        <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+          {subjectName}'s user credibility
+        </span>
+        <div className="flex-1 h-px bg-border" />
+      </div>
+
+      <div className="flex items-center justify-center">
+        <UserCredibilityGauge
+          credibility={userCredibility}
+          isLoading={isUserCredibilityLoading}
+          heading={`${subjectName}'s Credibility`}
+          className="max-w-[420px]"
+        />
+      </div>
+
+      <div className="flex items-center gap-2.5 my-2">
+        <div className="flex-1 h-px bg-border" />
+        <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+          {subjectName}'s Record credibility
+        </span>
+        <div className="flex-1 h-px bg-border" />
+      </div>
+
       {/* ── Completeness banner ── */}
       <CompletenessBanner
         summary={summary}
@@ -94,24 +119,6 @@ export const ProfileCredibilityTab: React.FC<ProfileCredibilityTabProps> = ({
         visibleCount={
           results.filter(r => r.status !== 'not_anchored' && r.status !== 'no_hash').length
         }
-      />
-
-      {/* ── Seam: this banner is about THIS PROFILE'S RECORDS; the gauge below is about
-          this PERSON's standing across the network — a related but distinct question, so the
-          divider is deliberate rather than blending the two into one card. ── */}
-      <div className="flex items-center gap-2.5 my-2">
-        <div className="flex-1 h-px bg-border" />
-        <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
-          {subjectName}'s network credibility
-        </span>
-        <div className="flex-1 h-px bg-border" />
-      </div>
-
-      <UserCredibilityGauge
-        credibility={userCredibility}
-        isLoading={isUserCredibilityLoading}
-        heading={`${subjectName}'s Credibility`}
-        className="max-w-[420px]"
       />
 
       {/* ── Note on separation of hash matching vs credibility ── */}
