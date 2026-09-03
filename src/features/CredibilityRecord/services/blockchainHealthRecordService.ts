@@ -287,9 +287,13 @@ export class blockchainHealthRecordService {
 
       if (allRecordIdHashes.length === 0) return [];
 
-      // Check active status for each record in parallel
+      // Check active status for each record in parallel. Call isActiveSubject on the
+      // contract directly (not the isActiveSubject() wrapper below) — these are already
+      // on-chain recordIdHashes, and the wrapper expects a raw recordId to hash itself;
+      // routing through it here would hash an already-hashed ID and match nothing.
+      const isActiveSubjectFn = contract.getFunction('isActiveSubject');
       const activeChecks = await Promise.all(
-        allRecordIdHashes.map(recordIdHash => this.isActiveSubject(recordIdHash, userIdHash))
+        allRecordIdHashes.map(recordIdHash => isActiveSubjectFn(recordIdHash, userIdHash))
       );
 
       return allRecordIdHashes.filter((_, index) => activeChecks[index]);
