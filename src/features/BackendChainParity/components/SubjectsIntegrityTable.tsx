@@ -3,9 +3,12 @@
 import React, { useState } from 'react';
 import { ArrowUpRight, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
 import { NETWORK } from '@belrose/shared';
+import type { SubjectHistoryAction, SubjectHistoryEvent } from '@belrose/shared';
 import { useSubjectConsentRefs } from '../hooks/useSubjectConsentRefs';
+import { useSubjectHistory } from '../hooks/useSubjectHistory';
 import { IntegrityStatusBadge } from './IntegrityStatusBadge';
 import { CopyableHash } from './ui/CopyableHash';
+import { HistoryLog, type HistoryLogEntry } from './HistoryLog';
 import type { RecordSubjectIntegrityItem } from '../services/recordSubjectIntegrityService';
 import type { IntegrityStatus, SubjectSyncStatus } from '../lib/types';
 
@@ -32,6 +35,37 @@ const SUBJECT_STATUS_CONFIG: Record<
   },
   removed_sync: { dotClass: 'bg-gray-300', label: 'removed (synced)', textClass: 'text-gray-400' },
 };
+
+const HISTORY_ACTION_LABEL: Record<SubjectHistoryAction, string> = {
+  anchored: 'Anchored',
+  anchored_as_controller: 'Anchored (Controller)',
+  unanchored: 'Unanchored',
+};
+
+const HISTORY_ACTION_STYLE: Record<SubjectHistoryAction, string> = {
+  anchored: 'bg-emerald-50 text-emerald-700',
+  anchored_as_controller: 'bg-purple-50 text-purple-700',
+  unanchored: 'bg-gray-100 text-gray-600',
+};
+
+function toHistoryEntries(events: SubjectHistoryEvent[]): HistoryLogEntry[] {
+  return events.map((event, i) => ({
+    key: i,
+    badge: (
+      <>
+        <span
+          className={`px-1.5 py-0.5 rounded font-medium ${HISTORY_ACTION_STYLE[event.action] ?? 'bg-gray-100 text-gray-600'}`}
+        >
+          {HISTORY_ACTION_LABEL[event.action] ?? event.action}
+        </span>
+        <span className="font-mono text-gray-400">{event.subjectId.slice(0, 8)}…</span>
+        {event.viaConsent && <span className="text-gray-400 italic">via consent</span>}
+      </>
+    ),
+    txHash: event.blockchainRef?.txHash,
+    timestamp: event.changedAt,
+  }));
+}
 
 interface SubjectsIntegrityTableProps {
   items: RecordSubjectIntegrityItem[];
@@ -142,6 +176,7 @@ export const SubjectsIntegrityTable: React.FC<SubjectsIntegrityTableProps> = ({
 
 const ExpandedRow: React.FC<{ item: RecordSubjectIntegrityItem }> = ({ item }) => {
   const { data: consentRefs } = useSubjectConsentRefs(item.firestoreId);
+  const { data: historyEvents } = useSubjectHistory(item.firestoreId);
 
   return (
     <div className="space-y-4">
@@ -214,6 +249,16 @@ const ExpandedRow: React.FC<{ item: RecordSubjectIntegrityItem }> = ({ item }) =
         {item.error && (
           <div className="mt-3 text-xs text-red-600 bg-red-50 rounded p-2">{item.error}</div>
         )}
+      </div>
+
+      <div className="bg-white rounded-lg border border-gray-200 p-4">
+        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+          Subject History
+        </div>
+        <HistoryLog
+          entries={toHistoryEntries(historyEvents ?? [])}
+          emptyMessage="No subject history recorded"
+        />
       </div>
     </div>
   );

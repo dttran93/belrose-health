@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
 import { IntegrityStatusBadge } from './IntegrityStatusBadge';
 import { CopyableHash } from './ui/CopyableHash';
+import { HistoryLog, type HistoryLogEntry } from './HistoryLog';
 import { formatTimestamp } from '@/utils/dataFormattingUtils';
 import type { IntegrityStatus, LinkedWalletRecord, onChainIdentityStatus } from '../lib/types';
 import { MemberIntegrityItem } from '../services/memberIntegrityService';
@@ -152,45 +153,17 @@ function WalletCards({ wallets }: { wallets: LinkedWalletRecord[] }) {
   );
 }
 
-function StatusHistoryCards({ history }: { history: onChainIdentityStatus[] }) {
-  if (history.length === 0) {
-    return <p className="text-xs text-gray-400 italic">No status history recorded</p>;
-  }
-
-  const sorted = [...history].reverse();
-
-  return (
-    <div className="flex flex-col gap-2">
-      {sorted.map((entry, i) => (
-        <div key={i} className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="px-1.5 py-0.5 rounded font-medium bg-blue-50 text-blue-700">
-            {entry.status}
-          </span>
-          {entry.statusUpdatedAt && (
-            <span className="text-gray-400">{formatTimestamp(entry.statusUpdatedAt)}</span>
-          )}
-          {entry.statusBlockchainRef?.txHash && (
-            <div className="flex items-center gap-1 text-gray-400">
-              <span>Tx:</span>
-              <CopyableHash
-                value={entry.statusBlockchainRef.txHash}
-                chars={8}
-                className="font-mono"
-              />
-              <a
-                href={`${BASESCAN_TX_URL}${entry.statusBlockchainRef.txHash}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue-500 hover:text-blue-700"
-              >
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
+function toHistoryEntries(history: onChainIdentityStatus[]): HistoryLogEntry[] {
+  return [...history].reverse().map((entry, i) => ({
+    key: i,
+    badge: (
+      <span className="px-1.5 py-0.5 rounded font-medium bg-blue-50 text-blue-700">
+        {entry.status}
+      </span>
+    ),
+    txHash: entry.statusBlockchainRef?.txHash,
+    timestamp: entry.statusUpdatedAt,
+  }));
 }
 
 export const MembersIntegrityTable: React.FC<MembersIntegrityTableProps> = ({
@@ -352,7 +325,10 @@ export const MembersIntegrityTable: React.FC<MembersIntegrityTableProps> = ({
                           <p className="text-xs font-medium text-gray-500 mb-2">
                             On-Chain Status History
                           </p>
-                          <StatusHistoryCards history={item.onChainStatusHistory ?? []} />
+                          <HistoryLog
+                            entries={toHistoryEntries(item.onChainStatusHistory ?? [])}
+                            emptyMessage="No status history recorded"
+                          />
                         </div>
                       </div>
                     </td>

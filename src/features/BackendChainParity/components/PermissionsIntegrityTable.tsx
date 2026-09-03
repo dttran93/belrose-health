@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
 import { IntegrityStatusBadge } from './IntegrityStatusBadge';
 import { CopyableHash } from './ui/CopyableHash';
+import { HistoryLog } from './HistoryLog';
 import { formatTimestamp } from '@/utils/dataFormattingUtils';
 import type { IntegrityStatus } from '../lib/types';
 import type {
@@ -137,50 +138,26 @@ function MemberComparisonTable({ comparisons }: { comparisons: PermissionMemberC
   );
 }
 
-function HistoryLog({ events }: { events: PermissionChangeEvent[] }) {
-  if (events.length === 0) {
-    return <p className="text-xs text-gray-400 italic">No history recorded</p>;
-  }
-  return (
-    <div className="flex flex-col gap-2">
-      {events.map((event, i) => (
-        <div key={i} className="flex flex-wrap items-start gap-1.5 text-xs">
-          <div className="flex items-center gap-1">
-            <CopyableHash
-              value={event.blockchainRef.txHash}
-              chars={8}
-              className="font-mono text-gray-600"
-            />
-            <a
-              href={`${BASESCAN_TX_URL}${event.blockchainRef.txHash}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-blue-500 hover:text-blue-700"
-            >
-              <ExternalLink className="w-3 h-3" />
-            </a>
-          </div>
-          {event.changedAt && (
-            <span className="text-gray-400">
-              {formatTimestamp(event.changedAt as unknown as TimestampLike)}
-            </span>
-          )}
-          <div className="flex flex-wrap gap-1 mt-0.5 w-full">
-            {event.changes.map((c, j) => (
-              <span
-                key={j}
-                className={`px-1.5 py-0.5 rounded font-medium ${ACTION_STYLE[c.action] ?? 'bg-gray-100 text-gray-600'}`}
-              >
-                {c.action} · <span className="font-mono opacity-75">{c.userId.slice(0, 8)}…</span>
-                {c.previousRole && ` ${c.previousRole}`}
-                {c.newRole && ` → ${c.newRole}`}
-              </span>
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+function toHistoryEntries(events: PermissionChangeEvent[]) {
+  return events.map((event, i) => ({
+    key: i,
+    badge: (
+      <div className="flex flex-wrap gap-1 w-full">
+        {event.changes.map((c, j) => (
+          <span
+            key={j}
+            className={`px-1.5 py-0.5 rounded font-medium ${ACTION_STYLE[c.action] ?? 'bg-gray-100 text-gray-600'}`}
+          >
+            {c.action} · <span className="font-mono opacity-75">{c.userId.slice(0, 8)}…</span>
+            {c.previousRole && ` ${c.previousRole}`}
+            {c.newRole && ` → ${c.newRole}`}
+          </span>
+        ))}
+      </div>
+    ),
+    txHash: event.blockchainRef?.txHash,
+    timestamp: event.changedAt as unknown as TimestampLike,
+  }));
 }
 
 function MemberCountCell({
@@ -362,7 +339,7 @@ export const PermissionsIntegrityTable: React.FC<PermissionsIntegrityTableProps>
                             Recent Permission History
                             <span className="ml-1 text-gray-400 font-normal">(last 20)</span>
                           </p>
-                          <HistoryLog events={item.recentHistory} />
+                          <HistoryLog entries={toHistoryEntries(item.recentHistory)} />
                         </div>
 
                         {/* Error */}

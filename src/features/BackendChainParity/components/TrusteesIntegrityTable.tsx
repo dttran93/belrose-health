@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
 import { IntegrityStatusBadge } from './IntegrityStatusBadge';
 import { CopyableHash } from './ui/CopyableHash';
+import { HistoryLog, type HistoryLogEntry } from './HistoryLog';
 import { formatTimestamp } from '@/utils/dataFormattingUtils';
 import type { IntegrityStatus } from '../lib/types';
 import type { TrusteeIntegrityItem } from '../services/trusteeIntegrityService';
@@ -56,52 +57,24 @@ const ACTION_STYLE: Record<string, string> = {
   'level-update': 'bg-purple-50 text-purple-700',
 };
 
-function EventLog({ events }: { events: TrusteeHistoryEvent[] }) {
-  if (events.length === 0) {
-    return <p className="text-xs text-gray-400 italic">No on-chain events recorded</p>;
-  }
-  return (
-    <div className="flex flex-col gap-2">
-      {events.map((event, i) => (
-        <div key={i} className="flex flex-wrap items-center gap-1.5 text-xs">
-          <span
-            className={`px-1.5 py-0.5 rounded font-medium ${ACTION_STYLE[event.action] ?? 'bg-gray-100 text-gray-600'}`}
-          >
-            {ACTION_LABEL[event.action] ?? event.action}
-          </span>
-          {event.trustLevel && (
-            <span className="text-gray-400 capitalize">· {event.trustLevel}</span>
-          )}
-          {event.blockchainRef ? (
-            <>
-              <CopyableHash
-                value={event.blockchainRef.txHash}
-                chars={8}
-                className="font-mono text-gray-600"
-              />
-              <a
-                href={`${BASESCAN_TX_URL}${event.blockchainRef.txHash}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue-500 hover:text-blue-700"
-              >
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            </>
-          ) : (
-            <span className="text-gray-400 italic">pending confirmation</span>
-          )}
-          {event.changedAt && (
-            <span className="text-gray-400">
-              {formatTimestamp(
-                event.changedAt as unknown as import('@belrose/shared').TimestampLike
-              )}
-            </span>
-          )}
-        </div>
-      ))}
-    </div>
-  );
+function toHistoryEntries(events: TrusteeHistoryEvent[]): HistoryLogEntry[] {
+  return events.map((event, i) => ({
+    key: i,
+    badge: (
+      <>
+        <span
+          className={`px-1.5 py-0.5 rounded font-medium ${ACTION_STYLE[event.action] ?? 'bg-gray-100 text-gray-600'}`}
+        >
+          {ACTION_LABEL[event.action] ?? event.action}
+        </span>
+        {event.trustLevel && (
+          <span className="text-gray-400 capitalize">· {event.trustLevel}</span>
+        )}
+      </>
+    ),
+    txHash: event.blockchainRef?.txHash,
+    timestamp: event.changedAt as unknown as import('@belrose/shared').TimestampLike,
+  }));
 }
 
 function ChainStateCell({ item }: { item: TrusteeIntegrityItem }) {
@@ -321,7 +294,10 @@ export const TrusteesIntegrityTable: React.FC<TrusteesIntegrityTableProps> = ({
                         {/* On-Chain Event Log */}
                         <div className="flex-1 min-w-48">
                           <p className="text-xs font-medium text-gray-500 mb-2">On-Chain Events</p>
-                          <EventLog events={item.trusteeHistory} />
+                          <HistoryLog
+                            entries={toHistoryEntries(item.trusteeHistory)}
+                            emptyMessage="No on-chain events recorded"
+                          />
                         </div>
 
                         {/* Timeline */}
