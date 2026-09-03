@@ -25,7 +25,7 @@ interface ComponentRowProps {
 const ComponentRow: React.FC<ComponentRowProps> = ({ label, value, hint }) => (
   <div className="flex items-center justify-between py-2 border-b border-gray-100 last:border-b-0">
     <div>
-      <div className="text-sm font-medium text-gray-700">{label}</div>
+      <div className="text-left text-sm font-medium text-gray-700">{label}</div>
       <div className="text-xs text-gray-400">{hint}</div>
     </div>
     <div className="text-sm font-semibold text-gray-900 tabular-nums">
@@ -74,7 +74,9 @@ export const UserCredibilityBreakdown: React.FC<UserCredibilityBreakdownProps> =
   return (
     <div className={`rounded-lg border ${style.border} p-4 ${className}`}>
       <div className="flex items-center justify-between mb-4">
-        <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1 ${style.bg} ${style.text}`}>
+        <div
+          className={`inline-flex items-center gap-2 rounded-full px-3 py-1 ${style.bg} ${style.text}`}
+        >
           <style.Icon className="w-5 h-5" />
           <span className="font-semibold">{style.label}</span>
         </div>

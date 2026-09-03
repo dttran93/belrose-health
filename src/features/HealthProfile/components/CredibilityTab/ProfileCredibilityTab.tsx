@@ -48,13 +48,11 @@ export const ProfileCredibilityTab: React.FC<ProfileCredibilityTabProps> = ({
 }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const { results, summary, anchoredRecordIds, privateRecordsSummary, isLoading, error } =
+  const { results, anchoredCount, accessibleCount, privateCount, isLoading, error } =
     useBlockchainCompleteness(subjectFirebaseUid, records);
 
   const { data: userCredibility, isLoading: isUserCredibilityLoading } =
     useUserCredibility(subjectFirebaseUid);
-
-  const circ = 2 * Math.PI * 28;
 
   const handleToggle = useCallback(
     (id: string) => setExpandedId(prev => (prev === id ? null : id)),
@@ -97,7 +95,7 @@ export const ProfileCredibilityTab: React.FC<ProfileCredibilityTabProps> = ({
           credibility={userCredibility}
           isLoading={isUserCredibilityLoading}
           heading={`${subjectName}'s Credibility`}
-          className="max-w-[420px]"
+          className="w-full"
         />
       </div>
 
@@ -111,14 +109,10 @@ export const ProfileCredibilityTab: React.FC<ProfileCredibilityTabProps> = ({
 
       {/* ── Completeness banner ── */}
       <CompletenessBanner
-        summary={summary}
-        privateRecordsSummary={privateRecordsSummary}
-        totalAccessibleRecords={records.length}
+        anchoredCount={anchoredCount}
+        accessibleCount={accessibleCount}
+        privateCount={privateCount}
         subjectName={subjectName}
-        anchoredCount={anchoredRecordIds.size} // already available from the hook
-        visibleCount={
-          results.filter(r => r.status !== 'not_anchored' && r.status !== 'no_hash').length
-        }
       />
 
       {/* ── Note on separation of hash matching vs credibility ── */}
