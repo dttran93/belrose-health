@@ -1,31 +1,20 @@
-// src/features/BackendChainParity/components/RecordsIntegrityTable.tsx
+// src/features/BackendChainParity/components/RecordHashesIntegrityTable.tsx
 
 import React, { useState } from 'react';
-import {
-  AlertTriangle,
-  ArrowUpRight,
-  CheckCircle,
-  ChevronDown,
-  ChevronRight,
-  ExternalLink,
-} from 'lucide-react';
+import { AlertTriangle, CheckCircle, ChevronDown, ChevronRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { NETWORK } from '@belrose/shared';
-import { useSubjectConsentRefs } from '../hooks/useSubjectConsentRefs';
 import { IntegrityStatusBadge } from './IntegrityStatusBadge';
 import { CopyableHash } from './ui/CopyableHash';
 import { VersionReviewBadge } from '@/features/ViewEditRecord/components/Edit/VersionReviewBadge';
-import type { RecordIntegrityItem } from '../services/recordSubjectIntegrityService';
-import type { IntegrityStatus, SubjectSyncStatus } from '../lib/types';
+import type { RecordHashIntegrityItem } from '../services/recordHashIntegrityService';
+import type { HashSyncStatus, IntegrityStatus } from '../lib/types';
 import type {
   DisputeIntegrityItem,
   VerificationIntegrityItem,
 } from '../services/credibilityIntegrityService';
 
-const BASESCAN_TX_URL = `${NETWORK.explorerUrl}/tx/`;
-
-const SUBJECT_STATUS_CONFIG: Record<
-  SubjectSyncStatus,
+const HASH_STATUS_CONFIG: Record<
+  HashSyncStatus,
   { dotClass: string; label: string; textClass: string }
 > = {
   active_sync: {
@@ -46,8 +35,8 @@ const SUBJECT_STATUS_CONFIG: Record<
   removed_sync: { dotClass: 'bg-gray-300', label: 'removed (synced)', textClass: 'text-gray-400' },
 };
 
-interface RecordsIntegrityTableProps {
-  items: RecordIntegrityItem[];
+interface RecordHashesIntegrityTableProps {
+  items: RecordHashIntegrityItem[];
   searchQuery: string;
   statusFilter: IntegrityStatus | 'all';
   verificationsMap: Record<string, VerificationIntegrityItem[] | undefined>;
@@ -55,7 +44,7 @@ interface RecordsIntegrityTableProps {
   onClearSearch: () => void;
 }
 
-export const RecordsIntegrityTable: React.FC<RecordsIntegrityTableProps> = ({
+export const RecordHashesIntegrityTable: React.FC<RecordHashesIntegrityTableProps> = ({
   items,
   searchQuery,
   statusFilter,
@@ -71,10 +60,9 @@ export const RecordsIntegrityTable: React.FC<RecordsIntegrityTableProps> = ({
     const q = searchQuery.toLowerCase();
     return (
       item.firestoreId.toLowerCase().includes(q) ||
-      (item.recordIdHash?.toLowerCase().includes(q) ?? false) ||
+      item.recordIdHash.toLowerCase().includes(q) ||
       (item.recordHash?.toLowerCase().includes(q) ?? false) ||
-      item.backendSubjects.some((uid: string) => uid.toLowerCase().includes(q)) ||
-      (item.subjectComparisons?.some(s => s.userIdHash?.toLowerCase().includes(q)) ?? false)
+      item.hashComparisons.some(h => h.hash.toLowerCase().includes(q))
     );
   });
 
@@ -102,9 +90,9 @@ export const RecordsIntegrityTable: React.FC<RecordsIntegrityTableProps> = ({
             <th className="w-6 px-3 py-3" />
             <th className="px-4 py-3 text-center font-medium text-gray-600">Status</th>
             <th className="px-4 py-3 text-center font-medium text-gray-600">Record ID</th>
-            <th className="px-4 py-3 text-center font-medium text-gray-600">Record ID Hash</th>
             <th className="px-4 py-3 text-center font-medium text-gray-600">Record Hash</th>
-            <th className="px-4 py-3 text-center font-medium text-gray-600">Subjects</th>
+            <th className="px-4 py-3 text-center font-medium text-gray-600">Backend</th>
+            <th className="px-4 py-3 text-center font-medium text-gray-600">On-Chain</th>
             <th className="px-4 py-3 text-center font-medium text-gray-600">Credibility</th>
           </tr>
         </thead>
@@ -131,13 +119,13 @@ export const RecordsIntegrityTable: React.FC<RecordsIntegrityTableProps> = ({
                     <CopyableHash value={item.firestoreId} />
                   </td>
                   <td className="px-4 py-3 font-mono text-xs text-gray-500">
-                    <CopyableHash value={item.recordIdHash} />
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-gray-500">
                     <CopyableHash value={item.recordHash} />
                   </td>
                   <td className="px-4 py-3 text-xs text-center text-gray-500">
-                    {item.backendSubjects.length}
+                    {item.backendHashes.length}
+                  </td>
+                  <td className="px-4 py-3 text-xs text-center text-gray-500">
+                    {item.onChainHashes.length}
                   </td>
                   <td className="px-4 py-3 text-center">
                     {(() => {
@@ -188,14 +176,13 @@ export const RecordsIntegrityTable: React.FC<RecordsIntegrityTableProps> = ({
 // ─── Expanded panel ────────────────────────────────────────────────────────────
 
 interface ExpandedRowProps {
-  item: RecordIntegrityItem;
+  item: RecordHashIntegrityItem;
   verifications: VerificationIntegrityItem[];
   disputes: DisputeIntegrityItem[];
 }
 
 const ExpandedRow: React.FC<ExpandedRowProps> = ({ item, verifications, disputes }) => {
   const navigate = useNavigate();
-  const { data: consentRefs } = useSubjectConsentRefs(item.firestoreId);
   // Group verifications and disputes by their recordHash so each hash row
   // gets its own accurate V&D counts (same pattern as VersionHistory.tsx)
   const versByHash = new Map<string, VerificationIntegrityItem[]>();
@@ -226,122 +213,60 @@ const ExpandedRow: React.FC<ExpandedRowProps> = ({ item, verifications, disputes
         </span>
       </div>
 
-      {/* ── Two-column: subjects left, hash + credibility right ── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Subjects */}
-        <div className="bg-white rounded-lg border border-gray-200 p-4">
-          <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
-            Subjects ({item.backendSubjects.length} backend · {item.onChainSubjects.length}{' '}
-            on-chain)
-          </div>
-          {item.subjectComparisons && item.subjectComparisons.length > 0 ? (
-            <div className="divide-y divide-gray-100">
-              {item.subjectComparisons.map(s => {
-                const cfg = SUBJECT_STATUS_CONFIG[s.syncStatus];
-                return (
-                  <div key={s.userIdHash} className="flex items-start gap-2 py-2 text-xs">
-                    <span className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${cfg.dotClass}`} />
-                    <div className="text-left min-w-0 flex-1">
-                      {s.uid ? (
-                        <div className="flex items-center gap-1">
-                          <span className="font-mono text-gray-700 truncate">{s.uid}</span>
-                          <a
-                            href={`?tab=members&search=${s.uid}`}
-                            onClick={e => e.stopPropagation()}
-                            title="View in Members tab"
-                            className="flex-shrink-0 text-gray-400 hover:text-blue-600 transition-colors"
-                          >
-                            <ArrowUpRight className="w-3 h-3" />
-                          </a>
-                        </div>
-                      ) : (
-                        <span className="italic text-left text-gray-400">uid unknown</span>
-                      )}
-                      <div className="font-mono text-left text-gray-400 mt-0.5">
-                        <CopyableHash value={s.userIdHash} />
-                      </div>
-                    </div>
-                    <span className={`flex-shrink-0 flex items-center gap-1 ${cfg.textClass}`}>
-                      {cfg.label}
-                      {s.uid && consentRefs?.[s.uid]?.txHash && (
-                        <a
-                          href={`${BASESCAN_TX_URL}${consentRefs[s.uid]!.txHash}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="View anchoring tx"
-                          onClick={e => e.stopPropagation()}
-                        >
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      )}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          ) : item.integrityStatus === 'not_applicable' ? (
-            <div className="text-xs text-gray-400">Not yet anchored on chain.</div>
-          ) : (
-            <div className="text-xs text-gray-400">No subjects.</div>
-          )}
-          {item.error && (
-            <div className="mt-3 text-xs text-red-600 bg-red-50 rounded p-2">{item.error}</div>
-          )}
+      <div className="bg-white rounded-lg border border-gray-200 p-4">
+        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+          Hashes ({item.backendHashes.length} backend · {item.onChainHashes.length} on-chain)
         </div>
-
-        {/* Hashes */}
-        <div className="bg-white rounded-lg border border-gray-200 p-4">
-          <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
-            Hashes ({item.backendHashes.length} backend · {item.onChainHashes.length} on-chain)
-          </div>
-          {item.hashComparisons && item.hashComparisons.length > 0 ? (
-            <div className="divide-y divide-gray-100">
-              {item.hashComparisons.map(h => {
-                const cfg = SUBJECT_STATUS_CONFIG[h.syncStatus];
-                return (
-                  <div key={h.hash} className="flex items-start gap-2 py-2 text-xs">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-1.5 font-mono text-gray-700">
-                        <div className="flex items-center gap-1">
-                          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${cfg.dotClass}`} />
-                          <CopyableHash value={h.hash} />
-                          {h.isCurrentHash && (
-                            <span className="text-[10px] font-sans font-medium text-blue-600 bg-blue-50 rounded px-1 py-0.5 leading-none">
-                              current
-                            </span>
-                          )}
-                        </div>
-                        {(() => {
-                          const hashVers = versByHash.get(h.hash) ?? [];
-                          const hashDisps = dispsByHash.get(h.hash) ?? [];
-                          return (
-                            <VersionReviewBadge
-                              stats={{
-                                verifications: {
-                                  total: hashVers.length,
-                                  active: hashVers.filter(v => v.isActiveOnChain !== false).length,
-                                },
-                                disputes: {
-                                  total: hashDisps.length,
-                                  active: hashDisps.filter(d => d.isActiveOnChain !== false).length,
-                                },
-                              }}
-                              onClick={() => navigate(`?tab=credibility&search=${h.hash}`)}
-                            />
-                          );
-                        })()}
+        {item.hashComparisons.length > 0 ? (
+          <div className="divide-y divide-gray-100">
+            {item.hashComparisons.map(h => {
+              const cfg = HASH_STATUS_CONFIG[h.syncStatus];
+              return (
+                <div key={h.hash} className="flex items-start gap-2 py-2 text-xs">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-1.5 font-mono text-gray-700">
+                      <div className="flex items-center gap-1">
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${cfg.dotClass}`} />
+                        <CopyableHash value={h.hash} />
+                        {h.isCurrentHash && (
+                          <span className="text-[10px] font-sans font-medium text-blue-600 bg-blue-50 rounded px-1 py-0.5 leading-none">
+                            current
+                          </span>
+                        )}
                       </div>
+                      {(() => {
+                        const hashVers = versByHash.get(h.hash) ?? [];
+                        const hashDisps = dispsByHash.get(h.hash) ?? [];
+                        return (
+                          <VersionReviewBadge
+                            stats={{
+                              verifications: {
+                                total: hashVers.length,
+                                active: hashVers.filter(v => v.isActiveOnChain !== false).length,
+                              },
+                              disputes: {
+                                total: hashDisps.length,
+                                active: hashDisps.filter(d => d.isActiveOnChain !== false).length,
+                              },
+                            }}
+                            onClick={() => navigate(`?tab=credibility&search=${h.hash}`)}
+                          />
+                        );
+                      })()}
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          ) : item.integrityStatus === 'not_applicable' ? (
-            <div className="text-xs text-gray-400">Not yet anchored on chain.</div>
-          ) : (
-            <div className="text-xs text-gray-400">No hashes.</div>
-          )}
-        </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : item.integrityStatus === 'not_applicable' ? (
+          <div className="text-xs text-gray-400">Not yet anchored on chain.</div>
+        ) : (
+          <div className="text-xs text-gray-400">No hashes.</div>
+        )}
+        {item.error && (
+          <div className="mt-3 text-xs text-red-600 bg-red-50 rounded p-2">{item.error}</div>
+        )}
       </div>
     </div>
   );
