@@ -97,7 +97,7 @@ export const ProfileCredibilityTab: React.FC<ProfileCredibilityTabProps> = ({
           credibility={userCredibility}
           isLoading={isUserCredibilityLoading}
           heading={`${subjectName}'s Credibility`}
-          className="max-w-[420px]"
+          className="w-full"
         />
       </div>
 
