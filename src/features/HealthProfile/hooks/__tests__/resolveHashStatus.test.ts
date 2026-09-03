@@ -1,4 +1,4 @@
-// src/features/HealthProfile/hooks/__tests__/resolveStatus.test.ts
+// src/features/HealthProfile/hooks/__tests__/resolveHashStatus.test.ts
 //
 // Tier 1 — resolveHashStatus is useBlockchainCompleteness's pure hash-matching state
 // machine (exported specifically to test in isolation). It only ever answers "does this

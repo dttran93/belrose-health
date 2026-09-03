@@ -77,8 +77,47 @@ export interface UseBlockchainCompletenessReturn {
 }
 
 // ============================================================================
-// HELPER
+// HELPERS
 // ============================================================================
+
+export interface AccessCompleteness {
+  /** Firestore record IDs (raw) of accessible records confirmed anchored on-chain */
+  anchoredIds: string[];
+  /** Total records the subject has anchored on-chain (accessible + private) */
+  anchoredCount: number;
+  /** Of those, how many the viewer can access */
+  accessibleCount: number;
+  /** Anchored records the viewer cannot access */
+  privateCount: number;
+}
+
+/**
+ * Determine which of the viewer's accessible records are confirmed anchored on-chain,
+ * given the subject's on-chain recordIdHashes.
+ *
+ * On-chain, a subject's medical history is a list of recordIdHashes
+ * (keccak256(recordId)) — the contract never learns the plaintext Firestore ID. So the
+ * only way to tell whether a *specific* record is anchored is to hash that record's own
+ * ID and check it against the on-chain set — comparing raw IDs against the on-chain
+ * values directly will never match anything.
+ */
+export function computeAccessCompleteness(
+  records: FileObject[],
+  onChainHashes: string[]
+): AccessCompleteness {
+  const onChainHashSet = new Set(onChainHashes);
+
+  const anchoredIds = records
+    .filter((r): r is FileObject & { id: string } => !!r.id && onChainHashSet.has(hashId(r.id)))
+    .map(r => r.id);
+
+  return {
+    anchoredIds,
+    anchoredCount: onChainHashes.length,
+    accessibleCount: anchoredIds.length,
+    privateCount: onChainHashes.length - anchoredIds.length,
+  };
+}
 
 export function resolveHashStatus(
   currentHash: string | null | undefined,
@@ -140,6 +179,7 @@ export function useBlockchainCompleteness(
 ): UseBlockchainCompletenessReturn {
   const [anchoredRecordIds, setAnchoredRecordIds] = useState<Set<string>>(new Set());
   const [versionHistoryMap, setVersionHistoryMap] = useState<Map<string, string[]>>(new Map());
+  const [anchoredCount, setAnchoredCount] = useState(0);
   const [accessibleCount, setAccessibleCount] = useState(0);
   const [privateCount, setPrivateCount] = useState(0);
 
@@ -166,30 +206,22 @@ export function useBlockchainCompleteness(
         const wallets = await BlockchainRoleManagerService.getWalletsForUser(subjectFirebaseUid);
         console.log(`🔑 ${wallets.length} registered wallet(s) for user`);
 
-        // On-chain, a subject's medical history is a list of recordIdHashes
-        // (keccak256(recordId)) — the contract never learns the plaintext Firestore ID.
-        // So the only way to tell whether a *specific* Firestore record is anchored is
-        // to hash that record's own ID and check it against this set, not to compare
-        // raw IDs against the on-chain values directly.
         const onChainHashes: string[] =
           await blockchainHealthRecordService.getActiveSubjectMedicalHistory(subjectFirebaseUid);
-        const onChainHashSet = new Set(onChainHashes);
 
         console.log(`📋 ${onChainHashes.length} anchored records on-chain`);
 
-        const anchoredIds = records
-          .filter(r => r.id && onChainHashSet.has(hashId(r.id)))
-          .map(r => r.id!);
-
-        setAnchoredRecordIds(new Set(anchoredIds));
-        setAccessibleCount(anchoredIds.length);
-        setPrivateCount(onChainHashes.length - anchoredIds.length);
+        const completeness = computeAccessCompleteness(records, onChainHashes);
+        setAnchoredRecordIds(new Set(completeness.anchoredIds));
+        setAnchoredCount(completeness.anchoredCount);
+        setAccessibleCount(completeness.accessibleCount);
+        setPrivateCount(completeness.privateCount);
 
         // Fetch version history for accessible anchored records, keyed by raw Firestore
         // ID (getRecordVersionHistory hashes it internally) so resolveHashStatus can look
         // it up the same way.
         const historyEntries = await Promise.all(
-          anchoredIds.map(async recordId => {
+          completeness.anchoredIds.map(async recordId => {
             const hashes = await blockchainHealthRecordService.getRecordVersionHistory(recordId);
             return [recordId, hashes] as [string, string[]];
           })
@@ -226,7 +258,7 @@ export function useBlockchainCompleteness(
 
   return {
     results,
-    anchoredCount: anchoredRecordIds.size,
+    anchoredCount,
     accessibleCount,
     privateCount,
     anchoredRecordIds,
