@@ -1,8 +1,8 @@
-// src/features/BackendChainParity/components/IntegrityStatusBadge.tsx
+// src/features/BackendChainParity/components/ui/IntegrityStatusBadge.tsx
 
 import React from 'react';
 import { CheckCircle, AlertTriangle, XCircle, Clock, Minus, AlertCircle, Link } from 'lucide-react';
-import type { IntegrityStatus } from '../lib/types';
+import type { IntegrityStatus } from '../../lib/types';
 
 interface IntegrityStatusBadgeProps {
   status: IntegrityStatus;

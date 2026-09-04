@@ -1,10 +1,12 @@
 // src/features/BackendChainParity/components/PermissionsIntegrityTable.tsx
 
-import React, { useState } from 'react';
-import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
-import { IntegrityStatusBadge } from './IntegrityStatusBadge';
+import React from 'react';
+import { ExternalLink } from 'lucide-react';
+import { IntegrityStatusBadge } from './ui/IntegrityStatusBadge';
 import { CopyableHash } from './ui/CopyableHash';
-import { HistoryLog } from './HistoryLog';
+import { HistoryLog } from './ui/HistoryLog';
+import { IntegrityTable, type IntegrityTableColumn } from './ui/IntegrityTable';
+import { DetailSection } from './ui/DetailSection';
 import { formatTimestamp } from '@/utils/dataFormattingUtils';
 import type { IntegrityStatus } from '../lib/types';
 import type {
@@ -191,7 +193,62 @@ interface PermissionsIntegrityTableProps {
   onClearSearch: () => void;
 }
 
-const TOTAL_COLS = 6;
+const columns: IntegrityTableColumn<RecordPermissionIntegrityItem>[] = [
+  {
+    header: 'Status',
+    cell: item => <IntegrityStatusBadge status={item.integrityStatus} />,
+  },
+  {
+    header: 'Record',
+    cell: item => (
+      <div className="flex flex-col gap-0.5 font-mono">
+        <div className="text-xs text-gray-600">
+          ID: <CopyableHash value={item.recordId} chars={10} />
+        </div>
+        <div className="text-xs text-gray-400">
+          #: <CopyableHash value={item.recordIdHash} chars={10} />
+        </div>
+      </div>
+    ),
+  },
+  {
+    header: 'Uploaded By',
+    cell: item =>
+      item.uploadedBy ? (
+        <div className="flex flex-col gap-0.5 font-mono">
+          <div className="text-xs text-gray-600">
+            ID: <CopyableHash value={item.uploadedBy} chars={10} />
+          </div>
+          <div className="text-xs text-gray-400">
+            #: <CopyableHash value={item.uploadedByIdHash!} chars={10} />
+          </div>
+        </div>
+      ) : (
+        <span className="text-gray-400 text-xs">—</span>
+      ),
+  },
+  {
+    header: 'Members (FS / Chain)',
+    cell: item => (
+      <MemberCountCell
+        firestoreCount={item.firestoreMemberCount}
+        chainCount={item.onChainMemberCount}
+      />
+    ),
+  },
+  {
+    header: 'Last Change',
+    cellClassName: 'px-4 py-3 text-xs text-gray-500',
+    cell: item => {
+      const lastChange = item.recentHistory[0]?.changedAt;
+      return lastChange ? (
+        formatTimestamp(lastChange as unknown as TimestampLike)
+      ) : (
+        <span className="text-gray-400">—</span>
+      );
+    },
+  },
+];
 
 export const PermissionsIntegrityTable: React.FC<PermissionsIntegrityTableProps> = ({
   items,
@@ -199,17 +256,6 @@ export const PermissionsIntegrityTable: React.FC<PermissionsIntegrityTableProps>
   statusFilter,
   onClearSearch,
 }) => {
-  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
-
-  const toggleRow = (id: string) => {
-    setExpandedRows(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
   const filtered = items.filter(item => {
     if (statusFilter !== 'all' && item.integrityStatus !== statusFilter) return false;
     if (!searchQuery) return true;
@@ -225,138 +271,39 @@ export const PermissionsIntegrityTable: React.FC<PermissionsIntegrityTableProps>
     );
   });
 
-  if (filtered.length === 0) {
-    return (
-      <div className="text-center py-12 text-gray-400">
-        <p>No records match the current filter.</p>
-        {searchQuery && (
-          <button
-            onClick={onClearSearch}
-            className="mt-2 text-sm text-blue-500 hover:text-blue-700"
-          >
-            Clear search
-          </button>
-        )}
-      </div>
-    );
-  }
-
   return (
-    <div className="overflow-auto rounded-xl border border-gray-200 max-h-[80vh]">
-      <table className="w-full text-sm">
-        <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
-          <tr>
-            <th className="px-2 py-3 w-6" />
-            <th className="px-4 py-3 text-left font-medium text-gray-600">Status</th>
-            <th className="px-4 py-3 text-left font-medium text-gray-600">Record</th>
-            <th className="px-4 py-3 text-left font-medium text-gray-600">Uploaded By</th>
-            <th className="px-4 py-3 text-left font-medium text-gray-600">Members (FS / Chain)</th>
-            <th className="px-4 py-3 text-left font-medium text-gray-600">Last Change</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-100 text-left">
-          {filtered.map(item => {
-            const isExpanded = expandedRows.has(item.recordId);
-            const lastChange = item.recentHistory[0]?.changedAt;
+    <IntegrityTable
+      items={filtered}
+      rowKey={item => item.recordId}
+      columns={columns}
+      emptyMessage="No records match the current filter."
+      searchQuery={searchQuery}
+      onClearSearch={onClearSearch}
+      renderDetail={item => (
+        <div className="flex flex-col gap-4">
+          <DetailSection title="Members">
+            <MemberComparisonTable comparisons={item.memberComparisons} />
+          </DetailSection>
 
-            return (
-              <React.Fragment key={item.recordId}>
-                <tr className="hover:bg-gray-50">
-                  <td className="px-2 py-3">
-                    <button
-                      onClick={() => toggleRow(item.recordId)}
-                      className="text-gray-400 hover:text-gray-600 transition-colors"
-                      aria-label={isExpanded ? 'Collapse' : 'Expand'}
-                    >
-                      {isExpanded ? (
-                        <ChevronDown className="w-4 h-4" />
-                      ) : (
-                        <ChevronRight className="w-4 h-4" />
-                      )}
-                    </button>
-                  </td>
+          <DetailSection
+            title={
+              <>
+                Recent Permission History
+                <span className="ml-1 text-gray-400 font-normal">(last 20)</span>
+              </>
+            }
+          >
+            <HistoryLog entries={toHistoryEntries(item.recentHistory)} />
+          </DetailSection>
 
-                  <td className="px-4 py-3">
-                    <IntegrityStatusBadge status={item.integrityStatus} />
-                  </td>
-
-                  <td className="px-4 py-3">
-                    <div className="flex flex-col gap-0.5 font-mono">
-                      <div className="text-xs text-gray-600">
-                        ID: <CopyableHash value={item.recordId} chars={10} />
-                      </div>
-                      <div className="text-xs text-gray-400">
-                        #: <CopyableHash value={item.recordIdHash} chars={10} />
-                      </div>
-                    </div>
-                  </td>
-
-                  <td className="px-4 py-3">
-                    {item.uploadedBy ? (
-                      <div className="flex flex-col gap-0.5 font-mono">
-                        <div className="text-xs text-gray-600">
-                          ID: <CopyableHash value={item.uploadedBy} chars={10} />
-                        </div>
-                        <div className="text-xs text-gray-400">
-                          #: <CopyableHash value={item.uploadedByIdHash!} chars={10} />
-                        </div>
-                      </div>
-                    ) : (
-                      <span className="text-gray-400 text-xs">—</span>
-                    )}
-                  </td>
-
-                  <td className="px-4 py-3">
-                    <MemberCountCell
-                      firestoreCount={item.firestoreMemberCount}
-                      chainCount={item.onChainMemberCount}
-                    />
-                  </td>
-
-                  <td className="px-4 py-3 text-xs text-gray-500">
-                    {lastChange ? (
-                      formatTimestamp(lastChange as unknown as TimestampLike)
-                    ) : (
-                      <span className="text-gray-400">—</span>
-                    )}
-                  </td>
-                </tr>
-
-                {isExpanded && (
-                  <tr className="bg-gray-50 border-t border-gray-100">
-                    <td />
-                    <td colSpan={TOTAL_COLS - 1} className="px-6 py-5">
-                      <div className="flex flex-col gap-6">
-                        {/* Members comparison */}
-                        <div>
-                          <p className="text-xs font-medium text-gray-500 mb-3">Members</p>
-                          <MemberComparisonTable comparisons={item.memberComparisons} />
-                        </div>
-
-                        {/* Permission history */}
-                        <div>
-                          <p className="text-xs font-medium text-gray-500 mb-2">
-                            Recent Permission History
-                            <span className="ml-1 text-gray-400 font-normal">(last 20)</span>
-                          </p>
-                          <HistoryLog entries={toHistoryEntries(item.recentHistory)} />
-                        </div>
-
-                        {/* Error */}
-                        {item.error && (
-                          <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
-                            {item.error}
-                          </div>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </React.Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+          {/* Error */}
+          {item.error && (
+            <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
+              {item.error}
+            </div>
+          )}
+        </div>
+      )}
+    />
   );
 };

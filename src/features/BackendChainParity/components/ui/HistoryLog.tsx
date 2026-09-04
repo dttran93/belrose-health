@@ -1,8 +1,8 @@
-// src/features/BackendChainParity/components/HistoryLog.tsx
+// src/features/BackendChainParity/components/ui/HistoryLog.tsx
 
 import React from 'react';
 import { ExternalLink } from 'lucide-react';
-import { CopyableHash } from './ui/CopyableHash';
+import { CopyableHash } from './CopyableHash';
 import { formatTimestamp } from '@/utils/dataFormattingUtils';
 import { NETWORK } from '@belrose/shared';
 import type { TimestampLike } from '@belrose/shared';

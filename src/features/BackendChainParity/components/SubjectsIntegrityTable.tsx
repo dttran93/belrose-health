@@ -1,14 +1,16 @@
 // src/features/BackendChainParity/components/SubjectsIntegrityTable.tsx
 
-import React, { useState } from 'react';
-import { ArrowUpRight, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
+import React from 'react';
+import { ArrowUpRight, ExternalLink } from 'lucide-react';
 import { NETWORK } from '@belrose/shared';
 import type { SubjectHistoryAction, SubjectHistoryEvent } from '@belrose/shared';
 import { useSubjectConsentRefs } from '../hooks/useSubjectConsentRefs';
 import { useSubjectHistory } from '../hooks/useSubjectHistory';
-import { IntegrityStatusBadge } from './IntegrityStatusBadge';
+import { IntegrityStatusBadge } from './ui/IntegrityStatusBadge';
 import { CopyableHash } from './ui/CopyableHash';
-import { HistoryLog, type HistoryLogEntry } from './HistoryLog';
+import { HistoryLog, type HistoryLogEntry } from './ui/HistoryLog';
+import { IntegrityTable, type IntegrityTableColumn } from './ui/IntegrityTable';
+import { DetailSection } from './ui/DetailSection';
 import type { RecordSubjectIntegrityItem } from '../services/recordSubjectIntegrityService';
 import type { IntegrityStatus, SubjectSyncStatus } from '../lib/types';
 
@@ -74,14 +76,42 @@ interface SubjectsIntegrityTableProps {
   onClearSearch: () => void;
 }
 
+const columns: IntegrityTableColumn<RecordSubjectIntegrityItem>[] = [
+  {
+    header: 'Status',
+    cell: item => <IntegrityStatusBadge status={item.integrityStatus} />,
+  },
+  {
+    header: 'Record',
+    cell: item => (
+      <div className="flex flex-col gap-0.5 font-mono">
+        <div className="text-xs text-gray-600">
+          ID: <CopyableHash value={item.firestoreId} chars={10} />
+        </div>
+        <div className="text-xs text-gray-400">
+          #: <CopyableHash value={item.recordIdHash} chars={10} />
+        </div>
+      </div>
+    ),
+  },
+  {
+    header: 'Backend',
+    cellClassName: 'px-4 py-3 text-xs text-gray-500',
+    cell: item => item.backendSubjects.length,
+  },
+  {
+    header: 'On-Chain',
+    cellClassName: 'px-4 py-3 text-xs text-gray-500',
+    cell: item => item.onChainSubjects.length,
+  },
+];
+
 export const SubjectsIntegrityTable: React.FC<SubjectsIntegrityTableProps> = ({
   items,
   searchQuery,
   statusFilter,
   onClearSearch,
 }) => {
-  const [expandedRow, setExpandedRow] = useState<string | null>(null);
-
   const filtered = items.filter(item => {
     if (statusFilter !== 'all' && item.integrityStatus !== statusFilter) return false;
     if (!searchQuery) return true;
@@ -94,81 +124,16 @@ export const SubjectsIntegrityTable: React.FC<SubjectsIntegrityTableProps> = ({
     );
   });
 
-  if (filtered.length === 0) {
-    return (
-      <div className="text-center py-12 text-gray-400">
-        <p>No records match the current filter.</p>
-        {searchQuery && (
-          <button
-            onClick={onClearSearch}
-            className="mt-2 text-sm text-blue-500 hover:text-blue-700"
-          >
-            Clear search
-          </button>
-        )}
-      </div>
-    );
-  }
-
   return (
-    <div className="overflow-auto rounded-xl border border-gray-200 max-h-[80vh]">
-      <table className="w-full text-sm">
-        <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
-          <tr>
-            <th className="w-6 px-3 py-3" />
-            <th className="px-4 py-3 text-center font-medium text-gray-600">Status</th>
-            <th className="px-4 py-3 text-center font-medium text-gray-600">Record ID</th>
-            <th className="px-4 py-3 text-center font-medium text-gray-600">Record ID Hash</th>
-            <th className="px-4 py-3 text-center font-medium text-gray-600">Backend</th>
-            <th className="px-4 py-3 text-center font-medium text-gray-600">On-Chain</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-100">
-          {filtered.map(item => {
-            const isExpanded = expandedRow === item.firestoreId;
-            return (
-              <React.Fragment key={item.firestoreId}>
-                <tr
-                  className="hover:bg-gray-50 cursor-pointer"
-                  onClick={() => setExpandedRow(isExpanded ? null : item.firestoreId)}
-                >
-                  <td className="px-3 py-3 text-gray-400">
-                    {isExpanded ? (
-                      <ChevronDown className="w-4 h-4" />
-                    ) : (
-                      <ChevronRight className="w-4 h-4" />
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <IntegrityStatusBadge status={item.integrityStatus} />
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-gray-500">
-                    <CopyableHash value={item.firestoreId} />
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-gray-500">
-                    <CopyableHash value={item.recordIdHash} />
-                  </td>
-                  <td className="px-4 py-3 text-xs text-center text-gray-500">
-                    {item.backendSubjects.length}
-                  </td>
-                  <td className="px-4 py-3 text-xs text-center text-gray-500">
-                    {item.onChainSubjects.length}
-                  </td>
-                </tr>
-
-                {isExpanded && (
-                  <tr className="bg-gray-50">
-                    <td colSpan={6} className="px-6 py-5">
-                      <ExpandedRow item={item} />
-                    </td>
-                  </tr>
-                )}
-              </React.Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <IntegrityTable
+      items={filtered}
+      rowKey={item => item.firestoreId}
+      columns={columns}
+      emptyMessage="No records match the current filter."
+      searchQuery={searchQuery}
+      onClearSearch={onClearSearch}
+      renderDetail={item => <ExpandedRow item={item} />}
+    />
   );
 };
 
@@ -179,23 +144,11 @@ const ExpandedRow: React.FC<{ item: RecordSubjectIntegrityItem }> = ({ item }) =
   const { data: historyEvents } = useSubjectHistory(item.firestoreId);
 
   return (
-    <div className="space-y-4">
-      {/* ── Identifiers ── */}
-      <div className="flex flex-wrap gap-x-8 gap-y-1 text-xs font-mono text-gray-500">
-        <span>
-          <span className="text-gray-400 mr-2">Record ID</span>
-          <CopyableHash value={item.firestoreId} full />
-        </span>
-        <span>
-          <span className="text-gray-400 mr-2">Record ID Hash</span>
-          <CopyableHash value={item.recordIdHash} full />
-        </span>
-      </div>
-
-      <div className="bg-white rounded-lg border border-gray-200 p-4">
-        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
-          Subjects ({item.backendSubjects.length} backend · {item.onChainSubjects.length} on-chain)
-        </div>
+    <div className="flex gap-4 flex-wrap">
+      <DetailSection
+        title={`Subjects (${item.backendSubjects.length} backend · ${item.onChainSubjects.length} on-chain)`}
+        className="flex-1 min-w-64"
+      >
         {item.subjectComparisons.length > 0 ? (
           <div className="divide-y divide-gray-100">
             {item.subjectComparisons.map(s => {
@@ -209,7 +162,6 @@ const ExpandedRow: React.FC<{ item: RecordSubjectIntegrityItem }> = ({ item }) =
                         <span className="font-mono text-gray-700 truncate">{s.uid}</span>
                         <a
                           href={`?tab=members&search=${s.uid}`}
-                          onClick={e => e.stopPropagation()}
                           title="View in Members tab"
                           className="flex-shrink-0 text-gray-400 hover:text-blue-600 transition-colors"
                         >
@@ -231,7 +183,6 @@ const ExpandedRow: React.FC<{ item: RecordSubjectIntegrityItem }> = ({ item }) =
                         target="_blank"
                         rel="noopener noreferrer"
                         title="View anchoring tx"
-                        onClick={e => e.stopPropagation()}
                       >
                         <ExternalLink className="w-3 h-3" />
                       </a>
@@ -249,17 +200,14 @@ const ExpandedRow: React.FC<{ item: RecordSubjectIntegrityItem }> = ({ item }) =
         {item.error && (
           <div className="mt-3 text-xs text-red-600 bg-red-50 rounded p-2">{item.error}</div>
         )}
-      </div>
+      </DetailSection>
 
-      <div className="bg-white rounded-lg border border-gray-200 p-4">
-        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
-          Subject History
-        </div>
+      <DetailSection title="Subject History" className="flex-1 min-w-64">
         <HistoryLog
           entries={toHistoryEntries(historyEvents ?? [])}
           emptyMessage="No subject history recorded"
         />
-      </div>
+      </DetailSection>
     </div>
   );
 };

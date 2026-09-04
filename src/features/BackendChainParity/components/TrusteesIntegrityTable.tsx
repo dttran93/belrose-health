@@ -1,10 +1,12 @@
 // src/features/BackendChainParity/components/TrusteesIntegrityTable.tsx
 
-import React, { useState } from 'react';
-import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
-import { IntegrityStatusBadge } from './IntegrityStatusBadge';
+import React from 'react';
+import { ExternalLink } from 'lucide-react';
+import { IntegrityStatusBadge } from './ui/IntegrityStatusBadge';
 import { CopyableHash } from './ui/CopyableHash';
-import { HistoryLog, type HistoryLogEntry } from './HistoryLog';
+import { HistoryLog, type HistoryLogEntry } from './ui/HistoryLog';
+import { IntegrityTable, type IntegrityTableColumn } from './ui/IntegrityTable';
+import { DetailSection } from './ui/DetailSection';
 import { formatTimestamp } from '@/utils/dataFormattingUtils';
 import type { IntegrityStatus } from '../lib/types';
 import type { TrusteeIntegrityItem } from '../services/trusteeIntegrityService';
@@ -113,7 +115,95 @@ function ChainStateCell({ item }: { item: TrusteeIntegrityItem }) {
   );
 }
 
-const TOTAL_COLS = 8;
+const columns: IntegrityTableColumn<TrusteeIntegrityItem>[] = [
+  {
+    header: 'Status',
+    cell: item => <IntegrityStatusBadge status={item.integrityStatus} />,
+  },
+  {
+    header: 'Trustor',
+    cell: item => (
+      <div className="flex flex-col">
+        <div className="font-mono text-xs text-gray-600">
+          ID: <CopyableHash value={item.trustorId} chars={10} />
+        </div>
+        <div className="font-mono text-xs text-gray-400">
+          #: <CopyableHash value={item.trustorIdHash} chars={10} />
+        </div>
+      </div>
+    ),
+  },
+  {
+    header: 'Trustee',
+    cell: item => (
+      <div className="flex flex-col gap-0.5">
+        <div className="font-mono text-xs text-gray-600">
+          ID: <CopyableHash value={item.trusteeId} chars={10} />
+        </div>
+        <div className="font-mono text-xs text-gray-400">
+          #: <CopyableHash value={item.trusteeIdHash} chars={10} />
+        </div>
+        {item.isDependentRelationship && (
+          <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-purple-50 text-purple-700 self-start mt-0.5">
+            Dependent
+          </span>
+        )}
+      </div>
+    ),
+  },
+  {
+    header: 'Level',
+    cell: item => (
+      <span
+        className={`px-2 py-0.5 rounded text-xs font-medium capitalize ${
+          TRUST_LEVEL_STYLES[item.firestoreTrustLevel] ?? 'bg-gray-100 text-gray-600'
+        }`}
+      >
+        {item.firestoreTrustLevel}
+      </span>
+    ),
+  },
+  {
+    header: 'Firestore Status',
+    cell: item => (
+      <span
+        className={`px-2 py-0.5 rounded text-xs font-medium capitalize ${
+          FIRESTORE_STATUS_STYLES[item.firestoreStatus] ?? 'bg-gray-100 text-gray-600'
+        }`}
+      >
+        {item.firestoreStatus}
+      </span>
+    ),
+  },
+  {
+    header: 'Chain State',
+    cell: item => <ChainStateCell item={item} />,
+  },
+  {
+    header: 'Invite Tx',
+    cell: item => {
+      const proposeEvent = [...item.trusteeHistory]
+        .reverse()
+        .find(e => e.action === 'propose' && e.blockchainRef);
+      const proposeTxHash = proposeEvent?.blockchainRef?.txHash;
+      return proposeTxHash ? (
+        <div className="flex items-center gap-1">
+          <CopyableHash value={proposeTxHash} chars={8} className="font-mono text-xs text-gray-500" />
+          <a
+            href={`${BASESCAN_TX_URL}${proposeTxHash}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-500 hover:text-blue-700"
+          >
+            <ExternalLink className="w-3 h-3" />
+          </a>
+        </div>
+      ) : (
+        <span className="text-gray-400">—</span>
+      );
+    },
+  },
+];
 
 export const TrusteesIntegrityTable: React.FC<TrusteesIntegrityTableProps> = ({
   items,
@@ -121,17 +211,6 @@ export const TrusteesIntegrityTable: React.FC<TrusteesIntegrityTableProps> = ({
   statusFilter,
   onClearSearch,
 }) => {
-  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
-
-  const toggleRow = (id: string) => {
-    setExpandedRows(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
   const filtered = items.filter(item => {
     if (statusFilter !== 'all' && item.integrityStatus !== statusFilter) return false;
     if (!searchQuery) return true;
@@ -146,224 +225,62 @@ export const TrusteesIntegrityTable: React.FC<TrusteesIntegrityTableProps> = ({
     );
   });
 
-  if (filtered.length === 0) {
-    return (
-      <div className="text-center py-12 text-gray-400">
-        <p>No trustee relationships match the current filter.</p>
-        {searchQuery && (
-          <button
-            onClick={onClearSearch}
-            className="mt-2 text-sm text-blue-500 hover:text-blue-700"
-          >
-            Clear search
-          </button>
-        )}
-      </div>
-    );
-  }
-
   return (
-    <div className="overflow-auto rounded-xl border border-gray-200 max-h-[80vh]">
-      <table className="w-full text-sm">
-        <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
-          <tr>
-            <th className="px-2 py-3 w-6" />
-            <th className="px-4 py-3 text-left font-medium text-gray-600">Status</th>
-            <th className="px-4 py-3 text-left font-medium text-gray-600">Trustor</th>
-            <th className="px-4 py-3 text-left font-medium text-gray-600">Trustee</th>
-            <th className="px-4 py-3 text-left font-medium text-gray-600">Level</th>
-            <th className="px-4 py-3 text-left font-medium text-gray-600">Firestore Status</th>
-            <th className="px-4 py-3 text-left font-medium text-gray-600">Chain State</th>
-            <th className="px-4 py-3 text-left font-medium text-gray-600">Invite Tx</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y text-left divide-gray-100">
-          {filtered.map(item => {
-            const isExpanded = expandedRows.has(item.id);
-            const proposeEvent = [...item.trusteeHistory]
-              .reverse()
-              .find(e => e.action === 'propose' && e.blockchainRef);
-            const proposeTxHash = proposeEvent?.blockchainRef?.txHash;
+    <IntegrityTable
+      items={filtered}
+      rowKey={item => item.id}
+      columns={columns}
+      emptyMessage="No trustee relationships match the current filter."
+      searchQuery={searchQuery}
+      onClearSearch={onClearSearch}
+      renderDetail={item => (
+        <div className="flex gap-4 flex-wrap">
+          <DetailSection title="On-Chain Events" className="flex-1 min-w-48">
+            <HistoryLog
+              entries={toHistoryEntries(item.trusteeHistory)}
+              emptyMessage="No on-chain events recorded"
+            />
+          </DetailSection>
 
-            return (
-              <React.Fragment key={item.id}>
-                <tr className="hover:bg-gray-50">
-                  <td className="px-2 py-3">
-                    <button
-                      onClick={() => toggleRow(item.id)}
-                      className="text-gray-400 hover:text-gray-600 transition-colors"
-                      aria-label={isExpanded ? 'Collapse' : 'Expand'}
-                    >
-                      {isExpanded ? (
-                        <ChevronDown className="w-4 h-4" />
-                      ) : (
-                        <ChevronRight className="w-4 h-4" />
-                      )}
-                    </button>
-                  </td>
+          <DetailSection title="Timeline" className="flex-1 min-w-48">
+            <div className="flex flex-col gap-1.5 text-xs">
+              {item.createdAt && (
+                <div className="flex gap-2">
+                  <span className="text-gray-500 font-medium w-20 shrink-0">Created:</span>
+                  <span className="text-gray-600">{formatTimestamp(item.createdAt)}</span>
+                </div>
+              )}
+              {item.respondedAt && (
+                <div className="flex gap-2">
+                  <span className="text-gray-500 font-medium w-20 shrink-0">Responded:</span>
+                  <span className="text-gray-600">{formatTimestamp(item.respondedAt)}</span>
+                </div>
+              )}
+              {item.revokedAt && (
+                <div className="flex gap-2">
+                  <span className="text-gray-500 font-medium w-20 shrink-0">Revoked:</span>
+                  <span className="text-gray-600">{formatTimestamp(item.revokedAt)}</span>
+                </div>
+              )}
+            </div>
+          </DetailSection>
 
-                  <td className="px-4 py-3">
-                    <IntegrityStatusBadge status={item.integrityStatus} />
-                  </td>
-
-                  {/* Trustor */}
-                  <td className="px-4 py-3">
-                    <div className="flex flex-col">
-                      <div className="font-mono text-xs text-gray-600">
-                        ID: <CopyableHash value={item.trustorId} chars={10} />
-                      </div>
-                      <div className="font-mono text-xs text-gray-400">
-                        #: <CopyableHash value={item.trustorIdHash} chars={10} />
-                      </div>
-                    </div>
-                  </td>
-
-                  {/* Trustee */}
-                  <td className="px-4 py-3">
-                    <div className="flex flex-col gap-0.5">
-                      <div className="font-mono text-xs text-gray-600">
-                        ID: <CopyableHash value={item.trusteeId} chars={10} />
-                      </div>
-                      <div className="font-mono text-xs text-gray-400">
-                        #: <CopyableHash value={item.trusteeIdHash} chars={10} />
-                      </div>
-                      {item.isDependentRelationship && (
-                        <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-purple-50 text-purple-700 self-start mt-0.5">
-                          Dependent
-                        </span>
-                      )}
-                    </div>
-                  </td>
-
-                  {/* Level */}
-                  <td className="px-4 py-3">
-                    <span
-                      className={`px-2 py-0.5 rounded text-xs font-medium capitalize ${
-                        TRUST_LEVEL_STYLES[item.firestoreTrustLevel] ?? 'bg-gray-100 text-gray-600'
-                      }`}
-                    >
-                      {item.firestoreTrustLevel}
-                    </span>
-                  </td>
-
-                  {/* Firestore Status */}
-                  <td className="px-4 py-3">
-                    <span
-                      className={`px-2 py-0.5 rounded text-xs font-medium capitalize ${
-                        FIRESTORE_STATUS_STYLES[item.firestoreStatus] ?? 'bg-gray-100 text-gray-600'
-                      }`}
-                    >
-                      {item.firestoreStatus}
-                    </span>
-                  </td>
-
-                  {/* Chain State */}
-                  <td className="px-4 py-3">
-                    <ChainStateCell item={item} />
-                  </td>
-
-                  {/* Invite Tx */}
-                  <td className="px-4 py-3">
-                    {proposeTxHash ? (
-                      <div className="flex items-center gap-1">
-                        <CopyableHash
-                          value={proposeTxHash}
-                          chars={8}
-                          className="font-mono text-xs text-gray-500"
-                        />
-                        <a
-                          href={`${BASESCAN_TX_URL}${proposeTxHash}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-500 hover:text-blue-700"
-                        >
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      </div>
-                    ) : (
-                      <span className="text-gray-400">—</span>
-                    )}
-                  </td>
-                </tr>
-
-                {isExpanded && (
-                  <tr className="bg-gray-50 border-t border-gray-100">
-                    <td />
-                    <td colSpan={TOTAL_COLS - 1} className="px-6 py-4">
-                      <div className="flex gap-8 flex-wrap">
-                        {/* On-Chain Event Log */}
-                        <div className="flex-1 min-w-48">
-                          <p className="text-xs font-medium text-gray-500 mb-2">On-Chain Events</p>
-                          <HistoryLog
-                            entries={toHistoryEntries(item.trusteeHistory)}
-                            emptyMessage="No on-chain events recorded"
-                          />
-                        </div>
-
-                        {/* Timeline */}
-                        <div className="flex-1 min-w-48">
-                          <p className="text-xs font-medium text-gray-500 mb-2">Timeline</p>
-                          <div className="flex flex-col gap-1.5 text-xs">
-                            {item.createdAt && (
-                              <div className="flex gap-2">
-                                <span className="text-gray-500 font-medium w-20 shrink-0">
-                                  Created:
-                                </span>
-                                <span className="text-gray-600">
-                                  {formatTimestamp(item.createdAt)}
-                                </span>
-                              </div>
-                            )}
-                            {item.respondedAt && (
-                              <div className="flex gap-2">
-                                <span className="text-gray-500 font-medium w-20 shrink-0">
-                                  Responded:
-                                </span>
-                                <span className="text-gray-600">
-                                  {formatTimestamp(item.respondedAt)}
-                                </span>
-                              </div>
-                            )}
-                            {item.revokedAt && (
-                              <div className="flex gap-2">
-                                <span className="text-gray-500 font-medium w-20 shrink-0">
-                                  Revoked:
-                                </span>
-                                <span className="text-gray-600">
-                                  {formatTimestamp(item.revokedAt)}
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Mismatch Details */}
-                        {item.mismatchReasons && item.mismatchReasons.length > 0 && (
-                          <div className="flex-1 min-w-48">
-                            <p className="text-xs font-medium text-gray-500 mb-2">
-                              Mismatch Details
-                            </p>
-                            <div className="flex flex-col gap-1">
-                              {item.mismatchReasons.map((reason, i) => (
-                                <div
-                                  key={i}
-                                  className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1"
-                                >
-                                  {reason}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </React.Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+          {item.mismatchReasons && item.mismatchReasons.length > 0 && (
+            <DetailSection title="Mismatch Details" className="flex-1 min-w-48">
+              <div className="flex flex-col gap-1">
+                {item.mismatchReasons.map((reason, i) => (
+                  <div
+                    key={i}
+                    className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1"
+                  >
+                    {reason}
+                  </div>
+                ))}
+              </div>
+            </DetailSection>
+          )}
+        </div>
+      )}
+    />
   );
 };
