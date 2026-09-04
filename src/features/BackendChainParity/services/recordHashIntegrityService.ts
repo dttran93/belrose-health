@@ -20,13 +20,18 @@ export interface RecordHashIntegrityItem {
 
 export async function checkRecordHashIntegrity(
   record: FileObject,
-  hasBackendCredibilityReview = false
+  hashesWithCredibility: Set<string> = new Set()
 ): Promise<RecordHashIntegrityItem> {
   const currentHash = record.recordHash?.toLowerCase();
   const backendHashes: string[] = [
     ...(currentHash ? [currentHash] : []),
     ...(record.previousRecordHash ?? []).map(h => h.toLowerCase()),
   ];
+
+  // Scoped to the *current* hash specifically — a verification/dispute targets one
+  // hash version, so credibility activity against an older, since-superseded version
+  // shouldn't count here. See useRecordsWithCredibility.ts.
+  const hasBackendCredibilityReview = !!currentHash && hashesWithCredibility.has(currentHash);
 
   // Pre-populate backend hashes as missing_from_chain so every early-return
   // path still surfaces them in the UI.
@@ -38,6 +43,24 @@ export async function checkRecordHashIntegrity(
   }));
 
   const resolvedRecordIdHash = record.recordIdHash ?? id(record.id);
+
+  // A hash only ever gets anchored on-chain as a side effect of a subject anchor
+  // (anchorRecord) or a credibility prepare step ahead of a verification/dispute
+  // (addRecordHash) — never from a permission grant, and never automatically on
+  // version save. If neither has ever happened for this record, staying unanchored is
+  // the expected, permanent state (deliberate, to minimize on-chain writes), not a sync
+  // failure. Mirrors the equivalent not_applicable gate in recordSubjectIntegrityService.
+  //
+  // KNOWN LIMITATION: record.subjects?.length is a record-level proxy, not a per-hash
+  // one — unlike hasBackendCredibilityReview (scoped to currentHash via each
+  // verification/dispute doc's own recordHash field), subjectHistory events don't record
+  // which hash was current when a subject anchored (anchorRecord's hash argument is
+  // never persisted anywhere queryable). So a record with subjects anchored against an
+  // older, since-superseded hash version will read as "has activity" here even though
+  // its *current* hash specifically was never anchored. Fixing this precisely needs a
+  // recordHashHistory collection (or a hash field on subjectHistory) recording which
+  // hash each anchor targeted — planned, not yet built.
+  const isNotApplicable = (record.subjects?.length ?? 0) === 0 && !hasBackendCredibilityReview;
 
   const base: Omit<RecordHashIntegrityItem, 'integrityStatus'> = {
     firestoreId: record.id,
@@ -51,7 +74,6 @@ export async function checkRecordHashIntegrity(
 
   // Can't do a chain existence/consistency check without a current record hash.
   if (!record.recordHash) {
-    const isNotApplicable = backendHashes.length === 0 && !hasBackendCredibilityReview;
     return { ...base, integrityStatus: isNotApplicable ? 'not_applicable' : 'missing' };
   }
 
@@ -63,8 +85,8 @@ export async function checkRecordHashIntegrity(
     try {
       returnedRecordIdHash = await contract.getRecordIdForHash(record.recordHash);
     } catch {
-      // Hash not on-chain. If there's also nothing else pointing to chain activity, it's not_applicable.
-      const isNotApplicable = backendHashes.length === 0 && !hasBackendCredibilityReview;
+      // Hash not on-chain. If nothing ever triggered anchoring for this record, that's
+      // expected (not_applicable), not a failure.
       return {
         ...base,
         integrityStatus: isNotApplicable ? 'not_applicable' : 'missing',

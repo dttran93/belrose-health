@@ -13,7 +13,7 @@ export function useRecordHashesIntegrity() {
     queryFn: (): Promise<RecordHashIntegrityItem[]> =>
       Promise.all(
         base.data!.records.map(record =>
-          checkRecordHashIntegrity(record, base.data!.recordIdsWithCredibility.has(record.id))
+          checkRecordHashIntegrity(record, base.data!.hashesWithCredibility)
         )
       ),
     enabled: !!base.data,
