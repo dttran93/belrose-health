@@ -22,12 +22,21 @@
  *
  */
 
-import { getFirestore, doc, getDoc } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, collection, setDoc, updateDoc } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
+import { buildHealthRecordRef } from '@belrose/shared';
 import { BlockchainPreparationService } from '@/features/BlockchainWallet/services/blockchainPreparationService';
+import {
+  BlockchainSyncQueueService,
+  getUserFacingErrorMessage,
+} from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
 import { blockchainHealthRecordService } from './blockchainHealthRecordService';
 import { PermissionPreparationService } from '@/features/Permissions/services/permissionPreparationService';
 import { BlockchainRoleManagerService } from '@/features/Permissions/services/blockchainRoleManagerService';
+import {
+  buildRecordHashHistoryDocId,
+  prepareRecordHashHistoryEventData,
+} from '@/features/ViewEditRecord/services/writeRecordHashHistoryEvent';
 
 // ==================== TYPES ====================
 
@@ -255,8 +264,41 @@ export class CredibilityPreparationService {
       const isHashOnChain = await blockchainHealthRecordService.doesHashExist(recordHash);
 
       if (!isHashOnChain) {
-        await blockchainHealthRecordService.addRecordHash(recordId, recordHash);
-        console.log('✅ Record hash added to network');
+        // recordHashHistory doc first (blockchainRef: null), same pattern as subjectHistory —
+        // patched via follow-up updateDoc once the chain call resolves.
+        const db = getFirestore();
+        const historyRef = doc(
+          collection(db, 'records', recordId, 'recordHashHistory'),
+          buildRecordHashHistoryDocId(recordHash)
+        );
+        await setDoc(
+          historyRef,
+          prepareRecordHashHistoryEventData(recordId, recordHash, user.uid, 'credibility')
+        );
+
+        const syncRef = await BlockchainSyncQueueService.startAttempt({
+          contract: 'HealthRecordCore',
+          action: 'addRecordHash',
+          userId: user.uid,
+          userWalletAddress: address,
+          permissionHistoryPath: historyRef.path,
+          context: { type: 'addRecordHash', recordId, recordHash },
+        });
+
+        try {
+          const tx = await blockchainHealthRecordService.addRecordHash(recordId, recordHash);
+          await updateDoc(historyRef, {
+            blockchainRef: buildHealthRecordRef(tx.txHash, tx.blockNumber),
+          });
+          await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
+          console.log('✅ Record hash added to network');
+        } catch (error) {
+          await BlockchainSyncQueueService.recordFailure(
+            syncRef,
+            getUserFacingErrorMessage(error, 'Failed to anchor record hash')
+          );
+          throw error;
+        }
       } else {
         console.log('✅ Record hash already exists on network');
       }
