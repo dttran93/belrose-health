@@ -10,7 +10,7 @@ import { SubjectsIntegrityTable } from './SubjectsIntegrityTable';
 import { RecordHashesIntegrityTable } from './RecordHashesIntegrityTable';
 import { MembersIntegrityTable } from './MembersIntegrityTable';
 import { CredibilityIntegrityTable } from './CredibilityIntegrityTable';
-import { SyncFailuresTable } from './SyncFailuresTable';
+import { SyncQueueTable } from './SyncQueueTable';
 import { TrusteesIntegrityTable } from './TrusteesIntegrityTable';
 import { PermissionsIntegrityTable } from './PermissionsIntegrityTable';
 import { useRecordSubjectsIntegrity } from '../hooks/useRecordSubjectsIntegrity';
@@ -21,7 +21,7 @@ import {
   useDisputesIntegrity,
   useVouchesIntegrity,
 } from '../hooks/useVerificationsIntegrity';
-import { useSyncFailures } from '../hooks/useSyncFailures';
+import { useSyncQueue } from '../hooks/useSyncQueue';
 import { useTrusteesIntegrity } from '../hooks/useTrusteesIntegrity';
 import { usePermissionsIntegrity } from '../hooks/usePermissionsIntegrity';
 import { computeSummary } from '../lib/types';
@@ -33,7 +33,7 @@ type TabId =
   | 'record-hashes'
   | 'members'
   | 'credibility'
-  | 'sync-failures'
+  | 'sync-queue'
   | 'trustees'
   | 'permissions';
 
@@ -45,7 +45,7 @@ const TABS: Array<{ id: TabId; label: string; phase2?: boolean }> = [
   { id: 'credibility', label: 'Credibility' },
   { id: 'trustees', label: 'Trustees' },
   { id: 'permissions', label: 'Permissions' },
-  { id: 'sync-failures', label: 'Chain Failures' },
+  { id: 'sync-queue', label: 'Sync Queue' },
 ];
 
 const BackendChainParityDashboard: React.FC = () => {
@@ -72,7 +72,7 @@ const BackendChainParityDashboard: React.FC = () => {
   const verifications = useVerificationsIntegrity();
   const disputes = useDisputesIntegrity();
   const vouchesIntegrity = useVouchesIntegrity();
-  const syncFailures = useSyncFailures();
+  const syncQueue = useSyncQueue();
   const trustees = useTrusteesIntegrity();
   const permissions = usePermissionsIntegrity();
 
@@ -84,7 +84,8 @@ const BackendChainParityDashboard: React.FC = () => {
     disputes.isFetching ||
     vouchesIntegrity.isFetching ||
     trustees.isFetching ||
-    permissions.isFetching;
+    permissions.isFetching ||
+    syncQueue.isFetching;
 
   const lastChecked = [
     subjects.dataUpdatedAt,
@@ -95,6 +96,7 @@ const BackendChainParityDashboard: React.FC = () => {
     vouchesIntegrity.dataUpdatedAt,
     trustees.dataUpdatedAt,
     permissions.dataUpdatedAt,
+    syncQueue.dataUpdatedAt,
   ]
     .filter(Boolean)
     .reduce((a, b) => Math.min(a, b), Infinity);
@@ -221,21 +223,26 @@ const BackendChainParityDashboard: React.FC = () => {
                 </button>
               )}
             </div>
-            <div className="flex gap-2 flex-wrap">
-              {statusFilterOptions.map(opt => (
-                <button
-                  key={opt.value}
-                  onClick={() => setStatusFilter(opt.value)}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-                    statusFilter === opt.value
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
+            {/* The IntegrityStatus vocabulary these pills filter on doesn't apply to the sync
+                queue (pending/confirmed/failed) — that tab has its own local status filter
+                instead, so these are hidden there rather than doing nothing silently. */}
+            {activeTab !== 'sync-queue' && (
+              <div className="flex gap-2 flex-wrap">
+                {statusFilterOptions.map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setStatusFilter(opt.value)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                      statusFilter === opt.value
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -368,14 +375,18 @@ const BackendChainParityDashboard: React.FC = () => {
           </div>
         )}
 
-        {activeTab === 'sync-failures' && (
+        {activeTab === 'sync-queue' && (
           <div className="pt-2">
-            {syncFailures.isLoading ? (
-              <LoadingState label="sync failures" />
-            ) : syncFailures.error ? (
-              <ErrorState error={String(syncFailures.error)} />
+            {syncQueue.isLoading ? (
+              <LoadingState label="the sync queue" />
+            ) : syncQueue.error ? (
+              <ErrorState error={String(syncQueue.error)} />
             ) : (
-              <SyncFailuresTable items={syncFailures.data ?? []} searchQuery={searchQuery} />
+              <SyncQueueTable
+                items={syncQueue.data ?? []}
+                searchQuery={searchQuery}
+                onClearSearch={() => setSearchQuery('')}
+              />
             )}
           </div>
         )}
