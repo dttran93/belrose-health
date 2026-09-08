@@ -181,6 +181,18 @@ describe('SubjectService (orchestration)', () => {
       });
       expect(events.docs[0]!.data().blockchainRef).toMatchObject({ txHash: '0xabc', blockNumber: 1 });
 
+      const hashEvents = await getDocs(collection(db, 'records', RECORD_ID, 'recordHashHistory'));
+      expect(hashEvents.size).toBe(1);
+      expect(hashEvents.docs[0]!.data()).toMatchObject({
+        hash: '0xhash',
+        anchoredVia: 'subject',
+        changedBy: OWNER,
+      });
+      expect(hashEvents.docs[0]!.data().blockchainRef).toMatchObject({
+        txHash: '0xabc',
+        blockNumber: 1,
+      });
+
       const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
       expect(syncDocs.size).toBe(1);
       expect(syncDocs.docs[0]!.data()).toMatchObject({ status: 'confirmed', action: 'anchorRecord' });
@@ -228,6 +240,12 @@ describe('SubjectService (orchestration)', () => {
       expect(events.size).toBe(1);
       // No confirmed tx to cite — the audit event still exists, just without a chain reference yet.
       expect(events.docs[0]!.data().blockchainRef).toBeNull();
+
+      // recordHashHistory is written unconditionally alongside subjectHistory in the same
+      // batch, before the chain call — so it exists here too, also still unresolved.
+      const hashEvents = await getDocs(collection(db, 'records', RECORD_ID, 'recordHashHistory'));
+      expect(hashEvents.size).toBe(1);
+      expect(hashEvents.docs[0]!.data().blockchainRef).toBeNull();
 
       const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
       expect(syncDocs.size).toBe(1);
@@ -329,6 +347,19 @@ describe('SubjectService (orchestration)', () => {
       });
       expect(events.docs[0]!.data().blockchainRef).toMatchObject({ txHash: '0xabc2', blockNumber: 2 });
 
+      // changedBy is the controller (caller), same as subjectHistory above — not the trustor.
+      const hashEvents = await getDocs(collection(db, 'records', RECORD_ID, 'recordHashHistory'));
+      expect(hashEvents.size).toBe(1);
+      expect(hashEvents.docs[0]!.data()).toMatchObject({
+        hash: '0xhash',
+        anchoredVia: 'subject',
+        changedBy: OWNER,
+      });
+      expect(hashEvents.docs[0]!.data().blockchainRef).toMatchObject({
+        txHash: '0xabc2',
+        blockNumber: 2,
+      });
+
       const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
       expect(syncDocs.size).toBe(1);
       expect(syncDocs.docs[0]!.data()).toMatchObject({
@@ -368,6 +399,10 @@ describe('SubjectService (orchestration)', () => {
       const events = await getDocs(collection(db, 'records', RECORD_ID, 'subjectHistory'));
       expect(events.size).toBe(1);
       expect(events.docs[0]!.data().blockchainRef).toBeNull();
+
+      const hashEvents = await getDocs(collection(db, 'records', RECORD_ID, 'recordHashHistory'));
+      expect(hashEvents.size).toBe(1);
+      expect(hashEvents.docs[0]!.data().blockchainRef).toBeNull();
 
       const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
       expect(syncDocs.size).toBe(1);
@@ -648,6 +683,18 @@ describe('SubjectService (orchestration)', () => {
         viaConsent: true,
       });
       expect(events.docs[0]!.data().blockchainRef).toMatchObject({ txHash: '0xabc', blockNumber: 1 });
+
+      const hashEvents = await getDocs(collection(db, 'records', RECORD_ID, 'recordHashHistory'));
+      expect(hashEvents.size).toBe(1);
+      expect(hashEvents.docs[0]!.data()).toMatchObject({
+        hash: '0xhash',
+        anchoredVia: 'subject',
+        changedBy: SUBJECT,
+      });
+      expect(hashEvents.docs[0]!.data().blockchainRef).toMatchObject({
+        txHash: '0xabc',
+        blockNumber: 1,
+      });
     });
 
     it('throws before any write when the caller has no linked wallet', async () => {
@@ -700,6 +747,10 @@ describe('SubjectService (orchestration)', () => {
       const events = await getDocs(collection(db, 'records', RECORD_ID, 'subjectHistory'));
       expect(events.size).toBe(1);
       expect(events.docs[0]!.data().blockchainRef).toBeNull();
+
+      const hashEvents = await getDocs(collection(db, 'records', RECORD_ID, 'recordHashHistory'));
+      expect(hashEvents.size).toBe(1);
+      expect(hashEvents.docs[0]!.data().blockchainRef).toBeNull();
 
       const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
       expect(syncDocs.size).toBe(1);
@@ -799,6 +850,12 @@ describe('SubjectService (orchestration)', () => {
         changedBy: SUBJECT,
       });
       expect(events.docs[0]!.data().blockchainRef).toMatchObject({ txHash: '0xdef', blockNumber: 3 });
+
+      // unanchorRecord never establishes a hash on-chain (it only ever deactivates a subject
+      // link), so unlike setSubjectAsSelf/anchorSubjectAsController/acceptSubjectRequest this
+      // path writes no recordHashHistory event.
+      const hashEvents = await getDocs(collection(db, 'records', RECORD_ID, 'recordHashHistory'));
+      expect(hashEvents.size).toBe(0);
 
       const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
       expect(syncDocs.size).toBe(1);
