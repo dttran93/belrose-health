@@ -6,13 +6,15 @@ import { useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/Button';
 import { SummaryCards } from './SummaryCards';
-import { RecordsIntegrityTable } from './RecordsIntegrityTable';
+import { SubjectsIntegrityTable } from './SubjectsIntegrityTable';
+import { RecordHashesIntegrityTable } from './RecordHashesIntegrityTable';
 import { MembersIntegrityTable } from './MembersIntegrityTable';
 import { CredibilityIntegrityTable } from './CredibilityIntegrityTable';
 import { SyncFailuresTable } from './SyncFailuresTable';
 import { TrusteesIntegrityTable } from './TrusteesIntegrityTable';
 import { PermissionsIntegrityTable } from './PermissionsIntegrityTable';
-import { useRecordsIntegrity } from '../hooks/useRecordsIntegrity';
+import { useRecordSubjectsIntegrity } from '../hooks/useRecordSubjectsIntegrity';
+import { useRecordHashesIntegrity } from '../hooks/useRecordHashesIntegrity';
 import { useMembersIntegrity } from '../hooks/useMembersIntegrity';
 import {
   useVerificationsIntegrity,
@@ -27,7 +29,8 @@ import type { IntegrityStatus } from '../lib/types';
 
 type TabId =
   | 'summary'
-  | 'records'
+  | 'subjects'
+  | 'record-hashes'
   | 'members'
   | 'credibility'
   | 'sync-failures'
@@ -36,7 +39,8 @@ type TabId =
 
 const TABS: Array<{ id: TabId; label: string; phase2?: boolean }> = [
   { id: 'summary', label: 'Summary' },
-  { id: 'records', label: 'Records' },
+  { id: 'subjects', label: 'Subjects' },
+  { id: 'record-hashes', label: 'Record Hashes' },
   { id: 'members', label: 'Members' },
   { id: 'credibility', label: 'Credibility' },
   { id: 'trustees', label: 'Trustees' },
@@ -62,7 +66,8 @@ const BackendChainParityDashboard: React.FC = () => {
 
   const queryClient = useQueryClient();
 
-  const records = useRecordsIntegrity();
+  const subjects = useRecordSubjectsIntegrity();
+  const hashes = useRecordHashesIntegrity();
   const members = useMembersIntegrity();
   const verifications = useVerificationsIntegrity();
   const disputes = useDisputesIntegrity();
@@ -72,7 +77,8 @@ const BackendChainParityDashboard: React.FC = () => {
   const permissions = usePermissionsIntegrity();
 
   const isAnyLoading =
-    records.isFetching ||
+    subjects.isFetching ||
+    hashes.isFetching ||
     members.isFetching ||
     verifications.isFetching ||
     disputes.isFetching ||
@@ -81,7 +87,8 @@ const BackendChainParityDashboard: React.FC = () => {
     permissions.isFetching;
 
   const lastChecked = [
-    records.dataUpdatedAt,
+    subjects.dataUpdatedAt,
+    hashes.dataUpdatedAt,
     members.dataUpdatedAt,
     verifications.dataUpdatedAt,
     disputes.dataUpdatedAt,
@@ -92,14 +99,15 @@ const BackendChainParityDashboard: React.FC = () => {
     .filter(Boolean)
     .reduce((a, b) => Math.min(a, b), Infinity);
 
-  const recordsSummary = records.data ? computeSummary(records.data) : undefined;
+  const subjectsSummary = subjects.data ? computeSummary(subjects.data) : undefined;
+  const hashesSummary = hashes.data ? computeSummary(hashes.data) : undefined;
   const membersSummary = members.data ? computeSummary(members.data) : undefined;
   const verificationsSummary = verifications.data ? computeSummary(verifications.data) : undefined;
   const disputesSummary = disputes.data ? computeSummary(disputes.data) : undefined;
   const trusteesSummary = trustees.data ? computeSummary(trustees.data) : undefined;
   const permissionsSummary = permissions.data ? computeSummary(permissions.data) : undefined;
 
-  // Keyed by recordId so RecordsIntegrityTable can show counts per record in the expanded panel
+  // Keyed by recordId so RecordHashesIntegrityTable can show counts per record in the expanded panel
   const verificationsMap = useMemo(() => {
     const map: Record<string, typeof verifications.data> = {};
     for (const v of verifications.data ?? []) {
@@ -237,7 +245,8 @@ const BackendChainParityDashboard: React.FC = () => {
         {activeTab === 'summary' && (
           <div className="pt-6">
             <SummaryCards
-              records={recordsSummary}
+              subjects={subjectsSummary}
+              hashes={hashesSummary}
               members={membersSummary}
               verifications={verificationsSummary}
               disputes={disputesSummary}
@@ -245,7 +254,8 @@ const BackendChainParityDashboard: React.FC = () => {
             />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {[
-                { label: 'Records', summary: recordsSummary, tab: 'records' as TabId },
+                { label: 'Subjects', summary: subjectsSummary, tab: 'subjects' as TabId },
+                { label: 'Record Hashes', summary: hashesSummary, tab: 'record-hashes' as TabId },
                 { label: 'Members', summary: membersSummary, tab: 'members' as TabId },
                 {
                   label: 'Verifications',
@@ -288,15 +298,32 @@ const BackendChainParityDashboard: React.FC = () => {
           </div>
         )}
 
-        {activeTab === 'records' && (
+        {activeTab === 'subjects' && (
           <div className="pt-2">
-            {records.isLoading ? (
-              <LoadingState label="records" />
-            ) : records.error ? (
-              <ErrorState error={String(records.error)} />
+            {subjects.isLoading ? (
+              <LoadingState label="record subjects" />
+            ) : subjects.error ? (
+              <ErrorState error={String(subjects.error)} />
             ) : (
-              <RecordsIntegrityTable
-                items={records.data ?? []}
+              <SubjectsIntegrityTable
+                items={subjects.data ?? []}
+                searchQuery={searchQuery}
+                statusFilter={statusFilter}
+                onClearSearch={() => setSearchQuery('')}
+              />
+            )}
+          </div>
+        )}
+
+        {activeTab === 'record-hashes' && (
+          <div className="pt-2">
+            {hashes.isLoading ? (
+              <LoadingState label="record hashes" />
+            ) : hashes.error ? (
+              <ErrorState error={String(hashes.error)} />
+            ) : (
+              <RecordHashesIntegrityTable
+                items={hashes.data ?? []}
                 searchQuery={searchQuery}
                 statusFilter={statusFilter}
                 verificationsMap={verificationsMap}

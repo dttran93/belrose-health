@@ -5,7 +5,8 @@ import { CheckCircle, AlertTriangle, XCircle, Clock, AlertCircle, Database } fro
 import type { ParitySummary } from '../lib/types';
 
 interface SummaryCardsProps {
-  records?: ParitySummary;
+  subjects?: ParitySummary;
+  hashes?: ParitySummary;
   members?: ParitySummary;
   verifications?: ParitySummary;
   disputes?: ParitySummary;
@@ -49,13 +50,14 @@ function mergeSummaries(...summaries: (ParitySummary | undefined)[]): ParitySumm
 }
 
 export const SummaryCards: React.FC<SummaryCardsProps> = ({
-  records,
+  subjects,
+  hashes,
   members,
   verifications,
   disputes,
   isLoading,
 }) => {
-  const combined = mergeSummaries(records, members, verifications, disputes);
+  const combined = mergeSummaries(subjects, hashes, members, verifications, disputes);
   const val = (n: number) => (isLoading ? '—' : n);
 
   return (
