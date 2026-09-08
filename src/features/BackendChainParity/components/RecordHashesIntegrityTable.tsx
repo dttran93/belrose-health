@@ -3,17 +3,47 @@
 import React from 'react';
 import { AlertTriangle, CheckCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import type { RecordHashHistoryAction, RecordHashHistoryEvent } from '@belrose/shared';
+import { useRecordHashHistory } from '../hooks/useRecordHashHistory';
 import { IntegrityStatusBadge } from './ui/IntegrityStatusBadge';
 import { CopyableHash } from './ui/CopyableHash';
 import { VersionReviewBadge } from '@/features/ViewEditRecord/components/Edit/VersionReviewBadge';
 import { IntegrityTable, type IntegrityTableColumn } from './ui/IntegrityTable';
 import { DetailSection } from './ui/DetailSection';
+import { HistoryLog, type HistoryLogEntry } from './ui/HistoryLog';
 import type { RecordHashIntegrityItem } from '../services/recordHashIntegrityService';
 import type { HashSyncStatus, IntegrityStatus } from '../lib/types';
 import type {
   DisputeIntegrityItem,
   VerificationIntegrityItem,
 } from '../services/credibilityIntegrityService';
+
+const HISTORY_ACTION_LABEL: Record<RecordHashHistoryAction, string> = {
+  anchored: 'Anchored',
+};
+
+const HISTORY_ACTION_STYLE: Record<RecordHashHistoryAction, string> = {
+  anchored: 'bg-emerald-50 text-emerald-700',
+};
+
+function toHistoryEntries(events: RecordHashHistoryEvent[]): HistoryLogEntry[] {
+  return events.map((event, i) => ({
+    key: i,
+    badge: (
+      <>
+        <span
+          className={`px-1.5 py-0.5 rounded font-medium ${HISTORY_ACTION_STYLE[event.action] ?? 'bg-gray-100 text-gray-600'}`}
+        >
+          {HISTORY_ACTION_LABEL[event.action] ?? event.action}
+        </span>
+        <span className="font-mono text-gray-400">{event.hash.slice(0, 10)}…</span>
+        <span className="text-gray-400 italic">via {event.anchoredVia}</span>
+      </>
+    ),
+    txHash: event.blockchainRef?.txHash,
+    timestamp: event.changedAt,
+  }));
+}
 
 const HASH_STATUS_CONFIG: Record<
   HashSyncStatus,
@@ -165,6 +195,7 @@ interface ExpandedRowProps {
 
 const ExpandedRow: React.FC<ExpandedRowProps> = ({ item, verifications, disputes }) => {
   const navigate = useNavigate();
+  const { data: historyEvents } = useRecordHashHistory(item.firestoreId);
   // Group verifications and disputes by their recordHash so each hash row
   // gets its own accurate V&D counts (same pattern as VersionHistory.tsx)
   const versByHash = new Map<string, VerificationIntegrityItem[]>();
@@ -182,60 +213,70 @@ const ExpandedRow: React.FC<ExpandedRowProps> = ({ item, verifications, disputes
   }
 
   return (
-    <DetailSection
-      title={`Hashes (${item.backendHashes.length} backend · ${item.onChainHashes.length} on-chain)`}
-    >
-      {item.hashComparisons.length > 0 ? (
-        <div className="divide-y divide-gray-100">
-          {item.hashComparisons.map(h => {
-            const cfg = HASH_STATUS_CONFIG[h.syncStatus];
-            return (
-              <div key={h.hash} className="flex items-start gap-2 py-2 text-xs">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-1.5 font-mono text-gray-700">
-                    <div className="flex items-center gap-1">
-                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${cfg.dotClass}`} />
-                      <CopyableHash value={h.hash} />
-                      {h.isCurrentHash && (
-                        <span className="text-[10px] font-sans font-medium text-blue-600 bg-blue-50 rounded px-1 py-0.5 leading-none">
-                          current
-                        </span>
-                      )}
-                      <span className={`font-sans ${cfg.textClass}`}>{cfg.label}</span>
+    <div className="flex gap-4 flex-wrap">
+      <DetailSection
+        title={`Hashes (${item.backendHashes.length} backend · ${item.onChainHashes.length} on-chain)`}
+        className="flex-1 min-w-64"
+      >
+        {item.hashComparisons.length > 0 ? (
+          <div className="divide-y divide-gray-100">
+            {item.hashComparisons.map(h => {
+              const cfg = HASH_STATUS_CONFIG[h.syncStatus];
+              return (
+                <div key={h.hash} className="flex items-start gap-2 py-2 text-xs">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-1.5 font-mono text-gray-700">
+                      <div className="flex items-center gap-1">
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${cfg.dotClass}`} />
+                        <CopyableHash value={h.hash} />
+                        {h.isCurrentHash && (
+                          <span className="text-[10px] font-sans font-medium text-blue-600 bg-blue-50 rounded px-1 py-0.5 leading-none">
+                            current
+                          </span>
+                        )}
+                        <span className={`font-sans ${cfg.textClass}`}>{cfg.label}</span>
+                      </div>
+                      {(() => {
+                        const hashVers = versByHash.get(h.hash) ?? [];
+                        const hashDisps = dispsByHash.get(h.hash) ?? [];
+                        return (
+                          <VersionReviewBadge
+                            stats={{
+                              verifications: {
+                                total: hashVers.length,
+                                active: hashVers.filter(v => v.isActiveOnChain !== false).length,
+                              },
+                              disputes: {
+                                total: hashDisps.length,
+                                active: hashDisps.filter(d => d.isActiveOnChain !== false).length,
+                              },
+                            }}
+                            onClick={() => navigate(`?tab=credibility&search=${h.hash}`)}
+                          />
+                        );
+                      })()}
                     </div>
-                    {(() => {
-                      const hashVers = versByHash.get(h.hash) ?? [];
-                      const hashDisps = dispsByHash.get(h.hash) ?? [];
-                      return (
-                        <VersionReviewBadge
-                          stats={{
-                            verifications: {
-                              total: hashVers.length,
-                              active: hashVers.filter(v => v.isActiveOnChain !== false).length,
-                            },
-                            disputes: {
-                              total: hashDisps.length,
-                              active: hashDisps.filter(d => d.isActiveOnChain !== false).length,
-                            },
-                          }}
-                          onClick={() => navigate(`?tab=credibility&search=${h.hash}`)}
-                        />
-                      );
-                    })()}
                   </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
-      ) : item.integrityStatus === 'not_applicable' ? (
-        <div className="text-xs text-gray-400">Not yet anchored on chain.</div>
-      ) : (
-        <div className="text-xs text-gray-400">No hashes.</div>
-      )}
-      {item.error && (
-        <div className="mt-3 text-xs text-red-600 bg-red-50 rounded p-2">{item.error}</div>
-      )}
-    </DetailSection>
+              );
+            })}
+          </div>
+        ) : item.integrityStatus === 'not_applicable' ? (
+          <div className="text-xs text-gray-400">Not yet anchored on chain.</div>
+        ) : (
+          <div className="text-xs text-gray-400">No hashes.</div>
+        )}
+        {item.error && (
+          <div className="mt-3 text-xs text-red-600 bg-red-50 rounded p-2">{item.error}</div>
+        )}
+      </DetailSection>
+
+      <DetailSection title="Hash History" className="flex-1 min-w-64">
+        <HistoryLog
+          entries={toHistoryEntries(historyEvents ?? [])}
+          emptyMessage="No hash history recorded"
+        />
+      </DetailSection>
+    </div>
   );
 };

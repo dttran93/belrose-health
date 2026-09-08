@@ -9,5 +9,6 @@ export * from './permissions';
 export * from './credibility';
 export * from './deletion';
 export * from './subject';
+export * from './recordHash';
 export * from './blockchainAddresses';
 export { HealthRecordCore__factory, MemberRoleManager__factory, BelrosePaymaster__factory, } from './typechain';

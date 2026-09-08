@@ -26,6 +26,7 @@ __exportStar(require("./permissions"), exports);
 __exportStar(require("./credibility"), exports);
 __exportStar(require("./deletion"), exports);
 __exportStar(require("./subject"), exports);
+__exportStar(require("./recordHash"), exports);
 __exportStar(require("./blockchainAddresses"), exports);
 var typechain_1 = require("./typechain");
 Object.defineProperty(exports, "HealthRecordCore__factory", { enumerable: true, get: function () { return typechain_1.HealthRecordCore__factory; } });

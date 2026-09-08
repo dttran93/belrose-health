@@ -498,6 +498,37 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      // --- RECORD HASH HISTORY SUBCOLLECTION ---
+      // Parallel to permissionHistory/subjectHistory above, but keyed by `hash` — an
+      // append-only ledger of when this record's content hash gets anchored on-chain
+      // (HealthRecordCore.anchorRecord / addRecordHash), written from two independent flows:
+      // a subject's first anchor (SubjectService) or a credibility prepare step ahead of a
+      // verification/dispute (CredibilityPreparationService.prepare).
+      //
+      // No `allow read` here deliberately — a nested match block like this one does NOT
+      // extend to a collectionGroup() query (confirmed empirically: the emulator reports "No
+      // matching allow statements", not a false condition, when queried this way). The read
+      // rule for this collection lives in a separate top-level `match /{path=**}/
+      // recordHashHistory/{eventId}` block below, right after this records match block closes
+      // — that recursive-wildcard form is what Firestore actually requires for collectionGroup
+      // support. See that block for the read rule itself and why it's admin-only.
+      match /recordHashHistory/{eventId} {
+        // Create: must have a role and must be the one making the change.
+        allow create: if request.auth != null
+          && request.resource.data.changedBy == request.auth.uid
+          && hasRoleOnRecord(recordId);
+
+        // Update: same deferred-blockchainRef pattern as permissionHistory/subjectHistory —
+        // only the same person who created it (changedBy) can complete it, only while
+        // blockchainRef is still null, and only that one field may change.
+        allow update: if request.auth != null
+          && resource.data.changedBy == request.auth.uid
+          && resource.data.blockchainRef == null
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['blockchainRef']);
+
+        allow delete: if false;
+      }
+
       // --- SCORE EVENTS SUBCOLLECTION (Credibility Audit Trail) ---
       // Parallel to permissionHistory/subjectHistory above — an append-only ledger of
       // verification/dispute events behind this record's cached credibility.score. Nested
@@ -562,6 +593,23 @@ service cloud.firestore {
           isAdminOrOwnerOfRecord(recordId)
         );
       }
+    }
+
+    // ============================================
+    // RECORD HASH HISTORY — collectionGroup read
+    // ============================================
+    // Nested match blocks (see records/{recordId}/recordHashHistory above) only ever cover
+    // direct-path access — they do NOT extend to a collectionGroup() query, which needs the
+    // recursive-wildcard form below to be granted at all (confirmed empirically: without this,
+    // the emulator reports "No matching allow statements" for the collectionGroup read, not a
+    // false condition). Read-only here — create/update/delete stay on the nested block above,
+    // since those are always scoped single-document writes to one already-known record.
+    //
+    // Admin-only, not hasRoleOnRecord() — the only reader is BackendChainParity's admin
+    // dashboard, scanning every record's recordHashHistory at once via this collectionGroup
+    // query; nothing today lets a regular record member read this collection directly.
+    match /{path=**}/recordHashHistory/{eventId} {
+      allow read: if request.auth != null && isPlatformAdmin();
     }
 
     // ============================================

@@ -53,6 +53,10 @@ import { SubjectRejectionService } from './subjectRejectionService';
 import { getConsentRequestId, SubjectConsentService } from './subjectConsentService';
 import SubjectPermissionService from './subjectPermissionService';
 import { buildSubjectHistoryDocId, prepareSubjectHistoryEventData } from './writeSubjectHistoryEvent';
+import {
+  buildRecordHashHistoryDocId,
+  prepareRecordHashHistoryEventData,
+} from '@/features/ViewEditRecord/services/writeRecordHashHistoryEvent';
 import { FileObject } from '@/types/core';
 import SubjectRemovalService from './subjectRemovalService';
 import { TrusteePermissionService } from '@/features/Trustee/services/trusteePermissionService';
@@ -173,9 +177,20 @@ export class SubjectService {
       buildSubjectHistoryDocId(user.uid)
     );
     const eventData = prepareSubjectHistoryEventData(recordId, user.uid, user.uid, 'anchored');
+    const hashHistoryRef = doc(
+      collection(db, 'records', recordId, 'recordHashHistory'),
+      buildRecordHashHistoryDocId(recordData.recordHash)
+    );
+    const hashHistoryEventData = prepareRecordHashHistoryEventData(
+      recordId,
+      recordData.recordHash,
+      user.uid,
+      'subject'
+    );
 
-    // Step 1: Atomic Firestore write — subjects[] addition + subjectHistory event, both or
-    // neither. blockchainRef starts null; it's filled in below once the chain call resolves.
+    // Step 1: Atomic Firestore write — subjects[] addition + subjectHistory event +
+    // recordHashHistory event, all or none. blockchainRef starts null on both history docs;
+    // filled in below once the chain call resolves.
     try {
       const batch = writeBatch(db);
       batch.update(recordRef, {
@@ -183,6 +198,7 @@ export class SubjectService {
         lastModified: serverTimestamp(),
       });
       batch.set(historyRef, eventData);
+      batch.set(hashHistoryRef, hashHistoryEventData);
       await batch.commit();
     } catch (firestoreError) {
       Sentry.captureException(firestoreError, {
@@ -220,6 +236,7 @@ export class SubjectService {
 
       const blockchainRef = buildHealthRecordRef(tx.txHash, tx.blockNumber);
       await updateDoc(historyRef, { blockchainRef });
+      await updateDoc(hashHistoryRef, { blockchainRef });
       await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
 
       console.log('✅ Blockchain: Subject anchored');
@@ -351,10 +368,20 @@ export class SubjectService {
       trustorId,
       'anchored_as_controller'
     );
+    const hashHistoryRef = doc(
+      collection(db, 'records', recordId, 'recordHashHistory'),
+      buildRecordHashHistoryDocId(recordData.recordHash)
+    );
+    const hashHistoryEventData = prepareRecordHashHistoryEventData(
+      recordId,
+      recordData.recordHash,
+      user.uid,
+      'subject'
+    );
 
     // Step 1: Atomic Firestore write — subjects[] addition + controllerAnchorFor proof field +
-    // subjectHistory event, all three or none. blockchainRef starts null; it's filled in below
-    // once the chain call resolves.
+    // subjectHistory event + recordHashHistory event, all four or none. blockchainRef starts
+    // null on both history docs; filled in below once the chain call resolves.
     try {
       const batch = writeBatch(db);
       batch.update(recordRef, {
@@ -363,6 +390,7 @@ export class SubjectService {
         lastModified: serverTimestamp(),
       });
       batch.set(historyRef, eventData);
+      batch.set(hashHistoryRef, hashHistoryEventData);
       await batch.commit();
     } catch (firestoreError) {
       Sentry.captureException(firestoreError, {
@@ -408,6 +436,7 @@ export class SubjectService {
 
       const blockchainRef = buildHealthRecordRef(tx.txHash, tx.blockNumber);
       await updateDoc(historyRef, { blockchainRef });
+      await updateDoc(hashHistoryRef, { blockchainRef });
       await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
 
       console.log('✅ Blockchain: Subject anchored as controller');
@@ -679,10 +708,20 @@ export class SubjectService {
     const eventData = prepareSubjectHistoryEventData(recordId, user.uid, user.uid, 'anchored', {
       viaConsent: true,
     });
+    const hashHistoryRef = doc(
+      collection(db, 'records', recordId, 'recordHashHistory'),
+      buildRecordHashHistoryDocId(recordHash)
+    );
+    const hashHistoryEventData = prepareRecordHashHistoryEventData(
+      recordId,
+      recordHash,
+      user.uid,
+      'subject'
+    );
 
     // Step 1: Atomic Firestore write — subjects[] addition + consent accept-transition +
-    // subjectHistory event, all three or none. blockchainRef starts null; it's filled in below
-    // once the chain call resolves.
+    // subjectHistory event + recordHashHistory event, all four or none. blockchainRef starts
+    // null on both history docs; filled in below once the chain call resolves.
     try {
       const batch = writeBatch(db);
       batch.update(recordRef, {
@@ -691,6 +730,7 @@ export class SubjectService {
       });
       batch.update(acceptPrep.ref, acceptPrep.data);
       batch.set(historyRef, eventData);
+      batch.set(hashHistoryRef, hashHistoryEventData);
       await batch.commit();
     } catch (firestoreError) {
       Sentry.captureException(firestoreError, {
@@ -727,6 +767,7 @@ export class SubjectService {
 
       const blockchainRef = buildHealthRecordRef(tx.txHash, tx.blockNumber);
       await updateDoc(historyRef, { blockchainRef });
+      await updateDoc(hashHistoryRef, { blockchainRef });
       await BlockchainSyncQueueService.recordSuccess(syncRef, tx);
 
       console.log('✅ Blockchain: Subject anchored');
