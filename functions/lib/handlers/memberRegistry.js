@@ -10,25 +10,15 @@ const _shared_1 = require("../_shared/");
 const typechain_1 = require("../_shared/typechain");
 const backendWalletService_1 = require("../services/backendWalletService");
 const wallet_1 = require("./wallet");
+const adminWallet_1 = require("../utils/adminWallet");
 const blockchainSyncQueue_1 = require("../utils/blockchainSyncQueue");
 const MEMBER_ROLE_MANAGER_ADDRESS = _shared_1.MEMBER_ROLE_MANAGER.proxy;
 const CHAIN_ID = _shared_1.NETWORK.chainId;
 // ============================================================================
 // HELPERS
 // ============================================================================
-/**
- * Get admin wallet from environment
- */
-function getAdminWallet() {
-    const privateKey = process.env.ADMIN_WALLET_PRIVATE_KEY;
-    const rpcUrl = process.env.RPC_URL || _shared_1.NETWORK.rpcUrlFallback;
-    if (!privateKey)
-        throw new Error('Admin wallet private key not found');
-    const provider = new ethers_1.ethers.JsonRpcProvider(rpcUrl);
-    return new ethers_1.ethers.Wallet(privateKey, provider);
-}
 function getAdminContract() {
-    return typechain_1.MemberRoleManager__factory.connect(MEMBER_ROLE_MANAGER_ADDRESS, getAdminWallet());
+    return typechain_1.MemberRoleManager__factory.connect(MEMBER_ROLE_MANAGER_ADDRESS, (0, adminWallet_1.getAdminWallet)());
 }
 async function awaitTx(tx) {
     const receipt = await tx.wait();

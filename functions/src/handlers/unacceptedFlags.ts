@@ -4,8 +4,8 @@
 // (HealthRecordCore.sol's flagUnacceptedUpdate/revokeUnacceptedFlag, both onlyAdmin — only the
 // platform's own backend wallet can call them, not an end user's smart account), then mirrors the
 // result into Firestore. Mirrors functions/src/handlers/memberRegistry.ts's admin-wallet-signed
-// write pattern end to end (its own local getAdminWallet()/awaitTx() helpers, duplicated here
-// rather than shared, matching that file's own convention).
+// write pattern end to end (shares its getAdminWallet() from utils/adminWallet.ts; awaitTx() is
+// still a local copy, matching that file's own convention for small duplicated helpers).
 //
 // Deliberately kept in handlers/ (an operational admin action), not credibility/ (reserved for
 // the pure batch-computation math that later reads unacceptedFlags — see earnedTrust.ts).
@@ -16,6 +16,7 @@ import { ethers } from 'ethers';
 import { BlockchainRef, HEALTH_RECORD_CORE, NETWORK, buildHealthRecordRef } from '../_shared/';
 import { HealthRecordCore__factory } from '../_shared/typechain';
 import type { HealthRecordCore } from '../_shared/typechain';
+import { getAdminWallet } from '../utils/adminWallet';
 import {
   startBlockchainSyncAttempt,
   recordBlockchainSyncSuccess,
@@ -28,14 +29,6 @@ const CHAIN_ID = NETWORK.chainId;
 // ============================================================================
 // HELPERS
 // ============================================================================
-
-function getAdminWallet(): ethers.Wallet {
-  const privateKey = process.env.ADMIN_WALLET_PRIVATE_KEY;
-  const rpcUrl = process.env.RPC_URL || NETWORK.rpcUrlFallback;
-  if (!privateKey) throw new Error('Admin wallet private key not found');
-  const provider = new ethers.JsonRpcProvider(rpcUrl);
-  return new ethers.Wallet(privateKey, provider);
-}
 
 function getHealthRecordCoreContract(): HealthRecordCore {
   return HealthRecordCore__factory.connect(HEALTH_RECORD_CORE_ADDRESS, getAdminWallet());

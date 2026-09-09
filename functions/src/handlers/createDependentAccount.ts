@@ -15,6 +15,7 @@ import { MemberRoleManager__factory } from '../_shared/typechain';
 import type { MemberRoleManager } from '../_shared/typechain';
 import { encryptPrivateKey, generateWallet } from '../services/backendWalletService';
 import { computeSmartAccountAddress } from './wallet';
+import { getAdminWallet } from '../utils/adminWallet';
 import {
   startBlockchainSyncAttempt,
   recordBlockchainSyncSuccess,
@@ -46,14 +47,6 @@ interface CreateDependentAccountResult {
 
 const MEMBER_ROLE_MANAGER_ADDRESS = MEMBER_ROLE_MANAGER.proxy;
 const CHAIN_ID = NETWORK.chainId;
-
-function getAdminWallet(): ethers.Wallet {
-  const privateKey = process.env.ADMIN_WALLET_PRIVATE_KEY;
-  const rpcUrl = process.env.RPC_URL || NETWORK.rpcUrlFallback;
-  if (!privateKey) throw new Error('Admin wallet private key not found');
-  const provider = new ethers.JsonRpcProvider(rpcUrl);
-  return new ethers.Wallet(privateKey, provider);
-}
 
 export const createDependentAccount = onCall(
   { secrets: ['ADMIN_WALLET_PRIVATE_KEY', 'RPC_URL'] },

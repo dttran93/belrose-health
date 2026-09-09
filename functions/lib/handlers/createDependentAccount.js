@@ -49,17 +49,10 @@ const _shared_1 = require("../_shared/");
 const typechain_1 = require("../_shared/typechain");
 const backendWalletService_1 = require("../services/backendWalletService");
 const wallet_1 = require("./wallet");
+const adminWallet_1 = require("../utils/adminWallet");
 const blockchainSyncQueue_1 = require("../utils/blockchainSyncQueue");
 const MEMBER_ROLE_MANAGER_ADDRESS = _shared_1.MEMBER_ROLE_MANAGER.proxy;
 const CHAIN_ID = _shared_1.NETWORK.chainId;
-function getAdminWallet() {
-    const privateKey = process.env.ADMIN_WALLET_PRIVATE_KEY;
-    const rpcUrl = process.env.RPC_URL || _shared_1.NETWORK.rpcUrlFallback;
-    if (!privateKey)
-        throw new Error('Admin wallet private key not found');
-    const provider = new ethers_1.ethers.JsonRpcProvider(rpcUrl);
-    return new ethers_1.ethers.Wallet(privateKey, provider);
-}
 exports.createDependentAccount = (0, https_1.onCall)({ secrets: ['ADMIN_WALLET_PRIVATE_KEY', 'RPC_URL'] }, async (request) => {
     if (!request.auth)
         throw new https_1.HttpsError('unauthenticated', 'Guardian must be authenticated');
@@ -145,7 +138,7 @@ exports.createDependentAccount = (0, https_1.onCall)({ secrets: ['ADMIN_WALLET_P
         const smartAccountAddress = await (0, wallet_1.computeSmartAccountAddress)(wallet.privateKey);
         console.log('⛓️ Registering both wallets on-chain...');
         const userIdHash = ethers_1.ethers.id(dependentUid);
-        const contract = typechain_1.MemberRoleManager__factory.connect(MEMBER_ROLE_MANAGER_ADDRESS, getAdminWallet());
+        const contract = typechain_1.MemberRoleManager__factory.connect(MEMBER_ROLE_MANAGER_ADDRESS, (0, adminWallet_1.getAdminWallet)());
         // Tracked in blockchainSyncQueue purely for observability — this function already rolls
         // the whole operation back on any failure (see the outer catch), so this doesn't change
         // that control flow, it just makes the attempt visible in the same dashboard client-side
