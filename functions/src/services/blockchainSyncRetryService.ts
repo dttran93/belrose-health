@@ -5,12 +5,18 @@
 // smart-account key. Only these 5 operations are retryable this way — everything else in the
 // queue (permission grants, subject anchoring, verify/dispute, trustee actions, vouches) is
 // signed client-side by the acting user's own session and can only ever be resubmitted from
-// their own browser; a Cloud Function has no access to that key. addMemberBatch/
-// bootstrapDependentTrustee (createDependentAccount.ts) are ALSO admin-wallet-signed but
-// deliberately excluded — addMemberBatch's wallet addresses are generated fresh in-memory per
-// attempt and never persisted before it succeeds (and the handler's outer catch deletes any
-// residue on failure), so there's no durable data to replay from; bootstrapDependentTrustee has
-// a hard on-chain dependency on addMemberBatch already having succeeded.
+// their own browser; a Cloud Function has no access to that key.
+//
+
+// NOTE on exclusion of addMemberBatch and bootstrapDependentTrustee (createDependentAccount.ts)
+// These are ALSO admin-wallet-signed but deliberately excluded — addMemberBatch's wallet addresses
+// are generated fresh in-memory per attempt and not persisted before it succeeds (and the handler's
+// outer catch deletes any residue on failure), so there's no durable data to replay from;
+// bootstrapDependentTrustee has a hard on-chain dependency on addMemberBatch already having succeeded.
+// While it's possible to record durable data for replay in these functions, we decided against it because
+// actions made by an account without a wallet would cause a cascade of blockchain failures requiring syncing
+// we do not want to encourage that. Note that addMember (non-batch version) is still supported because it would
+// likely be used to add a new EOA wallet to an existing account. In that scenario there's no partial account problem
 //
 // Each of the 5 original handlers (memberRegistry.ts, unacceptedFlags.ts) inlines its contract
 // call amid flow-specific Firestore reads/validation that a targeted retry doesn't need (e.g.
@@ -143,7 +149,8 @@ const REPLAY_REGISTRY: Record<SupportedRetryAction, ReplayDefinition> = {
       const userData = userSnap.data();
       if (!userData) return; // user doc gone — nothing to mirror into
 
-      const linkedWallets: Array<{ address?: string }> = userData.onChainIdentity?.linkedWallets ?? [];
+      const linkedWallets: Array<{ address?: string }> =
+        userData.onChainIdentity?.linkedWallets ?? [];
       const alreadyLinked = linkedWallets.some(
         w => w.address?.toLowerCase() === walletAddress.toLowerCase()
       );
@@ -173,7 +180,10 @@ const REPLAY_REGISTRY: Record<SupportedRetryAction, ReplayDefinition> = {
       const label = requireContextString(doc, 'newStatus');
       const statusEnum = STATUS_LABEL_TO_ENUM[label];
       if (!statusEnum) {
-        throw new HttpsError('failed-precondition', `Unrecognized status label "${label}" in stored context`);
+        throw new HttpsError(
+          'failed-precondition',
+          `Unrecognized status label "${label}" in stored context`
+        );
       }
       return [ethers.id(doc.userId), statusEnum];
     },
@@ -329,7 +339,7 @@ export async function executeReplay(docId: string, adminUid: string): Promise<Re
       ? getMemberRoleManagerContract()
       : getHealthRecordCoreContract();
   // Dynamic dispatch by method name — the registry's whole point is one generic executor over
-  // differently-shaped contract calls, which necessarily costs static ABI type-checking here.
+  // differently-shaped contract calls, so you can't do normal type checking here
   const method = (contract as unknown as Record<string, any>)[def.methodName];
   const args = def.buildArgs(doc);
 
@@ -350,7 +360,10 @@ export async function executeReplay(docId: string, adminUid: string): Promise<Re
     } catch (mirrorError) {
       // The chain action itself succeeded — don't fail the retry over a downstream Firestore
       // write, but leave a trace so an admin can follow up manually.
-      console.error(`⚠️ Retry succeeded on-chain but Firestore mirror failed for ${docId}:`, mirrorError);
+      console.error(
+        `⚠️ Retry succeeded on-chain but Firestore mirror failed for ${docId}:`,
+        mirrorError
+      );
       await docRef.update({
         mirrorWriteError: mirrorError instanceof Error ? mirrorError.message : String(mirrorError),
       });
@@ -389,7 +402,11 @@ export async function executeReplay(docId: string, adminUid: string): Promise<Re
   const tx = await method(...args);
   const receipt = await tx.wait();
   if (!receipt) {
-    await docRef.update({ ...baseUpdate, status: 'failed', lastRetryError: 'Transaction was dropped or replaced' });
+    await docRef.update({
+      ...baseUpdate,
+      status: 'failed',
+      lastRetryError: 'Transaction was dropped or replaced',
+    });
     throw new HttpsError('internal', 'Transaction was dropped or replaced');
   }
 
