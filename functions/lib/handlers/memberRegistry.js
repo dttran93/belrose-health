@@ -174,7 +174,10 @@ exports.registerMemberOnChain = (0, https_1.onCall)({ secrets: ['ADMIN_WALLET_PR
             const tx = await contract.addMember(walletAddress, userIdHash);
             const receipt = await awaitTx(tx);
             blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
-            await (0, blockchainSyncQueue_1.recordBlockchainSyncSuccess)(syncId, { txHash: tx.hash, blockNumber: receipt.blockNumber });
+            await (0, blockchainSyncQueue_1.recordBlockchainSyncSuccess)(syncId, {
+                txHash: tx.hash,
+                blockNumber: receipt.blockNumber,
+            });
         }
         catch (chainError) {
             await (0, blockchainSyncQueue_1.recordBlockchainSyncFailure)(syncId, chainError instanceof Error ? chainError.message : String(chainError));
@@ -249,7 +252,10 @@ exports.updateMemberStatus = (0, https_1.onCall)({ secrets: ['ADMIN_WALLET_PRIVA
             const tx = await contract.setUserStatus(userIdHash, status);
             const receipt = await awaitTx(tx);
             blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
-            await (0, blockchainSyncQueue_1.recordBlockchainSyncSuccess)(syncId, { txHash: tx.hash, blockNumber: receipt.blockNumber });
+            await (0, blockchainSyncQueue_1.recordBlockchainSyncSuccess)(syncId, {
+                txHash: tx.hash,
+                blockNumber: receipt.blockNumber,
+            });
         }
         catch (chainError) {
             await (0, blockchainSyncQueue_1.recordBlockchainSyncFailure)(syncId, chainError instanceof Error ? chainError.message : String(chainError));
@@ -459,7 +465,10 @@ exports.initializeRoleOnChain = (0, https_1.onCall)({ secrets: ['ADMIN_WALLET_PR
             const tx = await contract.initializeRecordRole(recordIdHash, walletAddress, role);
             const receipt = await awaitTx(tx);
             blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
-            await (0, blockchainSyncQueue_1.recordBlockchainSyncSuccess)(syncId, { txHash: tx.hash, blockNumber: receipt.blockNumber });
+            await (0, blockchainSyncQueue_1.recordBlockchainSyncSuccess)(syncId, {
+                txHash: tx.hash,
+                blockNumber: receipt.blockNumber,
+            });
         }
         catch (chainError) {
             await (0, blockchainSyncQueue_1.recordBlockchainSyncFailure)(syncId, chainError instanceof Error ? chainError.message : String(chainError));

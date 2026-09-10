@@ -212,7 +212,10 @@ export const registerMemberOnChain = onCall(
         const tx = await contract.addMember(walletAddress, userIdHash);
         const receipt = await awaitTx(tx);
         blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
-        await recordBlockchainSyncSuccess(syncId, { txHash: tx.hash, blockNumber: receipt.blockNumber });
+        await recordBlockchainSyncSuccess(syncId, {
+          txHash: tx.hash,
+          blockNumber: receipt.blockNumber,
+        });
       } catch (chainError) {
         await recordBlockchainSyncFailure(
           syncId,
@@ -302,7 +305,10 @@ export const updateMemberStatus = onCall(
         const tx = await contract.setUserStatus(userIdHash, status);
         const receipt = await awaitTx(tx);
         blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
-        await recordBlockchainSyncSuccess(syncId, { txHash: tx.hash, blockNumber: receipt.blockNumber });
+        await recordBlockchainSyncSuccess(syncId, {
+          txHash: tx.hash,
+          blockNumber: receipt.blockNumber,
+        });
       } catch (chainError) {
         await recordBlockchainSyncFailure(
           syncId,
@@ -568,7 +574,10 @@ export const initializeRoleOnChain = onCall(
         const tx = await contract.initializeRecordRole(recordIdHash, walletAddress, role);
         const receipt = await awaitTx(tx);
         blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
-        await recordBlockchainSyncSuccess(syncId, { txHash: tx.hash, blockNumber: receipt.blockNumber });
+        await recordBlockchainSyncSuccess(syncId, {
+          txHash: tx.hash,
+          blockNumber: receipt.blockNumber,
+        });
       } catch (chainError) {
         await recordBlockchainSyncFailure(
           syncId,

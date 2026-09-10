@@ -9,6 +9,7 @@ if (!admin.apps.length) {
 // ==================== ADMIN FUNCTIONS ====================
 export { setPlatformAdmin } from './handlers/setAdminClaim';
 export { setCredentialFloor } from './handlers/setCredentialFloor';
+export { adminRetryBlockchainSync } from './handlers/blockchainSyncRetry';
 
 // ==================== USER CREDIBILITY BATCH ====================
 export { runUserCredibilityBatch, recomputeUserCredibility } from './handlers/userCredibilityBatch';
