@@ -6,12 +6,22 @@
 // smart-account key. Only these 5 operations are retryable this way — everything else in the
 // queue (permission grants, subject anchoring, verify/dispute, trustee actions, vouches) is
 // signed client-side by the acting user's own session and can only ever be resubmitted from
-// their own browser; a Cloud Function has no access to that key. addMemberBatch/
-// bootstrapDependentTrustee (createDependentAccount.ts) are ALSO admin-wallet-signed but
-// deliberately excluded — addMemberBatch's wallet addresses are generated fresh in-memory per
-// attempt and never persisted before it succeeds (and the handler's outer catch deletes any
-// residue on failure), so there's no durable data to replay from; bootstrapDependentTrustee has
-// a hard on-chain dependency on addMemberBatch already having succeeded.
+// their own browser; a Cloud Function has no access to that key.
+//
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.executeReplay = executeReplay;
+// NOTE on exclusion of addMemberBatch and bootstrapDependentTrustee (createDependentAccount.ts,
+// and addMemberBatch again in memberRegistry.ts's registerMemberOnChainComplete)
+// These are ALSO admin-wallet-signed but deliberately excluded — addMemberBatch's wallet addresses
+// are generated fresh in-memory per attempt and not persisted before it succeeds (and each handler's
+// own error path discards any residue on failure — createDependentAccount's outer catch rolls back
+// the whole operation, registerMemberOnChainComplete just never wrote anything to Firestore yet),
+// so there's no durable data to replay from; bootstrapDependentTrustee has a hard on-chain
+// dependency on addMemberBatch already having succeeded.
+// While it's possible to record durable data for replay in these functions, we decided against it because
+// actions made by an account without a wallet would cause a cascade of blockchain failures requiring syncing
+// we do not want to encourage that. Note that addMember (non-batch version) is still supported because it would
+// likely be used to add a new EOA wallet to an existing account. In that scenario there's no partial account problem
 //
 // Each of the 5 original handlers (memberRegistry.ts, unacceptedFlags.ts) inlines its contract
 // call amid flow-specific Firestore reads/validation that a targeted retry doesn't need (e.g.
@@ -20,8 +30,6 @@
 // code with this internal ops tool, this file duplicates the small amount of contract-call logic
 // per action — see the "If you change this call's args/ABI, update REPLAY_REGISTRY" comments at
 // each original call site.
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.executeReplay = executeReplay;
 const https_1 = require("firebase-functions/v2/https");
 const firestore_1 = require("firebase-admin/firestore");
 const ethers_1 = require("ethers");
@@ -249,7 +257,7 @@ async function executeReplay(docId, adminUid) {
         ? getMemberRoleManagerContract()
         : getHealthRecordCoreContract();
     // Dynamic dispatch by method name — the registry's whole point is one generic executor over
-    // differently-shaped contract calls, which necessarily costs static ABI type-checking here.
+    // differently-shaped contract calls, so you can't do normal type checking here
     const method = contract[def.methodName];
     const args = def.buildArgs(doc);
     const baseUpdate = {
@@ -303,7 +311,11 @@ async function executeReplay(docId, adminUid) {
     const tx = await method(...args);
     const receipt = await tx.wait();
     if (!receipt) {
-        await docRef.update({ ...baseUpdate, status: 'failed', lastRetryError: 'Transaction was dropped or replaced' });
+        await docRef.update({
+            ...baseUpdate,
+            status: 'failed',
+            lastRetryError: 'Transaction was dropped or replaced',
+        });
         throw new https_1.HttpsError('internal', 'Transaction was dropped or replaced');
     }
     const blockchainRef = buildRef(tx.hash, receipt.blockNumber);

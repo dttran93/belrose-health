@@ -64,10 +64,34 @@ exports.registerMemberOnChainComplete = (0, https_1.onCall)({ secrets: ['ADMIN_W
     console.log('⛓️ Registering both wallets on-chain via addMemberBatch...');
     const userIdHash = ethers_1.ethers.id(userId);
     const contract = getAdminContract();
-    const tx = await contract.addMemberBatch([wallet.address, smartAccountAddress], userIdHash);
-    const receipt = await awaitTx(tx);
-    const blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
-    console.log('✅ Both wallets registered on-chain:', tx.hash);
+    // Tracked in blockchainSyncQueue purely for observability — unlike the other flows in this
+    // file, this transaction is not best-effort: a chain failure here throws straight out of the
+    // handler and the caller gets nothing (see this function's header note in
+    // blockchainSyncRetryService.ts's exclusion comment), so there's no retry to wire up. This
+    // just surfaces failed/slow registrations in the same dashboard client-side writes show up in.
+    const syncId = await (0, blockchainSyncQueue_1.startBlockchainSyncAttempt)({
+        contract: 'MemberRoleManager',
+        action: 'addMemberBatch',
+        userId,
+        chainId: CHAIN_ID,
+        contractAddress: MEMBER_ROLE_MANAGER_ADDRESS,
+        context: { type: 'memberRegistry', newStatus: 'Active' },
+    });
+    let blockchainRef;
+    try {
+        const tx = await contract.addMemberBatch([wallet.address, smartAccountAddress], userIdHash);
+        const receipt = await awaitTx(tx);
+        blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
+        await (0, blockchainSyncQueue_1.recordBlockchainSyncSuccess)(syncId, {
+            txHash: tx.hash,
+            blockNumber: receipt.blockNumber,
+        });
+        console.log('✅ Both wallets registered on-chain:', tx.hash);
+    }
+    catch (chainError) {
+        await (0, blockchainSyncQueue_1.recordBlockchainSyncFailure)(syncId, chainError instanceof Error ? chainError.message : String(chainError));
+        throw chainError;
+    }
     // Encrypt wallet data
     const encryptedData = (0, backendWalletService_1.encryptPrivateKey)(wallet.privateKey, masterKeyHex);
     const encryptedMnemonic = (0, backendWalletService_1.encryptPrivateKey)(wallet.mnemonic || '', masterKeyHex);
