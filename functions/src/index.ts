@@ -15,6 +15,9 @@ export { adminRetryBlockchainSync } from './handlers/blockchainSyncRetry';
 export { runUserCredibilityBatch, recomputeUserCredibility } from './handlers/userCredibilityBatch';
 export { flagUnacceptedUpdate, revokeUnacceptedFlag } from './handlers/unacceptedFlags';
 
+// ==================== CHAIN EVENT INDEXER ====================
+export { runChainEventIndexer, recomputeChainEventIndex } from './handlers/chainEventIndexer';
+
 // ==================== IMAGE ANALYSIS FUNCTIONS ====================
 export { analyzeImageWithAI } from './handlers/image';
 

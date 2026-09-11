@@ -1472,6 +1472,20 @@ service cloud.firestore {
       allow delete: if isServerWrite();
     }
 
+    // Chain event indexer cache/checkpoints — written exclusively by the scheduled/on-demand
+    // indexer Cloud Function (functions/src/handlers/chainEventIndexer.ts) via the Admin SDK, and
+    // read only by the BackendChainParity admin dashboard. Unlike blockchainSyncQueue, there's no
+    // per-user read case here — this is purely admin-dashboard data.
+    match /chainEventCache/{eventId} {
+      allow read: if request.auth != null && isPlatformAdmin();
+      allow write: if isServerWrite();
+    }
+
+    match /chainIndexerCheckpoints/{contractName} {
+      allow read: if request.auth != null && isPlatformAdmin();
+      allow write: if isServerWrite();
+    }
+
     match /invites/{email} {
       allow read: if true; //unauthenticated signup
 

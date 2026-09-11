@@ -13,6 +13,7 @@ import { CredibilityIntegrityTable } from './CredibilityIntegrityTable';
 import { SyncQueueTable } from './SyncQueueTable';
 import { TrusteesIntegrityTable } from './TrusteesIntegrityTable';
 import { PermissionsIntegrityTable } from './PermissionsIntegrityTable';
+import { ChainEventsTable } from './ChainEventsTable';
 import { useRecordSubjectsIntegrity } from '../hooks/useRecordSubjectsIntegrity';
 import { useRecordHashesIntegrity } from '../hooks/useRecordHashesIntegrity';
 import { useMembersIntegrity } from '../hooks/useMembersIntegrity';
@@ -24,6 +25,7 @@ import {
 import { useSyncQueue } from '../hooks/useSyncQueue';
 import { useTrusteesIntegrity } from '../hooks/useTrusteesIntegrity';
 import { usePermissionsIntegrity } from '../hooks/usePermissionsIntegrity';
+import { useChainEventCache } from '../hooks/useChainEventCache';
 import { computeSummary } from '../lib/types';
 import type { IntegrityStatus } from '../lib/types';
 
@@ -35,7 +37,8 @@ type TabId =
   | 'credibility'
   | 'sync-queue'
   | 'trustees'
-  | 'permissions';
+  | 'permissions'
+  | 'chain-events';
 
 const TABS: Array<{ id: TabId; label: string; phase2?: boolean }> = [
   { id: 'summary', label: 'Summary' },
@@ -46,6 +49,7 @@ const TABS: Array<{ id: TabId; label: string; phase2?: boolean }> = [
   { id: 'trustees', label: 'Trustees' },
   { id: 'permissions', label: 'Permissions' },
   { id: 'sync-queue', label: 'Sync Queue' },
+  { id: 'chain-events', label: 'Chain Events' },
 ];
 
 const BackendChainParityDashboard: React.FC = () => {
@@ -75,6 +79,7 @@ const BackendChainParityDashboard: React.FC = () => {
   const syncQueue = useSyncQueue();
   const trustees = useTrusteesIntegrity();
   const permissions = usePermissionsIntegrity();
+  const chainEvents = useChainEventCache();
 
   const isAnyLoading =
     subjects.isFetching ||
@@ -85,7 +90,8 @@ const BackendChainParityDashboard: React.FC = () => {
     vouchesIntegrity.isFetching ||
     trustees.isFetching ||
     permissions.isFetching ||
-    syncQueue.isFetching;
+    syncQueue.isFetching ||
+    chainEvents.isFetching;
 
   const lastChecked = [
     subjects.dataUpdatedAt,
@@ -97,6 +103,7 @@ const BackendChainParityDashboard: React.FC = () => {
     trustees.dataUpdatedAt,
     permissions.dataUpdatedAt,
     syncQueue.dataUpdatedAt,
+    chainEvents.dataUpdatedAt,
   ]
     .filter(Boolean)
     .reduce((a, b) => Math.min(a, b), Infinity);
@@ -224,9 +231,10 @@ const BackendChainParityDashboard: React.FC = () => {
               )}
             </div>
             {/* The IntegrityStatus vocabulary these pills filter on doesn't apply to the sync
-                queue (pending/confirmed/failed) — that tab has its own local status filter
-                instead, so these are hidden there rather than doing nothing silently. */}
-            {activeTab !== 'sync-queue' && (
+                queue (pending/confirmed/failed) or chain events (reconciliationStatus) — both
+                tabs have their own local status filter instead, so these are hidden there rather
+                than doing nothing silently. */}
+            {activeTab !== 'sync-queue' && activeTab !== 'chain-events' && (
               <div className="flex gap-2 flex-wrap">
                 {statusFilterOptions.map(opt => (
                   <button
@@ -419,6 +427,22 @@ const BackendChainParityDashboard: React.FC = () => {
                 items={permissions.data ?? []}
                 searchQuery={searchQuery}
                 statusFilter={statusFilter}
+                onClearSearch={() => setSearchQuery('')}
+              />
+            )}
+          </div>
+        )}
+
+        {activeTab === 'chain-events' && (
+          <div className="pt-2">
+            {chainEvents.isLoading ? (
+              <LoadingState label="the chain event cache" />
+            ) : chainEvents.error ? (
+              <ErrorState error={String(chainEvents.error)} />
+            ) : (
+              <ChainEventsTable
+                items={chainEvents.data ?? []}
+                searchQuery={searchQuery}
                 onClearSearch={() => setSearchQuery('')}
               />
             )}
