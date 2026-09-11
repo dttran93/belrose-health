@@ -9,6 +9,7 @@ import { MemberRoleManager__factory } from '../_shared/typechain';
 import type { MemberRoleManager } from '../_shared/typechain';
 import { encryptPrivateKey, generateWallet } from '../services/backendWalletService';
 import { computeSmartAccountAddress } from './wallet';
+import { getAdminWallet } from '../utils/adminWallet';
 import {
   startBlockchainSyncAttempt,
   recordBlockchainSyncSuccess,
@@ -21,17 +22,6 @@ const CHAIN_ID = NETWORK.chainId;
 // ============================================================================
 // HELPERS
 // ============================================================================
-
-/**
- * Get admin wallet from environment
- */
-function getAdminWallet(): ethers.Wallet {
-  const privateKey = process.env.ADMIN_WALLET_PRIVATE_KEY;
-  const rpcUrl = process.env.RPC_URL || NETWORK.rpcUrlFallback;
-  if (!privateKey) throw new Error('Admin wallet private key not found');
-  const provider = new ethers.JsonRpcProvider(rpcUrl);
-  return new ethers.Wallet(privateKey, provider);
-}
 
 function getAdminContract(): MemberRoleManager {
   return MemberRoleManager__factory.connect(MEMBER_ROLE_MANAGER_ADDRESS, getAdminWallet());
@@ -222,7 +212,10 @@ export const registerMemberOnChain = onCall(
         const tx = await contract.addMember(walletAddress, userIdHash);
         const receipt = await awaitTx(tx);
         blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
-        await recordBlockchainSyncSuccess(syncId, { txHash: tx.hash, blockNumber: receipt.blockNumber });
+        await recordBlockchainSyncSuccess(syncId, {
+          txHash: tx.hash,
+          blockNumber: receipt.blockNumber,
+        });
       } catch (chainError) {
         await recordBlockchainSyncFailure(
           syncId,
@@ -312,7 +305,10 @@ export const updateMemberStatus = onCall(
         const tx = await contract.setUserStatus(userIdHash, status);
         const receipt = await awaitTx(tx);
         blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
-        await recordBlockchainSyncSuccess(syncId, { txHash: tx.hash, blockNumber: receipt.blockNumber });
+        await recordBlockchainSyncSuccess(syncId, {
+          txHash: tx.hash,
+          blockNumber: receipt.blockNumber,
+        });
       } catch (chainError) {
         await recordBlockchainSyncFailure(
           syncId,
@@ -578,7 +574,10 @@ export const initializeRoleOnChain = onCall(
         const tx = await contract.initializeRecordRole(recordIdHash, walletAddress, role);
         const receipt = await awaitTx(tx);
         blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
-        await recordBlockchainSyncSuccess(syncId, { txHash: tx.hash, blockNumber: receipt.blockNumber });
+        await recordBlockchainSyncSuccess(syncId, {
+          txHash: tx.hash,
+          blockNumber: receipt.blockNumber,
+        });
       } catch (chainError) {
         await recordBlockchainSyncFailure(
           syncId,

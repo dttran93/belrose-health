@@ -10,6 +10,7 @@ export * from './credibility';
 export * from './deletion';
 export * from './subject';
 export * from './recordHash';
+export * from './decodeRevertReason';
 export * from './blockchainAddresses';
 export type { HealthRecordCore, MemberRoleManager, BelrosePaymaster } from './typechain';
 export {

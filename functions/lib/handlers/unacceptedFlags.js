@@ -5,8 +5,8 @@
 // (HealthRecordCore.sol's flagUnacceptedUpdate/revokeUnacceptedFlag, both onlyAdmin — only the
 // platform's own backend wallet can call them, not an end user's smart account), then mirrors the
 // result into Firestore. Mirrors functions/src/handlers/memberRegistry.ts's admin-wallet-signed
-// write pattern end to end (its own local getAdminWallet()/awaitTx() helpers, duplicated here
-// rather than shared, matching that file's own convention).
+// write pattern end to end (shares its getAdminWallet() from utils/adminWallet.ts; awaitTx() is
+// still a local copy, matching that file's own convention for small duplicated helpers).
 //
 // Deliberately kept in handlers/ (an operational admin action), not credibility/ (reserved for
 // the pure batch-computation math that later reads unacceptedFlags — see earnedTrust.ts).
@@ -17,22 +17,15 @@ const firestore_1 = require("firebase-admin/firestore");
 const ethers_1 = require("ethers");
 const _shared_1 = require("../_shared/");
 const typechain_1 = require("../_shared/typechain");
+const adminWallet_1 = require("../utils/adminWallet");
 const blockchainSyncQueue_1 = require("../utils/blockchainSyncQueue");
 const HEALTH_RECORD_CORE_ADDRESS = _shared_1.HEALTH_RECORD_CORE.proxy;
 const CHAIN_ID = _shared_1.NETWORK.chainId;
 // ============================================================================
 // HELPERS
 // ============================================================================
-function getAdminWallet() {
-    const privateKey = process.env.ADMIN_WALLET_PRIVATE_KEY;
-    const rpcUrl = process.env.RPC_URL || _shared_1.NETWORK.rpcUrlFallback;
-    if (!privateKey)
-        throw new Error('Admin wallet private key not found');
-    const provider = new ethers_1.ethers.JsonRpcProvider(rpcUrl);
-    return new ethers_1.ethers.Wallet(privateKey, provider);
-}
 function getHealthRecordCoreContract() {
-    return typechain_1.HealthRecordCore__factory.connect(HEALTH_RECORD_CORE_ADDRESS, getAdminWallet());
+    return typechain_1.HealthRecordCore__factory.connect(HEALTH_RECORD_CORE_ADDRESS, (0, adminWallet_1.getAdminWallet)());
 }
 async function awaitTx(tx) {
     const receipt = await tx.wait();
