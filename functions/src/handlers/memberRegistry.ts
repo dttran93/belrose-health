@@ -83,10 +83,37 @@ export const registerMemberOnChainComplete = onCall(
     const userIdHash = ethers.id(userId);
     const contract = getAdminContract();
 
-    const tx = await contract.addMemberBatch([wallet.address, smartAccountAddress], userIdHash);
-    const receipt = await awaitTx(tx);
-    const blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
-    console.log('✅ Both wallets registered on-chain:', tx.hash);
+    // Tracked in blockchainSyncQueue purely for observability — unlike the other flows in this
+    // file, this transaction is not best-effort: a chain failure here throws straight out of the
+    // handler and the caller gets nothing (see this function's header note in
+    // blockchainSyncRetryService.ts's exclusion comment), so there's no retry to wire up. This
+    // just surfaces failed/slow registrations in the same dashboard client-side writes show up in.
+    const syncId = await startBlockchainSyncAttempt({
+      contract: 'MemberRoleManager',
+      action: 'addMemberBatch',
+      userId,
+      chainId: CHAIN_ID,
+      contractAddress: MEMBER_ROLE_MANAGER_ADDRESS,
+      context: { type: 'memberRegistry', newStatus: 'Active' },
+    });
+
+    let blockchainRef: BlockchainRef;
+    try {
+      const tx = await contract.addMemberBatch([wallet.address, smartAccountAddress], userIdHash);
+      const receipt = await awaitTx(tx);
+      blockchainRef = buildMemberRegistryRef(tx.hash, receipt.blockNumber);
+      await recordBlockchainSyncSuccess(syncId, {
+        txHash: tx.hash,
+        blockNumber: receipt.blockNumber,
+      });
+      console.log('✅ Both wallets registered on-chain:', tx.hash);
+    } catch (chainError) {
+      await recordBlockchainSyncFailure(
+        syncId,
+        chainError instanceof Error ? chainError.message : String(chainError)
+      );
+      throw chainError;
+    }
 
     // Encrypt wallet data
     const encryptedData = encryptPrivateKey(wallet.privateKey, masterKeyHex);

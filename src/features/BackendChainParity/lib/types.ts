@@ -1,8 +1,13 @@
 // src/features/BackendChainParity/lib/types.ts
 
 import type { onChainIdentityStatus, LinkedWalletRecord } from '@/types/core';
+import type { ChainEventCacheDoc, ChainEventReconciliationStatus } from '@belrose/shared';
 
 export type { onChainIdentityStatus, LinkedWalletRecord };
+// Event-level classification from the chain event indexer — a different axis from
+// IntegrityStatus/SubjectSyncStatus below (which classify an *entity's* sync state, not one
+// specific on-chain log). See packages/shared/src/chainEventCache.ts for what each value means.
+export type { ChainEventCacheDoc, ChainEventReconciliationStatus };
 
 export type IntegrityStatus =
   | 'synced' // Everything matches on chain and on firebase

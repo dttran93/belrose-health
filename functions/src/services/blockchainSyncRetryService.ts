@@ -8,11 +8,14 @@
 // their own browser; a Cloud Function has no access to that key.
 //
 
-// NOTE on exclusion of addMemberBatch and bootstrapDependentTrustee (createDependentAccount.ts)
+// NOTE on exclusion of addMemberBatch and bootstrapDependentTrustee (createDependentAccount.ts,
+// and addMemberBatch again in memberRegistry.ts's registerMemberOnChainComplete)
 // These are ALSO admin-wallet-signed but deliberately excluded — addMemberBatch's wallet addresses
-// are generated fresh in-memory per attempt and not persisted before it succeeds (and the handler's
-// outer catch deletes any residue on failure), so there's no durable data to replay from;
-// bootstrapDependentTrustee has a hard on-chain dependency on addMemberBatch already having succeeded.
+// are generated fresh in-memory per attempt and not persisted before it succeeds (and each handler's
+// own error path discards any residue on failure — createDependentAccount's outer catch rolls back
+// the whole operation, registerMemberOnChainComplete just never wrote anything to Firestore yet),
+// so there's no durable data to replay from; bootstrapDependentTrustee has a hard on-chain
+// dependency on addMemberBatch already having succeeded.
 // While it's possible to record durable data for replay in these functions, we decided against it because
 // actions made by an account without a wallet would cause a cascade of blockchain failures requiring syncing
 // we do not want to encourage that. Note that addMember (non-batch version) is still supported because it would

@@ -12,6 +12,7 @@ export * from './subject';
 export * from './recordHash';
 export * from './decodeRevertReason';
 export * from './blockchainAddresses';
+export * from './chainEventCache';
 export type { HealthRecordCore, MemberRoleManager, BelrosePaymaster } from './typechain';
 export {
   HealthRecordCore__factory,

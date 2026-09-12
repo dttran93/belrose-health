@@ -9,6 +9,15 @@
 // All services, hooks, and scripts should import from this file (or from
 // blockchainAddresses.ts, which re-exports it) rather than hardcoding addresses locally.
 //
+// TICKET #474: everything below is hardcoded to Base Sepolia — there's currently no way for dev
+// to target Sepolia while production targets Base Mainnet. Planned fix: restructure this into a
+// NETWORKS map keyed by network name (still zero env-awareness, still dependency-free), with
+// exactly one small resolver per runtime (frontend: blockchainAddresses.ts; functions: a new
+// utils/network.ts; contracts: derive from Hardhat's own `hre.network.name` rather than a
+// separate env var) reading that runtime's own env var once and re-exporting the resolved
+// NETWORK_CORE/MEMBER_ROLE_MANAGER/HEALTH_RECORD_CORE under their current names. Not done yet
+// since Base Mainnet addresses don't exist to point at.
+//
 
 // ============================================================================
 // NETWORK INFRASTRUCTURE
