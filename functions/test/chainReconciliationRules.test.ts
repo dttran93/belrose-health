@@ -8,37 +8,49 @@
 
 import { describe, it, expect } from 'vitest';
 import type { Firestore } from 'firebase-admin/firestore';
-import { findMatchingUserForMemberEvent, findSyncQueueEntryForTxHash } from '../src/chainIndexer/reconciliationRules';
+import {
+  findMatchingUserForMemberEvent,
+  findSyncQueueEntryForTxHash,
+  findMatchingPermissionHistoryForRoleEvent,
+} from '../src/chainIndexer/reconciliationRules';
+import { ethers } from 'ethers';
 
 interface FakeDoc {
   id: string;
+  path?: string; // only meaningful for collectionGroup docs — ref.path across subcollections
   data: Record<string, unknown>;
 }
 
-function fakeFirestore(collections: Record<string, FakeDoc[]>): Firestore {
-  const db = {
-    collection: (name: string) => {
-      let docs = collections[name] ?? [];
-      const query = {
-        where(field: string, op: string, value: unknown) {
-          docs = docs.filter(d => {
-            const fieldValue = field.split('.').reduce<unknown>((obj, key) => (obj as any)?.[key], d.data);
-            return op === '==' ? fieldValue === value : true;
-          });
-          return query;
-        },
-        limit() {
-          return query;
-        },
-        async get() {
-          return {
-            empty: docs.length === 0,
-            docs: docs.map(d => ({ id: d.id, data: () => d.data })),
-          };
-        },
-      };
+function makeFakeQuery(initialDocs: FakeDoc[]) {
+  let docs = initialDocs;
+  const query = {
+    where(field: string, op: string, value: unknown) {
+      docs = docs.filter(d => {
+        const fieldValue = field.split('.').reduce<unknown>((obj, key) => (obj as any)?.[key], d.data);
+        return op === '==' ? fieldValue === value : true;
+      });
       return query;
     },
+    limit() {
+      return query;
+    },
+    async get() {
+      return {
+        empty: docs.length === 0,
+        docs: docs.map(d => ({ id: d.id, data: () => d.data, ref: { path: d.path ?? d.id } })),
+      };
+    },
+  };
+  return query;
+}
+
+function fakeFirestore(
+  collections: Record<string, FakeDoc[]>,
+  collectionGroups: Record<string, FakeDoc[]> = {}
+): Firestore {
+  const db = {
+    collection: (name: string) => makeFakeQuery(collections[name] ?? []),
+    collectionGroup: (name: string) => makeFakeQuery(collectionGroups[name] ?? []),
   };
   return db as unknown as Firestore;
 }
@@ -113,6 +125,134 @@ describe('findSyncQueueEntryForTxHash', () => {
       found: false,
       syncQueueId: null,
       status: null,
+    });
+  });
+});
+
+describe('findMatchingPermissionHistoryForRoleEvent', () => {
+  const targetUserId = 'user-target';
+  const targetIdHash = ethers.id(targetUserId);
+  const args = { recordIdHash: '0xRecordHash1', targetIdHash, role: 'administrator' };
+
+  it('matches a direct-write permissionHistory doc with the same recordIdHash/targetIdHash/role', async () => {
+    const db = fakeFirestore(
+      {},
+      {
+        permissionHistory: [
+          {
+            id: 'event-1',
+            path: 'records/rec-1/permissionHistory/event-1',
+            data: {
+              recordIdHash: '0xRecordHash1',
+              changedBy: 'user-admin',
+              changedByIdHash: ethers.id('user-admin'),
+              changes: [{ userId: targetUserId, newRole: 'administrator' }],
+              context: 'direct',
+            },
+          },
+        ],
+      }
+    );
+
+    await expect(findMatchingPermissionHistoryForRoleEvent(db, args)).resolves.toEqual({
+      matched: true,
+      matchedFirestoreRef: 'records/rec-1/permissionHistory/event-1',
+    });
+  });
+
+  it('matches a trustee-authored permissionHistory doc identically — the rule is producer-agnostic', async () => {
+    const db = fakeFirestore(
+      {},
+      {
+        permissionHistory: [
+          {
+            id: 'event-1',
+            path: 'records/rec-1/permissionHistory/event-1',
+            data: {
+              recordIdHash: '0xRecordHash1',
+              changedBy: 'trustee-uid',
+              changedByIdHash: ethers.id('trustee-uid'),
+              changes: [{ userId: targetUserId, newRole: 'administrator' }],
+              context: 'trustee_grant',
+            },
+          },
+        ],
+      }
+    );
+
+    await expect(findMatchingPermissionHistoryForRoleEvent(db, args)).resolves.toMatchObject({ matched: true });
+  });
+
+  it('matches even when changedByIdHash differs from the event\'s userIdHash (the initializeRecordRole bytes32(0) case) — userIdHash is never part of the match condition', async () => {
+    // args here deliberately omits userIdHash entirely — the function signature doesn't even
+    // accept it — proving the match can never depend on it regardless of what the real event's
+    // userIdHash (bytes32(0), in this real scenario) actually was.
+    const db = fakeFirestore(
+      {},
+      {
+        permissionHistory: [
+          {
+            id: 'event-1',
+            path: 'records/rec-1/permissionHistory/event-1',
+            data: {
+              recordIdHash: '0xRecordHash1',
+              changedBy: 'real-admin-uid',
+              changedByIdHash: ethers.id('real-admin-uid'), // a real hash, NOT bytes32(0)
+              changes: [{ userId: targetUserId, newRole: 'administrator' }],
+            },
+          },
+        ],
+      }
+    );
+
+    await expect(findMatchingPermissionHistoryForRoleEvent(db, args)).resolves.toMatchObject({ matched: true });
+  });
+
+  it('does not match when the role differs', async () => {
+    const db = fakeFirestore(
+      {},
+      {
+        permissionHistory: [
+          {
+            id: 'event-1',
+            path: 'records/rec-1/permissionHistory/event-1',
+            data: { recordIdHash: '0xRecordHash1', changes: [{ userId: targetUserId, newRole: 'viewer' }] },
+          },
+        ],
+      }
+    );
+
+    await expect(findMatchingPermissionHistoryForRoleEvent(db, args)).resolves.toEqual({
+      matched: false,
+      matchedFirestoreRef: null,
+    });
+  });
+
+  it('does not match when the target differs', async () => {
+    const db = fakeFirestore(
+      {},
+      {
+        permissionHistory: [
+          {
+            id: 'event-1',
+            path: 'records/rec-1/permissionHistory/event-1',
+            data: { recordIdHash: '0xRecordHash1', changes: [{ userId: 'some-other-user', newRole: 'administrator' }] },
+          },
+        ],
+      }
+    );
+
+    await expect(findMatchingPermissionHistoryForRoleEvent(db, args)).resolves.toEqual({
+      matched: false,
+      matchedFirestoreRef: null,
+    });
+  });
+
+  it('does not match when no permissionHistory doc exists for that recordIdHash at all', async () => {
+    const db = fakeFirestore({}, { permissionHistory: [] });
+    await expect(findMatchingPermissionHistoryForRoleEvent(db, args)).resolves.toEqual({
+      matched: false,
+      matchedFirestoreRef: null,
     });
   });
 });

@@ -22,13 +22,18 @@ import {
 import type { ChainEventCacheDoc, ChainIndexerCheckpoint } from '../_shared';
 import { MemberRoleManager__factory } from '../_shared/typechain';
 import type { MemberRoleManager } from '../_shared/typechain';
-import {
-  decodeMemberRoleManagerLog,
-  type DecodedMemberRoleManagerEvent,
-  type MemberRoleManagerEventName,
-  type RawMemberRoleManagerLog,
+import type {
+  DecodedMemberRoleManagerEvent,
+  DecodedRoleEvent,
+  MemberRoleManagerEventName,
+  RawMemberRoleManagerLog,
+  RawRoleEventLog,
 } from './eventDecoders';
-import { reconcileMemberRoleManagerEvent } from './reconciliationService';
+import { CHAIN_EVENT_REGISTRY } from './eventRegistry';
+
+// Every event registered in CHAIN_EVENT_REGISTRY shares this shape except `args`, whose inner
+// fields vary per event type — see eventRegistry.ts.
+type DecodedChainEvent = DecodedMemberRoleManagerEvent | DecodedRoleEvent;
 
 const REORG_CONFIRMATION_BUFFER = 20; // blocks — guards against reading logs an L2 reorg could still drop. TBD could be adjusted based on chain behavior
 const INITIAL_CHUNK_SIZE = 500;
@@ -114,10 +119,7 @@ async function queryFilterWithBackoff(
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
-      const filter =
-        eventName === 'MemberRegistered'
-          ? contract.filters.MemberRegistered()
-          : contract.filters.WalletLinked();
+      const filter = CHAIN_EVENT_REGISTRY[eventName].getFilter(contract);
       const logs = await contract.queryFilter(filter, fromBlock, attemptToBlock);
       return { logs: logs as unknown as ethers.EventLog[], toBlock: attemptToBlock };
     } catch (error) {
@@ -128,12 +130,21 @@ async function queryFilterWithBackoff(
   }
 }
 
+/**
+ * Builds the raw-log shape each registry entry's `decode` expects. `timestamp` is pulled off
+ * generically here (every event registered in CHAIN_EVENT_REGISTRY carries it) — only the
+ * event-specific fields come from the per-type `toRawArgs`. The union cast at the end is the one
+ * deliberate dynamic-dispatch point in this file: the registry's whole point is one generic loop
+ * over differently-shaped events, which necessarily costs static type-checking here (same
+ * tradeoff already accepted in blockchainSyncRetryService.ts's REPLAY_REGISTRY) — correctness for
+ * this seam leans on the per-event-type tests in chainEventDecoders.test.ts instead.
+ */
 function toRawLog(
   log: ethers.EventLog,
   eventName: MemberRoleManagerEventName,
   contractAddress: string,
   chainId: number
-): RawMemberRoleManagerLog {
+): RawMemberRoleManagerLog | RawRoleEventLog {
   return {
     eventName,
     transactionHash: log.transactionHash,
@@ -142,11 +153,10 @@ function toRawLog(
     contractAddress,
     chainId,
     args: {
-      wallet: log.args.wallet as string,
-      userIdHash: log.args.userIdHash as string,
+      ...CHAIN_EVENT_REGISTRY[eventName].toRawArgs(log),
       timestamp: log.args.timestamp as bigint,
     },
-  };
+  } as RawMemberRoleManagerLog | RawRoleEventLog;
 }
 
 /**
@@ -167,11 +177,18 @@ async function sweepUnclassifiedEvents(db: Firestore, provider: ethers.Provider)
 
   let reconciled = 0;
   for (const doc of snap.docs) {
-    const classification = await reconcileMemberRoleManagerEvent(
-      db,
-      provider,
-      doc.data() as ChainEventCacheDoc
-    );
+    const data = doc.data() as ChainEventCacheDoc;
+    const entry = CHAIN_EVENT_REGISTRY[data.eventName as MemberRoleManagerEventName];
+    if (!entry) {
+      // Shouldn't happen — every doc is written with an eventName this file itself just cached
+      // it under — but a doc with an unrecognized eventName must never take down the whole sweep
+      // batch; skip it and let it show up in logs instead.
+      console.error(
+        `⚠️ chainEventCache/${doc.id} has unrecognized eventName "${data.eventName}" — skipping sweep`
+      );
+      continue;
+    }
+    const classification = await entry.reconcile(db, provider, data);
     await doc.ref.update(classification);
     reconciled++;
   }
@@ -231,25 +248,25 @@ export async function runChainEventIndexerCycle(
     while (cursor <= targetBlock) {
       const chunkEnd = Math.min(cursor + chunkSize - 1, targetBlock);
 
-      const [registered, linked] = await Promise.all([
-        queryFilterWithBackoff(contract, 'MemberRegistered', cursor, chunkEnd),
-        queryFilterWithBackoff(contract, 'WalletLinked', cursor, chunkEnd),
-      ]);
-      // Both calls target the same [cursor, chunkEnd] range and only back off on the same kind
-      // of error, so in practice they land on the same actual toBlock; take the smaller to stay
-      // safe if they ever diverge, and re-derive chunkSize from it so the next iteration starts
-      // from whatever size actually worked rather than immediately re-triggering a range error.
-      const actualChunkEnd = Math.min(registered.toBlock, linked.toBlock);
+      const eventNames = Object.keys(CHAIN_EVENT_REGISTRY) as MemberRoleManagerEventName[];
+      const results = await Promise.all(
+        eventNames.map(name => queryFilterWithBackoff(contract, name, cursor, chunkEnd))
+      );
+      // Every filter targets the same [cursor, chunkEnd] range and only backs off on the same
+      // kind of error, so in practice they all land on the same actual toBlock; take the smallest
+      // to stay safe if they ever diverge, and re-derive chunkSize from it so the next iteration
+      // starts from whatever size actually worked rather than immediately re-triggering a range
+      // error.
+      const actualChunkEnd = Math.min(...results.map(r => r.toBlock));
       chunkSize = actualChunkEnd - cursor + 1;
 
-      const logs = [
-        ...registered.logs.map(l => toRawLog(l, 'MemberRegistered', contractAddress, chainId)),
-        ...linked.logs.map(l => toRawLog(l, 'WalletLinked', contractAddress, chainId)),
-      ].filter(l => l.blockNumber <= actualChunkEnd);
+      const logs = eventNames
+        .flatMap((name, i) => results[i].logs.map(l => toRawLog(l, name, contractAddress, chainId)))
+        .filter(l => l.blockNumber <= actualChunkEnd);
       eventsFound += logs.length;
 
       for (const log of logs) {
-        const decoded = decodeMemberRoleManagerLog(log);
+        const decoded = CHAIN_EVENT_REGISTRY[log.eventName].decode(log);
         const wasNew = await cacheAndReconcile(db, provider, decoded);
         if (wasNew) newlyCached++;
       }
@@ -286,7 +303,7 @@ export async function runChainEventIndexerCycle(
 async function cacheAndReconcile(
   db: Firestore,
   provider: ethers.Provider,
-  decoded: DecodedMemberRoleManagerEvent
+  decoded: DecodedChainEvent
 ): Promise<boolean> {
   const docId = buildChainEventCacheDocId(decoded.txHash, decoded.logIndex);
   const docRef = db.collection('chainEventCache').doc(docId);
@@ -320,7 +337,7 @@ async function cacheAndReconcile(
     throw error;
   }
 
-  const classification = await reconcileMemberRoleManagerEvent(db, provider, doc);
+  const classification = await CHAIN_EVENT_REGISTRY[decoded.eventName].reconcile(db, provider, doc);
   await docRef.update(classification);
   return true;
 }

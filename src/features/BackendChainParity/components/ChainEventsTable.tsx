@@ -11,7 +11,10 @@
 // see 'matched'/'legitimate_chain_only' rows too for context, not just the problems.
 
 import React, { useState } from 'react';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, Loader2, PlayCircle } from 'lucide-react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { getFunctions, httpsCallable } from 'firebase/functions';
+import { toast } from 'sonner';
 import { NETWORK } from '@belrose/shared';
 import { IntegrityTable, type IntegrityTableColumn } from './ui/IntegrityTable';
 import { DetailSection } from './ui/DetailSection';
@@ -21,6 +24,21 @@ import type { ChainEventCacheRecord } from '../hooks/useChainEventCache';
 import type { ChainEventReconciliationStatus } from '../lib/types';
 
 const BASESCAN_TX_URL = `${NETWORK.explorerUrl}/tx/`;
+
+interface RecomputeChainEventIndexResult {
+  success: boolean;
+  scannedFromBlock: number;
+  scannedToBlock: number;
+  eventsFound: number;
+  newlyCached: number;
+  reconciledUnclassified: number;
+}
+
+// A full historical backfill can legitimately take several minutes (see
+// functions/src/handlers/chainEventIndexer.ts's timeoutSeconds: 540) — the Firebase JS SDK's
+// httpsCallable defaults to a 70s client-side timeout, which would show a spurious error while
+// the backend keeps working regardless. Extend it to comfortably exceed the backend's own limit.
+const RECOMPUTE_TIMEOUT_MS = 560_000;
 
 type StatusFilter = 'all' | ChainEventReconciliationStatus;
 
@@ -99,6 +117,41 @@ const columns: IntegrityTableColumn<ChainEventCacheRecord>[] = [
 
 export const ChainEventsTable: React.FC<ChainEventsTableProps> = ({ items, searchQuery, onClearSearch }) => {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const queryClient = useQueryClient();
+
+  // Manually forces a cycle of the indexer (functions/src/handlers/chainEventIndexer.ts) instead
+  // of waiting for its 15-minute schedule — same admin-callable the schedule itself calls into
+  // (runChainEventIndexerCycle), so there's no separate code path to keep in sync. Safe to fire
+  // even if the scheduled run happens to be mid-flight: every write here is idempotent (composite
+  // doc IDs on chainEventCache, last-write-wins on the checkpoint), so an overlapping run just
+  // does some redundant scanning, never corrupts anything.
+  const recomputeMutation = useMutation({
+    mutationFn: async () => {
+      const recompute = httpsCallable<Record<string, never>, RecomputeChainEventIndexResult>(
+        getFunctions(),
+        'recomputeChainEventIndex',
+        { timeout: RECOMPUTE_TIMEOUT_MS }
+      );
+      const result = await recompute({});
+      return result.data;
+    },
+    onSuccess: data => {
+      toast.success(
+        `Indexer run complete — scanned to block ${data.scannedToBlock}, ` +
+          `${data.eventsFound} event(s) found, ${data.newlyCached} newly cached, ` +
+          `${data.reconciledUnclassified} lingering event(s) reconciled.`
+      );
+    },
+    onError: (error: unknown) => {
+      toast.error(error instanceof Error ? error.message : 'Indexer run failed');
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['backend-chain-parity', 'chain-events'] });
+      // Slice 1's Members tab also reads chainEventCache (legitimate_chain_only rows) — refresh
+      // it too so a manual run's results show up there without a separate manual refresh.
+      queryClient.invalidateQueries({ queryKey: ['backend-chain-parity', 'members'] });
+    },
+  });
 
   const counts: Record<StatusFilter, number> = {
     all: items.length,
@@ -133,18 +186,38 @@ export const ChainEventsTable: React.FC<ChainEventsTableProps> = ({ items, searc
 
   return (
     <div className="space-y-3">
-      <div className="flex gap-2 flex-wrap">
-        {filterOptions.map(opt => (
-          <button
-            key={opt.value}
-            onClick={() => setStatusFilter(opt.value)}
-            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-              statusFilter === opt.value ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            }`}
-          >
-            {opt.label} ({counts[opt.value]})
-          </button>
-        ))}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap">
+          {filterOptions.map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => setStatusFilter(opt.value)}
+              className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                statusFilter === opt.value ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {opt.label} ({counts[opt.value]})
+            </button>
+          ))}
+        </div>
+
+        <button
+          onClick={() => recomputeMutation.mutate()}
+          disabled={recomputeMutation.isPending}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
+        >
+          {recomputeMutation.isPending ? (
+            <>
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              Running indexer…
+            </>
+          ) : (
+            <>
+              <PlayCircle className="w-3.5 h-3.5" />
+              Run Indexer Now
+            </>
+          )}
+        </button>
       </div>
 
       <IntegrityTable

@@ -22,13 +22,53 @@ import type { Firestore } from 'firebase-admin/firestore';
 import { Timestamp } from 'firebase-admin/firestore';
 import type { Provider } from 'ethers';
 import type { ChainEventCacheDoc } from '../_shared';
-import { findMatchingUserForMemberEvent, findSyncQueueEntryForTxHash } from './reconciliationRules';
+import {
+  findMatchingUserForMemberEvent,
+  findMatchingPermissionHistoryForRoleEvent,
+  findSyncQueueEntryForTxHash,
+  type SyncQueueMatch,
+} from './reconciliationRules';
 import { getAdminWallet } from '../utils/adminWallet';
 
 export type ReconciliationResult = Pick<
   ChainEventCacheDoc,
   'reconciliationStatus' | 'matchedSyncQueueId' | 'matchedFirestoreRef' | 'reconciledAt'
 >;
+
+/**
+ * Buckets 2-4 of the pipeline — shared, unchanged, across every event type. Only bucket 1 ("does
+ * Firestore already have a record of this specific action") varies per event type, since that's
+ * the only step that needs to know the event's own shape; everything past it is generic.
+ */
+async function classifyUnmatchedEvent(
+  db: Firestore,
+  provider: Provider,
+  txHash: string
+): Promise<ReconciliationResult> {
+  const syncQueueMatch: SyncQueueMatch = await findSyncQueueEntryForTxHash(db, txHash);
+  if (syncQueueMatch.found && syncQueueMatch.status === 'confirmed') {
+    return {
+      reconciliationStatus: 'sync_queue_confirmed_missing_write',
+      matchedSyncQueueId: syncQueueMatch.syncQueueId,
+      matchedFirestoreRef: null,
+      reconciledAt: Timestamp.now(),
+    };
+  }
+
+  // One extra RPC call, acceptable since this only runs for the rare unmatched-event case.
+  // Constructing the admin wallet doesn't itself make a network call — it's a pure key-derived
+  // address — so this is cheap even though getAdminWallet() also attaches a provider internally.
+  const adminAddress = getAdminWallet().address.toLowerCase();
+  const tx = await provider.getTransaction(txHash);
+  const signer = tx?.from?.toLowerCase();
+
+  return {
+    reconciliationStatus: signer === adminAddress ? 'admin_untracked' : 'legitimate_chain_only',
+    matchedSyncQueueId: syncQueueMatch.syncQueueId,
+    matchedFirestoreRef: null,
+    reconciledAt: Timestamp.now(),
+  };
+}
 
 export async function reconcileMemberRoleManagerEvent(
   db: Firestore,
@@ -47,27 +87,34 @@ export async function reconcileMemberRoleManagerEvent(
     };
   }
 
-  const syncQueueMatch = await findSyncQueueEntryForTxHash(db, doc.blockchainRef.txHash);
-  if (syncQueueMatch.found && syncQueueMatch.status === 'confirmed') {
+  return classifyUnmatchedEvent(db, provider, doc.blockchainRef.txHash);
+}
+
+/**
+ * RoleGranted/RoleRevoked reconciler (Slice 2). Same 4-bucket shape as
+ * reconcileMemberRoleManagerEvent, but bucket 1 checks records/{recordId}/permissionHistory
+ * instead of users — see findMatchingPermissionHistoryForRoleEvent's own comment for why
+ * userIdHash is deliberately excluded from that match. Unlike Slice 1's events (which can only
+ * ever be admin-signed, per MemberRoleManager.sol's onlyAdmin gating), grantRole/revokeRole are
+ * onlyActiveMember — callable directly by any real user — so bucket 4 ('legitimate_chain_only')
+ * is genuinely reachable here, not just structurally present for future slices.
+ */
+export async function reconcileRoleEvent(
+  db: Firestore,
+  provider: Provider,
+  doc: Pick<ChainEventCacheDoc, 'args' | 'blockchainRef'>
+): Promise<ReconciliationResult> {
+  const args = doc.args as { recordIdHash: string; targetIdHash: string; role: string };
+
+  const match = await findMatchingPermissionHistoryForRoleEvent(db, args);
+  if (match.matched) {
     return {
-      reconciliationStatus: 'sync_queue_confirmed_missing_write',
-      matchedSyncQueueId: syncQueueMatch.syncQueueId,
-      matchedFirestoreRef: null,
+      reconciliationStatus: 'matched',
+      matchedSyncQueueId: null,
+      matchedFirestoreRef: match.matchedFirestoreRef,
       reconciledAt: Timestamp.now(),
     };
   }
 
-  // One extra RPC call, acceptable since this only runs for the rare unmatched-event case.
-  // Constructing the admin wallet doesn't itself make a network call — it's a pure key-derived
-  // address — so this is cheap even though getAdminWallet() also attaches a provider internally.
-  const adminAddress = getAdminWallet().address.toLowerCase();
-  const tx = await provider.getTransaction(doc.blockchainRef.txHash);
-  const signer = tx?.from?.toLowerCase();
-
-  return {
-    reconciliationStatus: signer === adminAddress ? 'admin_untracked' : 'legitimate_chain_only',
-    matchedSyncQueueId: syncQueueMatch.syncQueueId,
-    matchedFirestoreRef: null,
-    reconciledAt: Timestamp.now(),
-  };
+  return classifyUnmatchedEvent(db, provider, doc.blockchainRef.txHash);
 }

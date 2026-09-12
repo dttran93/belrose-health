@@ -6,6 +6,7 @@
 // needing a chain call or the emulator.
 
 import type { Firestore } from 'firebase-admin/firestore';
+import { ethers } from 'ethers';
 
 export interface MemberRoleManagerMatchResult {
   matched: boolean;
@@ -63,4 +64,56 @@ export async function findSyncQueueEntryForTxHash(
 
   const doc = snap.docs[0];
   return { found: true, syncQueueId: doc.id, status: (doc.data().status as string) ?? null };
+}
+
+export interface RoleEventMatchResult {
+  matched: boolean;
+  matchedFirestoreRef: string | null; // e.g. 'records/{recordId}/permissionHistory/{eventId}'
+}
+
+/**
+ * RoleGranted/RoleRevoked match rule: `recordId` isn't recoverable from the on-chain event (only
+ * the one-way-hashed `recordIdHash`), so this has to be a collectionGroup scan over every
+ * `permissionHistory` doc with that `recordIdHash`, then an in-memory check of whether any of its
+ * `changes[]` entries has this exact target + role — mirroring the hash-at-read-time convention
+ * `recordPermissionIntegrityService.ts` already uses (src/features/BackendChainParity/services/),
+ * just in the reverse direction. No `firestore.rules`/index change needed: this runs entirely
+ * through the Admin SDK (bypasses rules unconditionally), and it's a single equality filter with
+ * no orderBy/range — Firestore auto-indexes that for collection-group scope by default.
+ *
+ * Producer-agnostic on purpose: both permissionsService.ts's direct grants and
+ * trusteePermissionService.ts's trustee-driven grants write into the same permissionHistory
+ * shape (just a different `context` field) — this rule doesn't need to know or care which wrote
+ * a given doc.
+ *
+ * `userIdHash` is deliberately NOT part of the match condition. initializeRecordRole
+ * (MemberRoleManager.sol:579, onlyAdmin) hardcodes the on-chain event's userIdHash to bytes32(0)
+ * regardless of who triggered it, but its Firestore write (permissionPreparationService.ts)
+ * records the real calling user's UID as `changedBy`/`changedByIdHash` — a genuine hash, never
+ * bytes32(0). Requiring userIdHash === changedByIdHash here would produce a false "no match" for
+ * every admin-initialized role grant, even though Firestore genuinely has the record.
+ */
+export async function findMatchingPermissionHistoryForRoleEvent(
+  db: Firestore,
+  args: { recordIdHash: string; targetIdHash: string; role: string }
+): Promise<RoleEventMatchResult> {
+  const snap = await db
+    .collectionGroup('permissionHistory')
+    .where('recordIdHash', '==', args.recordIdHash)
+    .get();
+
+  const targetIdHashLower = args.targetIdHash.toLowerCase();
+
+  for (const doc of snap.docs) {
+    const changes: Array<{ userId?: string; newRole?: string | null }> = doc.data().changes ?? [];
+    const isMatch = changes.some(
+      c =>
+        c.newRole === args.role &&
+        typeof c.userId === 'string' &&
+        ethers.id(c.userId).toLowerCase() === targetIdHashLower
+    );
+    if (isMatch) return { matched: true, matchedFirestoreRef: doc.ref.path };
+  }
+
+  return { matched: false, matchedFirestoreRef: null };
 }

@@ -5,7 +5,12 @@
 // expects, not a full ethers EventLog) and asserts the decoded shape.
 
 import { describe, it, expect } from 'vitest';
-import { decodeMemberRoleManagerLog, type RawMemberRoleManagerLog } from '../src/chainIndexer/eventDecoders';
+import {
+  decodeMemberRoleManagerLog,
+  decodeRoleEventLog,
+  type RawMemberRoleManagerLog,
+  type RawRoleEventLog,
+} from '../src/chainIndexer/eventDecoders';
 
 function fakeLog(overrides: Partial<RawMemberRoleManagerLog> = {}): RawMemberRoleManagerLog {
   return {
@@ -58,5 +63,63 @@ describe('decodeMemberRoleManagerLog', () => {
   it('does not mutate or leak the raw timestamp field into the decoded args', () => {
     const decoded = decodeMemberRoleManagerLog(fakeLog());
     expect(decoded.args).not.toHaveProperty('timestamp');
+  });
+});
+
+function fakeRoleLog(overrides: Partial<RawRoleEventLog> = {}): RawRoleEventLog {
+  return {
+    eventName: 'RoleGranted',
+    transactionHash: '0xrole123',
+    blockNumber: 200,
+    index: 1,
+    contractAddress: '0xMemberRoleManagerProxy',
+    chainId: 84532,
+    args: {
+      recordIdHash: '0xRecordIdHash',
+      targetIdHash: '0xTargetIdHash',
+      role: 'administrator',
+      userIdHash: '0xCallerIdHash',
+      timestamp: 1_700_000_000n,
+    },
+    ...overrides,
+  };
+}
+
+describe('decodeRoleEventLog', () => {
+  it('decodes a RoleGranted log', () => {
+    const decoded = decodeRoleEventLog(fakeRoleLog());
+
+    expect(decoded).toEqual({
+      eventName: 'RoleGranted',
+      txHash: '0xrole123',
+      blockNumber: 200,
+      logIndex: 1,
+      contractAddress: '0xMemberRoleManagerProxy',
+      chainId: 84532,
+      blockTimestampSeconds: 1_700_000_000,
+      args: {
+        recordIdHash: '0xRecordIdHash',
+        targetIdHash: '0xTargetIdHash',
+        role: 'administrator',
+        userIdHash: '0xCallerIdHash',
+      },
+    });
+  });
+
+  it('decodes a RoleRevoked log identically shaped, just a different eventName', () => {
+    const decoded = decodeRoleEventLog(fakeRoleLog({ eventName: 'RoleRevoked', transactionHash: '0xrevoke1' }));
+    expect(decoded.eventName).toBe('RoleRevoked');
+    expect(decoded.txHash).toBe('0xrevoke1');
+  });
+
+  it('passes the non-indexed `role` string through unchanged — no hash/topic decoding involved', () => {
+    const decoded = decodeRoleEventLog(fakeRoleLog({ args: { ...fakeRoleLog().args, role: 'viewer' } }));
+    expect(decoded.args.role).toBe('viewer');
+  });
+
+  it('decodes the bytes32(0) userIdHash case (initializeRecordRole) as an ordinary hex string, no special-casing', () => {
+    const zeroHash = '0x0000000000000000000000000000000000000000000000000000000000000000';
+    const decoded = decodeRoleEventLog(fakeRoleLog({ args: { ...fakeRoleLog().args, userIdHash: zeroHash } }));
+    expect(decoded.args.userIdHash).toBe(zeroHash);
   });
 });
