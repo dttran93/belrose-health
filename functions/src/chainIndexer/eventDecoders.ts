@@ -8,12 +8,17 @@
 // (addMember/addMemberBatch), both carrying the identical (wallet, userIdHash, timestamp) shape.
 // Slice 2 adds RoleGranted/RoleRevoked — a genuinely different (recordIdHash, targetIdHash, role,
 // userIdHash, timestamp) shape, so they get their own Raw*/Decoded* types and decode function
-// below rather than overloading the Member* ones. RoleChanged is deliberately NOT included yet
-// (Slice 3 — see eventRegistry.ts's own comment): its match shape differs again (oldRole/newRole
-// against a role CHANGE, not a grant/revoke), and it shares call sites with this slice's events
-// closely enough to deserve its own focused review pass rather than being folded in here.
+// below rather than overloading the Member* ones. Slice 3 adds RoleChanged — same call-site
+// family as Slice 2 (changeRole, voluntarilyLeaveOwnership demotions, trustee level sync), but a
+// genuinely different match shape again (oldRole/newRole against a role CHANGE, not a grant/
+// revoke) — see reconciliationRules.ts's findMatchingPermissionHistoryForRoleChangedEvent.
 
-export type MemberRoleManagerEventName = 'MemberRegistered' | 'WalletLinked' | 'RoleGranted' | 'RoleRevoked';
+export type MemberRoleManagerEventName =
+  | 'MemberRegistered'
+  | 'WalletLinked'
+  | 'RoleGranted'
+  | 'RoleRevoked'
+  | 'RoleChanged';
 
 // Minimal shape of what ethers' queryFilter returns for these two events — just enough to
 // decode, not the full EventLog surface.
@@ -132,6 +137,65 @@ export function decodeRoleEventLog(log: RawRoleEventLog): DecodedRoleEvent {
       recordIdHash: log.args.recordIdHash,
       targetIdHash: log.args.targetIdHash,
       role: log.args.role,
+      userIdHash: log.args.userIdHash,
+    },
+  };
+}
+
+// ============================================================================
+// RoleChanged (Slice 3)
+// ============================================================================
+
+export interface RawRoleChangedEventLog {
+  eventName: 'RoleChanged';
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  contractAddress: string;
+  chainId: number;
+  args: {
+    recordIdHash: string;
+    targetIdHash: string;
+    // Both non-indexed strings, decoded by ethers straight to plain JS strings — same as
+    // RoleGranted/RoleRevoked's `role` arg, no hash/topic decoding involved.
+    oldRole: string;
+    newRole: string;
+    userIdHash: string;
+    timestamp: bigint | number;
+  };
+}
+
+export interface DecodedRoleChangedEvent {
+  eventName: 'RoleChanged';
+  txHash: string;
+  blockNumber: number;
+  logIndex: number;
+  contractAddress: string;
+  chainId: number;
+  blockTimestampSeconds: number;
+  args: {
+    recordIdHash: string;
+    targetIdHash: string;
+    oldRole: string;
+    newRole: string;
+    userIdHash: string;
+  };
+}
+
+export function decodeRoleChangedEventLog(log: RawRoleChangedEventLog): DecodedRoleChangedEvent {
+  return {
+    eventName: log.eventName,
+    txHash: log.transactionHash,
+    blockNumber: log.blockNumber,
+    logIndex: log.index,
+    contractAddress: log.contractAddress,
+    chainId: log.chainId,
+    blockTimestampSeconds: Number(log.args.timestamp),
+    args: {
+      recordIdHash: log.args.recordIdHash,
+      targetIdHash: log.args.targetIdHash,
+      oldRole: log.args.oldRole,
+      newRole: log.args.newRole,
       userIdHash: log.args.userIdHash,
     },
   };

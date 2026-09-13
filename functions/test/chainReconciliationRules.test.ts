@@ -12,6 +12,7 @@ import {
   findMatchingUserForMemberEvent,
   findSyncQueueEntryForTxHash,
   findMatchingPermissionHistoryForRoleEvent,
+  findMatchingPermissionHistoryForRoleChangedEvent,
 } from '../src/chainIndexer/reconciliationRules';
 import { ethers } from 'ethers';
 
@@ -251,6 +252,109 @@ describe('findMatchingPermissionHistoryForRoleEvent', () => {
   it('does not match when no permissionHistory doc exists for that recordIdHash at all', async () => {
     const db = fakeFirestore({}, { permissionHistory: [] });
     await expect(findMatchingPermissionHistoryForRoleEvent(db, args)).resolves.toEqual({
+      matched: false,
+      matchedFirestoreRef: null,
+    });
+  });
+});
+
+describe('findMatchingPermissionHistoryForRoleChangedEvent', () => {
+  const targetUserId = 'user-target';
+  const targetIdHash = ethers.id(targetUserId);
+  const changedArgs = { recordIdHash: '0xRecordHash1', targetIdHash, oldRole: 'viewer', newRole: 'sharer' };
+
+  it('matches an "upgraded" changes[] entry with the same oldRole/newRole', async () => {
+    const db = fakeFirestore(
+      {},
+      {
+        permissionHistory: [
+          {
+            id: 'event-1',
+            path: 'records/rec-1/permissionHistory/event-1',
+            data: {
+              recordIdHash: '0xRecordHash1',
+              changes: [{ action: 'upgraded', userId: targetUserId, previousRole: 'viewer', newRole: 'sharer' }],
+            },
+          },
+        ],
+      }
+    );
+
+    await expect(findMatchingPermissionHistoryForRoleChangedEvent(db, changedArgs)).resolves.toEqual({
+      matched: true,
+      matchedFirestoreRef: 'records/rec-1/permissionHistory/event-1',
+    });
+  });
+
+  it('matches a "downgraded" changes[] entry identically', async () => {
+    const db = fakeFirestore(
+      {},
+      {
+        permissionHistory: [
+          {
+            id: 'event-1',
+            path: 'records/rec-1/permissionHistory/event-1',
+            data: {
+              recordIdHash: '0xRecordHash1',
+              changes: [{ action: 'downgraded', userId: targetUserId, previousRole: 'viewer', newRole: 'sharer' }],
+            },
+          },
+        ],
+      }
+    );
+
+    await expect(findMatchingPermissionHistoryForRoleChangedEvent(db, changedArgs)).resolves.toMatchObject({ matched: true });
+  });
+
+  it('does not match a "granted" changes[] entry even when the role values line up — that belongs to RoleGranted, not RoleChanged', async () => {
+    const db = fakeFirestore(
+      {},
+      {
+        permissionHistory: [
+          {
+            id: 'event-1',
+            path: 'records/rec-1/permissionHistory/event-1',
+            data: {
+              recordIdHash: '0xRecordHash1',
+              changes: [{ action: 'granted', userId: targetUserId, previousRole: null, newRole: 'sharer' }],
+            },
+          },
+        ],
+      }
+    );
+
+    await expect(findMatchingPermissionHistoryForRoleChangedEvent(db, changedArgs)).resolves.toEqual({
+      matched: false,
+      matchedFirestoreRef: null,
+    });
+  });
+
+  it('does not match when previousRole differs from the event\'s oldRole', async () => {
+    const db = fakeFirestore(
+      {},
+      {
+        permissionHistory: [
+          {
+            id: 'event-1',
+            path: 'records/rec-1/permissionHistory/event-1',
+            data: {
+              recordIdHash: '0xRecordHash1',
+              changes: [{ action: 'upgraded', userId: targetUserId, previousRole: 'sharer', newRole: 'sharer' }],
+            },
+          },
+        ],
+      }
+    );
+
+    await expect(findMatchingPermissionHistoryForRoleChangedEvent(db, changedArgs)).resolves.toEqual({
+      matched: false,
+      matchedFirestoreRef: null,
+    });
+  });
+
+  it('does not match when no permissionHistory doc exists for that recordIdHash at all', async () => {
+    const db = fakeFirestore({}, { permissionHistory: [] });
+    await expect(findMatchingPermissionHistoryForRoleChangedEvent(db, changedArgs)).resolves.toEqual({
       matched: false,
       matchedFirestoreRef: null,
     });

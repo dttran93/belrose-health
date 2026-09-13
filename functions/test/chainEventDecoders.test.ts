@@ -8,8 +8,10 @@ import { describe, it, expect } from 'vitest';
 import {
   decodeMemberRoleManagerLog,
   decodeRoleEventLog,
+  decodeRoleChangedEventLog,
   type RawMemberRoleManagerLog,
   type RawRoleEventLog,
+  type RawRoleChangedEventLog,
 } from '../src/chainIndexer/eventDecoders';
 
 function fakeLog(overrides: Partial<RawMemberRoleManagerLog> = {}): RawMemberRoleManagerLog {
@@ -121,5 +123,56 @@ describe('decodeRoleEventLog', () => {
     const zeroHash = '0x0000000000000000000000000000000000000000000000000000000000000000';
     const decoded = decodeRoleEventLog(fakeRoleLog({ args: { ...fakeRoleLog().args, userIdHash: zeroHash } }));
     expect(decoded.args.userIdHash).toBe(zeroHash);
+  });
+});
+
+function fakeRoleChangedLog(overrides: Partial<RawRoleChangedEventLog> = {}): RawRoleChangedEventLog {
+  return {
+    eventName: 'RoleChanged',
+    transactionHash: '0xchange123',
+    blockNumber: 300,
+    index: 2,
+    contractAddress: '0xMemberRoleManagerProxy',
+    chainId: 84532,
+    args: {
+      recordIdHash: '0xRecordIdHash',
+      targetIdHash: '0xTargetIdHash',
+      oldRole: 'viewer',
+      newRole: 'sharer',
+      userIdHash: '0xCallerIdHash',
+      timestamp: 1_700_000_000n,
+    },
+    ...overrides,
+  };
+}
+
+describe('decodeRoleChangedEventLog', () => {
+  it('decodes a RoleChanged log, including both oldRole and newRole', () => {
+    const decoded = decodeRoleChangedEventLog(fakeRoleChangedLog());
+
+    expect(decoded).toEqual({
+      eventName: 'RoleChanged',
+      txHash: '0xchange123',
+      blockNumber: 300,
+      logIndex: 2,
+      contractAddress: '0xMemberRoleManagerProxy',
+      chainId: 84532,
+      blockTimestampSeconds: 1_700_000_000,
+      args: {
+        recordIdHash: '0xRecordIdHash',
+        targetIdHash: '0xTargetIdHash',
+        oldRole: 'viewer',
+        newRole: 'sharer',
+        userIdHash: '0xCallerIdHash',
+      },
+    });
+  });
+
+  it('passes both non-indexed role strings through unchanged', () => {
+    const decoded = decodeRoleChangedEventLog(
+      fakeRoleChangedLog({ args: { ...fakeRoleChangedLog().args, oldRole: 'administrator', newRole: 'owner' } })
+    );
+    expect(decoded.args.oldRole).toBe('administrator');
+    expect(decoded.args.newRole).toBe('owner');
   });
 });

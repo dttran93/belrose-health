@@ -20,6 +20,7 @@ const { mockContract, connectMock } = vi.hoisted(() => {
       WalletLinked: vi.fn(() => 'WalletLinked-filter'),
       RoleGranted: vi.fn(() => 'RoleGranted-filter'),
       RoleRevoked: vi.fn(() => 'RoleRevoked-filter'),
+      RoleChanged: vi.fn(() => 'RoleChanged-filter'),
     },
     queryFilter: vi.fn(),
   };
@@ -90,6 +91,32 @@ function fakeRoleEventLog(overrides: {
   };
 }
 
+function fakeRoleChangedEventLog(overrides: {
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  recordIdHash?: string;
+  targetIdHash?: string;
+  oldRole?: string;
+  newRole?: string;
+  userIdHash?: string;
+  timestamp?: bigint;
+}) {
+  return {
+    transactionHash: overrides.transactionHash,
+    blockNumber: overrides.blockNumber,
+    index: overrides.index,
+    args: {
+      recordIdHash: overrides.recordIdHash ?? '0xRecordHash1',
+      targetIdHash: overrides.targetIdHash ?? '0xTargetHash1',
+      oldRole: overrides.oldRole ?? 'viewer',
+      newRole: overrides.newRole ?? 'sharer',
+      userIdHash: overrides.userIdHash ?? '0xCallerHash1',
+      timestamp: overrides.timestamp ?? 1_700_000_000n,
+    },
+  };
+}
+
 // Every existing test only cares about MemberRegistered/WalletLinked and expects role-event
 // filters to just come back empty — roleGranted/roleRevoked are optional so those tests don't
 // need updating for a slice they predate.
@@ -98,6 +125,7 @@ function configureQueryFilter(handlers: {
   walletLinked: (from: number, to: number) => unknown[];
   roleGranted?: (from: number, to: number) => unknown[];
   roleRevoked?: (from: number, to: number) => unknown[];
+  roleChanged?: (from: number, to: number) => unknown[];
 }) {
   mockContract.queryFilter.mockImplementation(async (filter: unknown, from: number, to: number) => {
     switch (filter) {
@@ -109,6 +137,8 @@ function configureQueryFilter(handlers: {
         return (handlers.roleGranted ?? (() => []))(from, to);
       case 'RoleRevoked-filter':
         return (handlers.roleRevoked ?? (() => []))(from, to);
+      case 'RoleChanged-filter':
+        return (handlers.roleChanged ?? (() => []))(from, to);
       default:
         throw new Error(`Unexpected filter in test: ${String(filter)}`);
     }
@@ -593,23 +623,160 @@ describe('runChainEventIndexerCycle — RoleGranted/RoleRevoked (Slice 2)', () =
     expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
   });
 
-  it('handles all four event types found in the same chunk, advancing the checkpoint to the min toBlock across all four filters', async () => {
+  it('handles all five event types found in the same chunk, advancing the checkpoint to the min toBlock across all five filters', async () => {
     await seedCheckpoint(999);
     configureQueryFilter({
       memberRegistered: () => [fakeEventLog({ eventName: 'MemberRegistered', transactionHash: '0xa', blockNumber: 1002, index: 0 })],
       walletLinked: () => [fakeEventLog({ eventName: 'WalletLinked', transactionHash: '0xb', blockNumber: 1003, index: 0 })],
       roleGranted: () => [fakeRoleEventLog({ transactionHash: '0xc', blockNumber: 1004, index: 0, recordIdHash: '0xRecordHash1', targetIdHash })],
       roleRevoked: () => [fakeRoleEventLog({ transactionHash: '0xd', blockNumber: 1006, index: 0, recordIdHash: '0xRecordHash1', targetIdHash })],
+      roleChanged: () => [fakeRoleChangedEventLog({ transactionHash: '0xe', blockNumber: 1007, index: 0, recordIdHash: '0xRecordHash1', targetIdHash })],
     });
 
     const result = await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 })); // targetBlock 1010
 
-    expect(result.eventsFound).toBe(4);
-    expect(result.newlyCached).toBe(4);
-    expect(await getCheckpointBlock()).toBe(1010); // all four filters shared the same [1000,1010] range
+    expect(result.eventsFound).toBe(5);
+    expect(result.newlyCached).toBe(5);
+    expect(await getCheckpointBlock()).toBe(1010); // all five filters shared the same [1000,1010] range
     expect((await getCachedEvent('0xa', 0))?.eventName).toBe('MemberRegistered');
     expect((await getCachedEvent('0xb', 0))?.eventName).toBe('WalletLinked');
     expect((await getCachedEvent('0xc', 0))?.eventName).toBe('RoleGranted');
     expect((await getCachedEvent('0xd', 0))?.eventName).toBe('RoleRevoked');
+    expect((await getCachedEvent('0xe', 0))?.eventName).toBe('RoleChanged');
+  });
+});
+
+describe('runChainEventIndexerCycle — RoleChanged (Slice 3)', () => {
+  const targetUserId = 'user-target';
+  const targetIdHash = ethers.id(targetUserId);
+
+  it('classifies as matched against a permissionHistory doc recording an "upgraded" change with the same oldRole/newRole', async () => {
+    await admin
+      .firestore()
+      .collection('records')
+      .doc('rec-1')
+      .collection('permissionHistory')
+      .doc('event-1')
+      .set({
+        recordIdHash: '0xRecordHash1',
+        changedBy: 'user-admin',
+        changedByIdHash: ethers.id('user-admin'),
+        changes: [{ action: 'upgraded', userId: targetUserId, previousRole: 'viewer', newRole: 'sharer' }],
+      });
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      roleChanged: () => [
+        fakeRoleChangedEventLog({
+          transactionHash: '0xchangetx1',
+          blockNumber: 1005,
+          index: 0,
+          recordIdHash: '0xRecordHash1',
+          targetIdHash,
+          oldRole: 'viewer',
+          newRole: 'sharer',
+        }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+
+    const cached = await getCachedEvent('0xchangetx1', 0);
+    expect(cached).toMatchObject({
+      eventName: 'RoleChanged',
+      reconciliationStatus: 'matched',
+      matchedFirestoreRef: 'records/rec-1/permissionHistory/event-1',
+    });
+  });
+
+  it('classifies as matched against a trustee level-sync "downgraded" change identically — producer-agnostic', async () => {
+    await admin
+      .firestore()
+      .collection('records')
+      .doc('rec-1')
+      .collection('permissionHistory')
+      .doc('event-1')
+      .set({
+        recordIdHash: '0xRecordHash1',
+        changedBy: 'trustee-uid',
+        changedByIdHash: ethers.id('trustee-uid'),
+        changes: [{ action: 'downgraded', userId: targetUserId, previousRole: 'administrator', newRole: 'viewer' }],
+        context: 'trustee_grant',
+      });
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      roleChanged: () => [
+        fakeRoleChangedEventLog({
+          transactionHash: '0xchangetx1',
+          blockNumber: 1005,
+          index: 0,
+          recordIdHash: '0xRecordHash1',
+          targetIdHash,
+          oldRole: 'administrator',
+          newRole: 'viewer',
+        }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+
+    const cached = await getCachedEvent('0xchangetx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'matched' });
+  });
+
+  it('does not match a "granted"/"revoked" changes[] entry even if the role values happen to line up — those belong to RoleGranted/RoleRevoked, not RoleChanged', async () => {
+    await admin
+      .firestore()
+      .collection('records')
+      .doc('rec-1')
+      .collection('permissionHistory')
+      .doc('event-1')
+      .set({
+        recordIdHash: '0xRecordHash1',
+        changes: [{ action: 'granted', userId: targetUserId, previousRole: null, newRole: 'sharer' }],
+      });
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      roleChanged: () => [
+        fakeRoleChangedEventLog({
+          transactionHash: '0xchangetx1',
+          blockNumber: 1005,
+          index: 0,
+          recordIdHash: '0xRecordHash1',
+          targetIdHash,
+          oldRole: 'viewer',
+          newRole: 'sharer',
+        }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+
+    const cached = await getCachedEvent('0xchangetx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: expect.not.stringMatching('matched') });
+  });
+
+  it('classifies as legitimate_chain_only when unmatched, no sync-queue entry, and signed by some other real wallet', async () => {
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      roleChanged: () => [
+        fakeRoleChangedEventLog({ transactionHash: '0xchangetx1', blockNumber: 1005, index: 0, recordIdHash: '0xRecordHash1', targetIdHash }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(
+      admin.firestore(),
+      makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xchangetx1': '0xSomeRealUserWallet' } })
+    );
+
+    const cached = await getCachedEvent('0xchangetx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
   });
 });

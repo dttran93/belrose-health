@@ -6,11 +6,6 @@
 // entry for the two pieces that actually vary by event — how to filter/decode the raw log, and
 // how to reconcile it against Firestore. Adding a new event type means adding one entry here and
 // nowhere else in chainEventIndexerService.ts's loop logic.
-//
-// RoleChanged is intentionally NOT registered yet (Slice 3) — it shares call sites with
-// RoleGranted/RoleRevoked (changeRole, voluntarilyLeaveOwnership demotions, trustee level sync)
-// but needs its own match rule (oldRole/newRole against a permissionHistory `changes[]` entry
-// with action 'upgraded'/'downgraded', not a simple grant/revoke check) and its own review pass.
 
 import type { ethers, Provider } from 'ethers';
 import type { Firestore } from 'firebase-admin/firestore';
@@ -19,11 +14,18 @@ import type { ChainEventCacheDoc } from '../_shared';
 import {
   decodeMemberRoleManagerLog,
   decodeRoleEventLog,
+  decodeRoleChangedEventLog,
   type MemberRoleManagerEventName,
   type RawMemberRoleManagerLog,
   type RawRoleEventLog,
+  type RawRoleChangedEventLog,
 } from './eventDecoders';
-import { reconcileMemberRoleManagerEvent, reconcileRoleEvent, type ReconciliationResult } from './reconciliationService';
+import {
+  reconcileMemberRoleManagerEvent,
+  reconcileRoleEvent,
+  reconcileRoleChangedEvent,
+  type ReconciliationResult,
+} from './reconciliationService';
 
 export interface ChainEventRegistryEntry {
   getFilter: (contract: MemberRoleManager) => ethers.DeferredTopicFilter;
@@ -31,7 +33,9 @@ export interface ChainEventRegistryEntry {
   // once, generically, by chainEventIndexerService.ts's toRawLog, since every event registered
   // here carries it.
   toRawArgs: (log: ethers.EventLog) => Record<string, unknown>;
-  decode: (log: RawMemberRoleManagerLog | RawRoleEventLog) => ReturnType<typeof decodeMemberRoleManagerLog | typeof decodeRoleEventLog>;
+  decode: (
+    log: RawMemberRoleManagerLog | RawRoleEventLog | RawRoleChangedEventLog
+  ) => ReturnType<typeof decodeMemberRoleManagerLog | typeof decodeRoleEventLog | typeof decodeRoleChangedEventLog>;
   reconcile: (
     db: Firestore,
     provider: Provider,
@@ -73,5 +77,17 @@ export const CHAIN_EVENT_REGISTRY: Record<MemberRoleManagerEventName, ChainEvent
     }),
     decode: log => decodeRoleEventLog(log as RawRoleEventLog),
     reconcile: reconcileRoleEvent,
+  },
+  RoleChanged: {
+    getFilter: contract => contract.filters.RoleChanged(),
+    toRawArgs: log => ({
+      recordIdHash: log.args.recordIdHash as string,
+      targetIdHash: log.args.targetIdHash as string,
+      oldRole: log.args.oldRole as string,
+      newRole: log.args.newRole as string,
+      userIdHash: log.args.userIdHash as string,
+    }),
+    decode: log => decodeRoleChangedEventLog(log as RawRoleChangedEventLog),
+    reconcile: reconcileRoleChangedEvent,
   },
 };

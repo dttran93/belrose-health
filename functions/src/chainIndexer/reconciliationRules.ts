@@ -117,3 +117,50 @@ export async function findMatchingPermissionHistoryForRoleEvent(
 
   return { matched: false, matchedFirestoreRef: null };
 }
+
+/**
+ * RoleChanged match rule (Slice 3): same collectionGroup-scan shape as
+ * findMatchingPermissionHistoryForRoleEvent, but matches a `changes[]` entry recording an actual
+ * role CHANGE — `action` of 'upgraded' or 'downgraded' (packages/shared/src/permissions.ts's
+ * PermissionChange union), with both `previousRole`/`newRole` equal to the event's `oldRole`/
+ * `newRole`. A 'granted'/'revoked' entry is never a valid match here even if the role values
+ * happened to line up — those correspond to RoleGranted/RoleRevoked, not RoleChanged.
+ *
+ * userIdHash is excluded from the match condition for the same reason as
+ * findMatchingPermissionHistoryForRoleEvent, applied conservatively even though RoleChanged has
+ * no known bytes32(0) case of its own (every emission site — changeRole, changeRoleBatch,
+ * voluntarilyLeaveOwnership, trustee level sync — is onlyActiveMember, never onlyAdmin): matching
+ * on the actual permission-change content is the more direct and less assumption-laden check
+ * regardless.
+ */
+export async function findMatchingPermissionHistoryForRoleChangedEvent(
+  db: Firestore,
+  args: { recordIdHash: string; targetIdHash: string; oldRole: string; newRole: string }
+): Promise<RoleEventMatchResult> {
+  const snap = await db
+    .collectionGroup('permissionHistory')
+    .where('recordIdHash', '==', args.recordIdHash)
+    .get();
+
+  const targetIdHashLower = args.targetIdHash.toLowerCase();
+
+  for (const doc of snap.docs) {
+    const changes: Array<{
+      action?: string;
+      userId?: string;
+      previousRole?: string | null;
+      newRole?: string | null;
+    }> = doc.data().changes ?? [];
+    const isMatch = changes.some(
+      c =>
+        (c.action === 'upgraded' || c.action === 'downgraded') &&
+        c.previousRole === args.oldRole &&
+        c.newRole === args.newRole &&
+        typeof c.userId === 'string' &&
+        ethers.id(c.userId).toLowerCase() === targetIdHashLower
+    );
+    if (isMatch) return { matched: true, matchedFirestoreRef: doc.ref.path };
+  }
+
+  return { matched: false, matchedFirestoreRef: null };
+}

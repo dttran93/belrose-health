@@ -25,6 +25,7 @@ import type { ChainEventCacheDoc } from '../_shared';
 import {
   findMatchingUserForMemberEvent,
   findMatchingPermissionHistoryForRoleEvent,
+  findMatchingPermissionHistoryForRoleChangedEvent,
   findSyncQueueEntryForTxHash,
   type SyncQueueMatch,
 } from './reconciliationRules';
@@ -107,6 +108,32 @@ export async function reconcileRoleEvent(
   const args = doc.args as { recordIdHash: string; targetIdHash: string; role: string };
 
   const match = await findMatchingPermissionHistoryForRoleEvent(db, args);
+  if (match.matched) {
+    return {
+      reconciliationStatus: 'matched',
+      matchedSyncQueueId: null,
+      matchedFirestoreRef: match.matchedFirestoreRef,
+      reconciledAt: Timestamp.now(),
+    };
+  }
+
+  return classifyUnmatchedEvent(db, provider, doc.blockchainRef.txHash);
+}
+
+/**
+ * RoleChanged reconciler (Slice 3). Same 4-bucket shape and same call-site family as
+ * reconcileRoleEvent (changeRole/changeRoleBatch/voluntarilyLeaveOwnership demotions/trustee
+ * level sync — none onlyAdmin), so bucket 4 ('legitimate_chain_only') is reachable here too, for
+ * the same reason it is for RoleGranted/RoleRevoked.
+ */
+export async function reconcileRoleChangedEvent(
+  db: Firestore,
+  provider: Provider,
+  doc: Pick<ChainEventCacheDoc, 'args' | 'blockchainRef'>
+): Promise<ReconciliationResult> {
+  const args = doc.args as { recordIdHash: string; targetIdHash: string; oldRole: string; newRole: string };
+
+  const match = await findMatchingPermissionHistoryForRoleChangedEvent(db, args);
   if (match.matched) {
     return {
       reconciliationStatus: 'matched',
