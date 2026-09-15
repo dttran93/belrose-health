@@ -11,14 +11,28 @@
 // below rather than overloading the Member* ones. Slice 3 adds RoleChanged — same call-site
 // family as Slice 2 (changeRole, voluntarilyLeaveOwnership demotions, trustee level sync), but a
 // genuinely different match shape again (oldRole/newRole against a role CHANGE, not a grant/
-// revoke) — see reconciliationRules.ts's findMatchingPermissionHistoryForRoleChangedEvent.
+// revoke) — see reconciliationRules.ts's findMatchingPermissionHistoryForRoleChangedEvent. Slice 4
+// adds MemberStatusChanged (admin-only, setUserStatus — same call-site shape as Slice 1) and
+// OwnershipVoluntarilyLeft (user-callable, the "leave with no replacement role" case of
+// voluntarilyLeaveOwnership — a narrow variant of Slice 3's shape). Slice 5 adds the 5 Trustee
+// events (Proposed/Accepted/Declined/Revoked/LevelUpdated) — matched against
+// trusteeRelationships/{id}/trusteeHistory, a subcollection parallel to permissionHistory that
+// (unlike permissionHistory) already stores trustorIdHash/trusteeIdHash directly on each event,
+// so no in-memory hash recomputation is needed at match time — see reconciliationRules.ts.
 
 export type MemberRoleManagerEventName =
   | 'MemberRegistered'
   | 'WalletLinked'
   | 'RoleGranted'
   | 'RoleRevoked'
-  | 'RoleChanged';
+  | 'RoleChanged'
+  | 'MemberStatusChanged'
+  | 'OwnershipVoluntarilyLeft'
+  | 'TrusteeProposed'
+  | 'TrusteeAccepted'
+  | 'TrusteeDeclined'
+  | 'TrusteeRevoked'
+  | 'TrusteeLevelUpdated';
 
 // Minimal shape of what ethers' queryFilter returns for these two events — just enough to
 // decode, not the full EventLog surface.
@@ -197,6 +211,339 @@ export function decodeRoleChangedEventLog(log: RawRoleChangedEventLog): DecodedR
       oldRole: log.args.oldRole,
       newRole: log.args.newRole,
       userIdHash: log.args.userIdHash,
+    },
+  };
+}
+
+// ============================================================================
+// MemberStatusChanged (Slice 4)
+// ============================================================================
+
+export interface RawMemberStatusChangedEventLog {
+  eventName: 'MemberStatusChanged';
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  contractAddress: string;
+  chainId: number;
+  args: {
+    userIdHash: string;
+    // MemberStatus enum (uint8 under the hood) — ethers v6 decodes every Solidity integer width
+    // uniformly as bigint, same as `timestamp`, regardless that this one only ever takes values
+    // 0-4. Converted to `number` in the decoded shape below.
+    oldStatus: bigint | number;
+    newStatus: bigint | number;
+    // setUserStatus is onlyAdmin, so this is always msg.sender = the admin wallet's own address —
+    // a real address, not a hash, unlike RoleGranted/RoleChanged's userIdHash arg.
+    changedBy: string;
+    timestamp: bigint | number;
+  };
+}
+
+export interface DecodedMemberStatusChangedEvent {
+  eventName: 'MemberStatusChanged';
+  txHash: string;
+  blockNumber: number;
+  logIndex: number;
+  contractAddress: string;
+  chainId: number;
+  blockTimestampSeconds: number;
+  args: {
+    userIdHash: string;
+    oldStatus: number;
+    newStatus: number;
+    changedBy: string;
+  };
+}
+
+export function decodeMemberStatusChangedEventLog(
+  log: RawMemberStatusChangedEventLog
+): DecodedMemberStatusChangedEvent {
+  return {
+    eventName: log.eventName,
+    txHash: log.transactionHash,
+    blockNumber: log.blockNumber,
+    logIndex: log.index,
+    contractAddress: log.contractAddress,
+    chainId: log.chainId,
+    blockTimestampSeconds: Number(log.args.timestamp),
+    args: {
+      userIdHash: log.args.userIdHash,
+      oldStatus: Number(log.args.oldStatus),
+      newStatus: Number(log.args.newStatus),
+      changedBy: log.args.changedBy,
+    },
+  };
+}
+
+// ============================================================================
+// OwnershipVoluntarilyLeft (Slice 4)
+// ============================================================================
+
+export interface RawOwnershipVoluntarilyLeftEventLog {
+  eventName: 'OwnershipVoluntarilyLeft';
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  contractAddress: string;
+  chainId: number;
+  args: {
+    recordIdHash: string;
+    // The caller's own identity — voluntarilyLeaveOwnership is exclusively self-service (the
+    // contract has no path for one owner to remove another; see
+    // reconciliationRules.ts's findMatchingPermissionHistoryForOwnershipLeftEvent), so this is
+    // always the leaving owner's own hash, never someone else's.
+    userIdHash: string;
+    timestamp: bigint | number;
+  };
+}
+
+export interface DecodedOwnershipVoluntarilyLeftEvent {
+  eventName: 'OwnershipVoluntarilyLeft';
+  txHash: string;
+  blockNumber: number;
+  logIndex: number;
+  contractAddress: string;
+  chainId: number;
+  blockTimestampSeconds: number;
+  args: {
+    recordIdHash: string;
+    userIdHash: string;
+  };
+}
+
+export function decodeOwnershipVoluntarilyLeftEventLog(
+  log: RawOwnershipVoluntarilyLeftEventLog
+): DecodedOwnershipVoluntarilyLeftEvent {
+  return {
+    eventName: log.eventName,
+    txHash: log.transactionHash,
+    blockNumber: log.blockNumber,
+    logIndex: log.index,
+    contractAddress: log.contractAddress,
+    chainId: log.chainId,
+    blockTimestampSeconds: Number(log.args.timestamp),
+    args: {
+      recordIdHash: log.args.recordIdHash,
+      userIdHash: log.args.userIdHash,
+    },
+  };
+}
+
+// ============================================================================
+// TrusteeProposed / TrusteeAccepted (Slice 5)
+// ============================================================================
+
+export type TrusteeProposedAcceptedEventName = 'TrusteeProposed' | 'TrusteeAccepted';
+
+export interface RawTrusteeProposedAcceptedEventLog {
+  eventName: TrusteeProposedAcceptedEventName;
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  contractAddress: string;
+  chainId: number;
+  args: {
+    trustorIdHash: string;
+    trusteeIdHash: string;
+    // TrusteeLevel enum (Observer=0, Custodian=1, Controller=2) — same bigint-decoding note as
+    // MemberStatusChanged's oldStatus/newStatus.
+    level: bigint | number;
+    timestamp: bigint | number;
+  };
+}
+
+export interface DecodedTrusteeProposedAcceptedEvent {
+  eventName: TrusteeProposedAcceptedEventName;
+  txHash: string;
+  blockNumber: number;
+  logIndex: number;
+  contractAddress: string;
+  chainId: number;
+  blockTimestampSeconds: number;
+  args: {
+    trustorIdHash: string;
+    trusteeIdHash: string;
+    level: number;
+  };
+}
+
+export function decodeTrusteeProposedAcceptedEventLog(
+  log: RawTrusteeProposedAcceptedEventLog
+): DecodedTrusteeProposedAcceptedEvent {
+  return {
+    eventName: log.eventName,
+    txHash: log.transactionHash,
+    blockNumber: log.blockNumber,
+    logIndex: log.index,
+    contractAddress: log.contractAddress,
+    chainId: log.chainId,
+    blockTimestampSeconds: Number(log.args.timestamp),
+    args: {
+      trustorIdHash: log.args.trustorIdHash,
+      trusteeIdHash: log.args.trusteeIdHash,
+      level: Number(log.args.level),
+    },
+  };
+}
+
+// ============================================================================
+// TrusteeDeclined (Slice 5)
+// ============================================================================
+
+export interface RawTrusteeDeclinedEventLog {
+  eventName: 'TrusteeDeclined';
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  contractAddress: string;
+  chainId: number;
+  args: {
+    trustorIdHash: string;
+    trusteeIdHash: string;
+    timestamp: bigint | number;
+  };
+}
+
+export interface DecodedTrusteeDeclinedEvent {
+  eventName: 'TrusteeDeclined';
+  txHash: string;
+  blockNumber: number;
+  logIndex: number;
+  contractAddress: string;
+  chainId: number;
+  blockTimestampSeconds: number;
+  args: {
+    trustorIdHash: string;
+    trusteeIdHash: string;
+  };
+}
+
+export function decodeTrusteeDeclinedEventLog(
+  log: RawTrusteeDeclinedEventLog
+): DecodedTrusteeDeclinedEvent {
+  return {
+    eventName: log.eventName,
+    txHash: log.transactionHash,
+    blockNumber: log.blockNumber,
+    logIndex: log.index,
+    contractAddress: log.contractAddress,
+    chainId: log.chainId,
+    blockTimestampSeconds: Number(log.args.timestamp),
+    args: {
+      trustorIdHash: log.args.trustorIdHash,
+      trusteeIdHash: log.args.trusteeIdHash,
+    },
+  };
+}
+
+// ============================================================================
+// TrusteeRevoked (Slice 5)
+// ============================================================================
+
+export interface RawTrusteeRevokedEventLog {
+  eventName: 'TrusteeRevoked';
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  contractAddress: string;
+  chainId: number;
+  args: {
+    trustorIdHash: string;
+    trusteeIdHash: string;
+    // Whichever party (trustor or trustee) actually called revokeTrustee — onlyActiveMember, so
+    // always a genuine caller hash, never a bytes32(0) admin stand-in.
+    revokedBy: string;
+    timestamp: bigint | number;
+  };
+}
+
+export interface DecodedTrusteeRevokedEvent {
+  eventName: 'TrusteeRevoked';
+  txHash: string;
+  blockNumber: number;
+  logIndex: number;
+  contractAddress: string;
+  chainId: number;
+  blockTimestampSeconds: number;
+  args: {
+    trustorIdHash: string;
+    trusteeIdHash: string;
+    revokedBy: string;
+  };
+}
+
+export function decodeTrusteeRevokedEventLog(
+  log: RawTrusteeRevokedEventLog
+): DecodedTrusteeRevokedEvent {
+  return {
+    eventName: log.eventName,
+    txHash: log.transactionHash,
+    blockNumber: log.blockNumber,
+    logIndex: log.index,
+    contractAddress: log.contractAddress,
+    chainId: log.chainId,
+    blockTimestampSeconds: Number(log.args.timestamp),
+    args: {
+      trustorIdHash: log.args.trustorIdHash,
+      trusteeIdHash: log.args.trusteeIdHash,
+      revokedBy: log.args.revokedBy,
+    },
+  };
+}
+
+// ============================================================================
+// TrusteeLevelUpdated (Slice 5)
+// ============================================================================
+
+export interface RawTrusteeLevelUpdatedEventLog {
+  eventName: 'TrusteeLevelUpdated';
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  contractAddress: string;
+  chainId: number;
+  args: {
+    trustorIdHash: string;
+    trusteeIdHash: string;
+    oldLevel: bigint | number;
+    newLevel: bigint | number;
+    timestamp: bigint | number;
+  };
+}
+
+export interface DecodedTrusteeLevelUpdatedEvent {
+  eventName: 'TrusteeLevelUpdated';
+  txHash: string;
+  blockNumber: number;
+  logIndex: number;
+  contractAddress: string;
+  chainId: number;
+  blockTimestampSeconds: number;
+  args: {
+    trustorIdHash: string;
+    trusteeIdHash: string;
+    oldLevel: number;
+    newLevel: number;
+  };
+}
+
+export function decodeTrusteeLevelUpdatedEventLog(
+  log: RawTrusteeLevelUpdatedEventLog
+): DecodedTrusteeLevelUpdatedEvent {
+  return {
+    eventName: log.eventName,
+    txHash: log.transactionHash,
+    blockNumber: log.blockNumber,
+    logIndex: log.index,
+    contractAddress: log.contractAddress,
+    chainId: log.chainId,
+    blockTimestampSeconds: Number(log.args.timestamp),
+    args: {
+      trustorIdHash: log.args.trustorIdHash,
+      trusteeIdHash: log.args.trusteeIdHash,
+      oldLevel: Number(log.args.oldLevel),
+      newLevel: Number(log.args.newLevel),
     },
   };
 }

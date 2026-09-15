@@ -32,6 +32,13 @@ import {
   findMatchingUserForMemberEvent,
   findMatchingPermissionHistoryForRoleEvent,
   findMatchingPermissionHistoryForRoleChangedEvent,
+  findMatchingUserForStatusEvent,
+  findMatchingPermissionHistoryForOwnershipLeftEvent,
+  findMatchingTrusteeHistoryForProposedEvent,
+  findMatchingTrusteeHistoryForAcceptedEvent,
+  findMatchingTrusteeHistoryForDeclinedEvent,
+  findMatchingTrusteeHistoryForRevokedEvent,
+  findMatchingTrusteeHistoryForLevelUpdatedEvent,
   findSyncQueueEntryForTxHash,
   type SyncQueueMatch,
 } from './reconciliationRules';
@@ -171,6 +178,183 @@ export async function reconcileRoleChangedEvent(
   const args = doc.args as { recordIdHash: string; targetIdHash: string; oldRole: string; newRole: string };
 
   const match = await findMatchingPermissionHistoryForRoleChangedEvent(db, args);
+  if (match.matched) {
+    return {
+      reconciliationStatus: 'matched',
+      matchedSyncQueueId: null,
+      matchedFirestoreRef: match.matchedFirestoreRef,
+      reconciledAt: Timestamp.now(),
+    };
+  }
+
+  return classifyUnmatchedEvent(db, provider, doc.blockchainRef.txHash);
+}
+
+/**
+ * MemberStatusChanged reconciler (Slice 4). Admin-only (setUserStatus), same shape as
+ * reconcileMemberEvent — including the same deactivation check, and for a very concrete reason
+ * here specifically: e2e/helpers/backend/staging.ts's deactivateOnChain calls
+ * setUserStatus(..., Inactive) directly, which emits exactly this event. An unmatched
+ * MemberStatusChanged whose *current* on-chain status is Inactive is therefore just as likely to
+ * be e2e cleanup noise as an unmatched MemberRegistered/WalletLinked is — same check, same
+ * justification, reused verbatim rather than re-derived.
+ */
+export async function reconcileMemberStatusChangedEvent(
+  db: Firestore,
+  provider: Provider,
+  doc: Pick<ChainEventCacheDoc, 'args' | 'blockchainRef'>
+): Promise<ReconciliationResult> {
+  const args = doc.args as { userIdHash: string; newStatus: number };
+
+  const match = await findMatchingUserForStatusEvent(db, args);
+  if (match.matched) {
+    return {
+      reconciliationStatus: 'matched',
+      matchedSyncQueueId: null,
+      matchedFirestoreRef: match.matchedFirestoreRef,
+      reconciledAt: Timestamp.now(),
+    };
+  }
+
+  if (await isDeactivatedOnChain(provider, args.userIdHash)) {
+    return {
+      reconciliationStatus: 'deactivated_tracked',
+      matchedSyncQueueId: null,
+      matchedFirestoreRef: null,
+      reconciledAt: Timestamp.now(),
+    };
+  }
+
+  return classifyUnmatchedEvent(db, provider, doc.blockchainRef.txHash);
+}
+
+/**
+ * OwnershipVoluntarilyLeft reconciler (Slice 4). User-callable (onlyActiveMember), so bucket 4
+ * ('legitimate_chain_only') is reachable, same as the other role-event reconcilers. No
+ * deactivation check here — unlike MemberStatusChanged, this is a record-level role event, not an
+ * identity-status one, and there's no known source (e2e or otherwise) of untracked
+ * OwnershipVoluntarilyLeft noise the way there is for Member events.
+ */
+export async function reconcileOwnershipVoluntarilyLeftEvent(
+  db: Firestore,
+  provider: Provider,
+  doc: Pick<ChainEventCacheDoc, 'args' | 'blockchainRef'>
+): Promise<ReconciliationResult> {
+  const args = doc.args as { recordIdHash: string; userIdHash: string };
+
+  const match = await findMatchingPermissionHistoryForOwnershipLeftEvent(db, args);
+  if (match.matched) {
+    return {
+      reconciliationStatus: 'matched',
+      matchedSyncQueueId: null,
+      matchedFirestoreRef: match.matchedFirestoreRef,
+      reconciledAt: Timestamp.now(),
+    };
+  }
+
+  return classifyUnmatchedEvent(db, provider, doc.blockchainRef.txHash);
+}
+
+/**
+ * Trustee event reconcilers (Slice 5). Same 4-bucket shape as the others; bucket 1 checks
+ * trusteeRelationships/{id}/trusteeHistory instead of permissionHistory or users — see each
+ * findMatchingTrusteeHistoryFor*Event's own comment for its specific match predicate.
+ *
+ * TrusteeProposed/TrusteeAccepted can be emitted by either proposeTrustee/acceptTrustee
+ * (onlyActiveMember) or bootstrapDependentTrustee (onlyAdmin) — so both admin_untracked and
+ * legitimate_chain_only are genuinely reachable for these two, unlike TrusteeDeclined/
+ * TrusteeRevoked/TrusteeLevelUpdated, whose only emission sites are onlyActiveMember (structurally
+ * user-only, the same asymmetry Slice 1's Members events have in the other direction — checked
+ * generically here rather than special-cased, consistent with every other reconciler in this file).
+ */
+export async function reconcileTrusteeProposedEvent(
+  db: Firestore,
+  provider: Provider,
+  doc: Pick<ChainEventCacheDoc, 'args' | 'blockchainRef'>
+): Promise<ReconciliationResult> {
+  const args = doc.args as { trustorIdHash: string; trusteeIdHash: string; level: number };
+
+  const match = await findMatchingTrusteeHistoryForProposedEvent(db, args);
+  if (match.matched) {
+    return {
+      reconciliationStatus: 'matched',
+      matchedSyncQueueId: null,
+      matchedFirestoreRef: match.matchedFirestoreRef,
+      reconciledAt: Timestamp.now(),
+    };
+  }
+
+  return classifyUnmatchedEvent(db, provider, doc.blockchainRef.txHash);
+}
+
+export async function reconcileTrusteeAcceptedEvent(
+  db: Firestore,
+  provider: Provider,
+  doc: Pick<ChainEventCacheDoc, 'args' | 'blockchainRef'>
+): Promise<ReconciliationResult> {
+  const args = doc.args as { trustorIdHash: string; trusteeIdHash: string };
+
+  const match = await findMatchingTrusteeHistoryForAcceptedEvent(db, args);
+  if (match.matched) {
+    return {
+      reconciliationStatus: 'matched',
+      matchedSyncQueueId: null,
+      matchedFirestoreRef: match.matchedFirestoreRef,
+      reconciledAt: Timestamp.now(),
+    };
+  }
+
+  return classifyUnmatchedEvent(db, provider, doc.blockchainRef.txHash);
+}
+
+export async function reconcileTrusteeDeclinedEvent(
+  db: Firestore,
+  provider: Provider,
+  doc: Pick<ChainEventCacheDoc, 'args' | 'blockchainRef'>
+): Promise<ReconciliationResult> {
+  const args = doc.args as { trustorIdHash: string; trusteeIdHash: string };
+
+  const match = await findMatchingTrusteeHistoryForDeclinedEvent(db, args);
+  if (match.matched) {
+    return {
+      reconciliationStatus: 'matched',
+      matchedSyncQueueId: null,
+      matchedFirestoreRef: match.matchedFirestoreRef,
+      reconciledAt: Timestamp.now(),
+    };
+  }
+
+  return classifyUnmatchedEvent(db, provider, doc.blockchainRef.txHash);
+}
+
+export async function reconcileTrusteeRevokedEvent(
+  db: Firestore,
+  provider: Provider,
+  doc: Pick<ChainEventCacheDoc, 'args' | 'blockchainRef'>
+): Promise<ReconciliationResult> {
+  const args = doc.args as { trustorIdHash: string; trusteeIdHash: string; revokedBy: string };
+
+  const match = await findMatchingTrusteeHistoryForRevokedEvent(db, args);
+  if (match.matched) {
+    return {
+      reconciliationStatus: 'matched',
+      matchedSyncQueueId: null,
+      matchedFirestoreRef: match.matchedFirestoreRef,
+      reconciledAt: Timestamp.now(),
+    };
+  }
+
+  return classifyUnmatchedEvent(db, provider, doc.blockchainRef.txHash);
+}
+
+export async function reconcileTrusteeLevelUpdatedEvent(
+  db: Firestore,
+  provider: Provider,
+  doc: Pick<ChainEventCacheDoc, 'args' | 'blockchainRef'>
+): Promise<ReconciliationResult> {
+  const args = doc.args as { trustorIdHash: string; trusteeIdHash: string; newLevel: number };
+
+  const match = await findMatchingTrusteeHistoryForLevelUpdatedEvent(db, args);
   if (match.matched) {
     return {
       reconciliationStatus: 'matched',

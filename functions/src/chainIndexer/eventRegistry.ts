@@ -15,17 +15,58 @@ import {
   decodeMemberRoleManagerLog,
   decodeRoleEventLog,
   decodeRoleChangedEventLog,
+  decodeMemberStatusChangedEventLog,
+  decodeOwnershipVoluntarilyLeftEventLog,
+  decodeTrusteeProposedAcceptedEventLog,
+  decodeTrusteeDeclinedEventLog,
+  decodeTrusteeRevokedEventLog,
+  decodeTrusteeLevelUpdatedEventLog,
   type MemberRoleManagerEventName,
   type RawMemberRoleManagerLog,
   type RawRoleEventLog,
   type RawRoleChangedEventLog,
+  type RawMemberStatusChangedEventLog,
+  type RawOwnershipVoluntarilyLeftEventLog,
+  type RawTrusteeProposedAcceptedEventLog,
+  type RawTrusteeDeclinedEventLog,
+  type RawTrusteeRevokedEventLog,
+  type RawTrusteeLevelUpdatedEventLog,
 } from './eventDecoders';
 import {
   reconcileMemberEvent,
   reconcileRoleEvent,
   reconcileRoleChangedEvent,
+  reconcileMemberStatusChangedEvent,
+  reconcileOwnershipVoluntarilyLeftEvent,
+  reconcileTrusteeProposedEvent,
+  reconcileTrusteeAcceptedEvent,
+  reconcileTrusteeDeclinedEvent,
+  reconcileTrusteeRevokedEvent,
+  reconcileTrusteeLevelUpdatedEvent,
   type ReconciliationResult,
 } from './reconciliationService';
+
+type AnyRawLog =
+  | RawMemberRoleManagerLog
+  | RawRoleEventLog
+  | RawRoleChangedEventLog
+  | RawMemberStatusChangedEventLog
+  | RawOwnershipVoluntarilyLeftEventLog
+  | RawTrusteeProposedAcceptedEventLog
+  | RawTrusteeDeclinedEventLog
+  | RawTrusteeRevokedEventLog
+  | RawTrusteeLevelUpdatedEventLog;
+
+type AnyDecoder =
+  | typeof decodeMemberRoleManagerLog
+  | typeof decodeRoleEventLog
+  | typeof decodeRoleChangedEventLog
+  | typeof decodeMemberStatusChangedEventLog
+  | typeof decodeOwnershipVoluntarilyLeftEventLog
+  | typeof decodeTrusteeProposedAcceptedEventLog
+  | typeof decodeTrusteeDeclinedEventLog
+  | typeof decodeTrusteeRevokedEventLog
+  | typeof decodeTrusteeLevelUpdatedEventLog;
 
 export interface ChainEventRegistryEntry {
   getFilter: (contract: MemberRoleManager) => ethers.DeferredTopicFilter;
@@ -33,9 +74,7 @@ export interface ChainEventRegistryEntry {
   // once, generically, by chainEventIndexerService.ts's toRawLog, since every event registered
   // here carries it.
   toRawArgs: (log: ethers.EventLog) => Record<string, unknown>;
-  decode: (
-    log: RawMemberRoleManagerLog | RawRoleEventLog | RawRoleChangedEventLog
-  ) => ReturnType<typeof decodeMemberRoleManagerLog | typeof decodeRoleEventLog | typeof decodeRoleChangedEventLog>;
+  decode: (log: AnyRawLog) => ReturnType<AnyDecoder>;
   reconcile: (
     db: Firestore,
     provider: Provider,
@@ -89,5 +128,75 @@ export const CHAIN_EVENT_REGISTRY: Record<MemberRoleManagerEventName, ChainEvent
     }),
     decode: log => decodeRoleChangedEventLog(log as RawRoleChangedEventLog),
     reconcile: reconcileRoleChangedEvent,
+  },
+  MemberStatusChanged: {
+    getFilter: contract => contract.filters.MemberStatusChanged(),
+    toRawArgs: log => ({
+      userIdHash: log.args.userIdHash as string,
+      oldStatus: log.args.oldStatus,
+      newStatus: log.args.newStatus,
+      changedBy: log.args.changedBy as string,
+    }),
+    decode: log => decodeMemberStatusChangedEventLog(log as RawMemberStatusChangedEventLog),
+    reconcile: reconcileMemberStatusChangedEvent,
+  },
+  OwnershipVoluntarilyLeft: {
+    getFilter: contract => contract.filters.OwnershipVoluntarilyLeft(),
+    toRawArgs: log => ({
+      recordIdHash: log.args.recordIdHash as string,
+      userIdHash: log.args.userIdHash as string,
+    }),
+    decode: log => decodeOwnershipVoluntarilyLeftEventLog(log as RawOwnershipVoluntarilyLeftEventLog),
+    reconcile: reconcileOwnershipVoluntarilyLeftEvent,
+  },
+  TrusteeProposed: {
+    getFilter: contract => contract.filters.TrusteeProposed(),
+    toRawArgs: log => ({
+      trustorIdHash: log.args.trustorIdHash as string,
+      trusteeIdHash: log.args.trusteeIdHash as string,
+      level: log.args.level,
+    }),
+    decode: log => decodeTrusteeProposedAcceptedEventLog(log as RawTrusteeProposedAcceptedEventLog),
+    reconcile: reconcileTrusteeProposedEvent,
+  },
+  TrusteeAccepted: {
+    getFilter: contract => contract.filters.TrusteeAccepted(),
+    toRawArgs: log => ({
+      trustorIdHash: log.args.trustorIdHash as string,
+      trusteeIdHash: log.args.trusteeIdHash as string,
+      level: log.args.level,
+    }),
+    decode: log => decodeTrusteeProposedAcceptedEventLog(log as RawTrusteeProposedAcceptedEventLog),
+    reconcile: reconcileTrusteeAcceptedEvent,
+  },
+  TrusteeDeclined: {
+    getFilter: contract => contract.filters.TrusteeDeclined(),
+    toRawArgs: log => ({
+      trustorIdHash: log.args.trustorIdHash as string,
+      trusteeIdHash: log.args.trusteeIdHash as string,
+    }),
+    decode: log => decodeTrusteeDeclinedEventLog(log as RawTrusteeDeclinedEventLog),
+    reconcile: reconcileTrusteeDeclinedEvent,
+  },
+  TrusteeRevoked: {
+    getFilter: contract => contract.filters.TrusteeRevoked(),
+    toRawArgs: log => ({
+      trustorIdHash: log.args.trustorIdHash as string,
+      trusteeIdHash: log.args.trusteeIdHash as string,
+      revokedBy: log.args.revokedBy as string,
+    }),
+    decode: log => decodeTrusteeRevokedEventLog(log as RawTrusteeRevokedEventLog),
+    reconcile: reconcileTrusteeRevokedEvent,
+  },
+  TrusteeLevelUpdated: {
+    getFilter: contract => contract.filters.TrusteeLevelUpdated(),
+    toRawArgs: log => ({
+      trustorIdHash: log.args.trustorIdHash as string,
+      trusteeIdHash: log.args.trusteeIdHash as string,
+      oldLevel: log.args.oldLevel,
+      newLevel: log.args.newLevel,
+    }),
+    decode: log => decodeTrusteeLevelUpdatedEventLog(log as RawTrusteeLevelUpdatedEventLog),
+    reconcile: reconcileTrusteeLevelUpdatedEvent,
   },
 };

@@ -21,6 +21,13 @@ const { mockContract, connectMock } = vi.hoisted(() => {
       RoleGranted: vi.fn(() => 'RoleGranted-filter'),
       RoleRevoked: vi.fn(() => 'RoleRevoked-filter'),
       RoleChanged: vi.fn(() => 'RoleChanged-filter'),
+      MemberStatusChanged: vi.fn(() => 'MemberStatusChanged-filter'),
+      OwnershipVoluntarilyLeft: vi.fn(() => 'OwnershipVoluntarilyLeft-filter'),
+      TrusteeProposed: vi.fn(() => 'TrusteeProposed-filter'),
+      TrusteeAccepted: vi.fn(() => 'TrusteeAccepted-filter'),
+      TrusteeDeclined: vi.fn(() => 'TrusteeDeclined-filter'),
+      TrusteeRevoked: vi.fn(() => 'TrusteeRevoked-filter'),
+      TrusteeLevelUpdated: vi.fn(() => 'TrusteeLevelUpdated-filter'),
     },
     queryFilter: vi.fn(),
     userStatus: vi.fn(),
@@ -118,15 +125,155 @@ function fakeRoleChangedEventLog(overrides: {
   };
 }
 
+function fakeStatusChangedEventLog(overrides: {
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  userIdHash?: string;
+  oldStatus?: number;
+  newStatus?: number;
+  changedBy?: string;
+  timestamp?: bigint;
+}) {
+  return {
+    transactionHash: overrides.transactionHash,
+    blockNumber: overrides.blockNumber,
+    index: overrides.index,
+    args: {
+      userIdHash: overrides.userIdHash ?? '0xHash1',
+      oldStatus: overrides.oldStatus ?? 2, // Active
+      newStatus: overrides.newStatus ?? 1, // Inactive
+      changedBy: overrides.changedBy ?? ADMIN_ADDRESS,
+      timestamp: overrides.timestamp ?? 1_700_000_000n,
+    },
+  };
+}
+
+function fakeOwnershipLeftEventLog(overrides: {
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  recordIdHash?: string;
+  userIdHash?: string;
+  timestamp?: bigint;
+}) {
+  return {
+    transactionHash: overrides.transactionHash,
+    blockNumber: overrides.blockNumber,
+    index: overrides.index,
+    args: {
+      recordIdHash: overrides.recordIdHash ?? '0xRecordHash1',
+      userIdHash: overrides.userIdHash ?? '0xCallerHash1',
+      timestamp: overrides.timestamp ?? 1_700_000_000n,
+    },
+  };
+}
+
+// Shared by TrusteeProposed/TrusteeAccepted — same {trustorIdHash, trusteeIdHash, level} shape.
+function fakeTrusteeProposedAcceptedEventLog(overrides: {
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  trustorIdHash?: string;
+  trusteeIdHash?: string;
+  level?: number;
+  timestamp?: bigint;
+}) {
+  return {
+    transactionHash: overrides.transactionHash,
+    blockNumber: overrides.blockNumber,
+    index: overrides.index,
+    args: {
+      trustorIdHash: overrides.trustorIdHash ?? '0xTrustorHash1',
+      trusteeIdHash: overrides.trusteeIdHash ?? '0xTrusteeHash1',
+      level: overrides.level ?? 1, // custodian
+      timestamp: overrides.timestamp ?? 1_700_000_000n,
+    },
+  };
+}
+
+function fakeTrusteeDeclinedEventLog(overrides: {
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  trustorIdHash?: string;
+  trusteeIdHash?: string;
+  timestamp?: bigint;
+}) {
+  return {
+    transactionHash: overrides.transactionHash,
+    blockNumber: overrides.blockNumber,
+    index: overrides.index,
+    args: {
+      trustorIdHash: overrides.trustorIdHash ?? '0xTrustorHash1',
+      trusteeIdHash: overrides.trusteeIdHash ?? '0xTrusteeHash1',
+      timestamp: overrides.timestamp ?? 1_700_000_000n,
+    },
+  };
+}
+
+function fakeTrusteeRevokedEventLog(overrides: {
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  trustorIdHash?: string;
+  trusteeIdHash?: string;
+  revokedBy?: string;
+  timestamp?: bigint;
+}) {
+  return {
+    transactionHash: overrides.transactionHash,
+    blockNumber: overrides.blockNumber,
+    index: overrides.index,
+    args: {
+      trustorIdHash: overrides.trustorIdHash ?? '0xTrustorHash1',
+      trusteeIdHash: overrides.trusteeIdHash ?? '0xTrusteeHash1',
+      revokedBy: overrides.revokedBy ?? '0xTrustorHash1',
+      timestamp: overrides.timestamp ?? 1_700_000_000n,
+    },
+  };
+}
+
+function fakeTrusteeLevelUpdatedEventLog(overrides: {
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  trustorIdHash?: string;
+  trusteeIdHash?: string;
+  oldLevel?: number;
+  newLevel?: number;
+  timestamp?: bigint;
+}) {
+  return {
+    transactionHash: overrides.transactionHash,
+    blockNumber: overrides.blockNumber,
+    index: overrides.index,
+    args: {
+      trustorIdHash: overrides.trustorIdHash ?? '0xTrustorHash1',
+      trusteeIdHash: overrides.trusteeIdHash ?? '0xTrusteeHash1',
+      oldLevel: overrides.oldLevel ?? 0, // observer
+      newLevel: overrides.newLevel ?? 1, // custodian
+      timestamp: overrides.timestamp ?? 1_700_000_000n,
+    },
+  };
+}
+
 // Every existing test only cares about MemberRegistered/WalletLinked and expects role-event
-// filters to just come back empty — roleGranted/roleRevoked are optional so those tests don't
-// need updating for a slice they predate.
+// filters to just come back empty — roleGranted/roleRevoked/etc. are optional so those tests
+// don't need updating for a slice they predate.
 function configureQueryFilter(handlers: {
   memberRegistered: (from: number, to: number) => unknown[];
   walletLinked: (from: number, to: number) => unknown[];
   roleGranted?: (from: number, to: number) => unknown[];
   roleRevoked?: (from: number, to: number) => unknown[];
   roleChanged?: (from: number, to: number) => unknown[];
+  memberStatusChanged?: (from: number, to: number) => unknown[];
+  ownershipVoluntarilyLeft?: (from: number, to: number) => unknown[];
+  trusteeProposed?: (from: number, to: number) => unknown[];
+  trusteeAccepted?: (from: number, to: number) => unknown[];
+  trusteeDeclined?: (from: number, to: number) => unknown[];
+  trusteeRevoked?: (from: number, to: number) => unknown[];
+  trusteeLevelUpdated?: (from: number, to: number) => unknown[];
 }) {
   mockContract.queryFilter.mockImplementation(async (filter: unknown, from: number, to: number) => {
     switch (filter) {
@@ -140,6 +287,20 @@ function configureQueryFilter(handlers: {
         return (handlers.roleRevoked ?? (() => []))(from, to);
       case 'RoleChanged-filter':
         return (handlers.roleChanged ?? (() => []))(from, to);
+      case 'MemberStatusChanged-filter':
+        return (handlers.memberStatusChanged ?? (() => []))(from, to);
+      case 'OwnershipVoluntarilyLeft-filter':
+        return (handlers.ownershipVoluntarilyLeft ?? (() => []))(from, to);
+      case 'TrusteeProposed-filter':
+        return (handlers.trusteeProposed ?? (() => []))(from, to);
+      case 'TrusteeAccepted-filter':
+        return (handlers.trusteeAccepted ?? (() => []))(from, to);
+      case 'TrusteeDeclined-filter':
+        return (handlers.trusteeDeclined ?? (() => []))(from, to);
+      case 'TrusteeRevoked-filter':
+        return (handlers.trusteeRevoked ?? (() => []))(from, to);
+      case 'TrusteeLevelUpdated-filter':
+        return (handlers.trusteeLevelUpdated ?? (() => []))(from, to);
       default:
         throw new Error(`Unexpected filter in test: ${String(filter)}`);
     }
@@ -701,7 +862,7 @@ describe('runChainEventIndexerCycle — RoleGranted/RoleRevoked (Slice 2)', () =
     expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
   });
 
-  it('handles all five event types found in the same chunk, advancing the checkpoint to the min toBlock across all five filters', async () => {
+  it('handles all twelve event types found in the same chunk, advancing the checkpoint to the min toBlock across all twelve filters', async () => {
     await seedCheckpoint(999);
     configureQueryFilter({
       memberRegistered: () => [fakeEventLog({ eventName: 'MemberRegistered', transactionHash: '0xa', blockNumber: 1002, index: 0 })],
@@ -709,18 +870,32 @@ describe('runChainEventIndexerCycle — RoleGranted/RoleRevoked (Slice 2)', () =
       roleGranted: () => [fakeRoleEventLog({ transactionHash: '0xc', blockNumber: 1004, index: 0, recordIdHash: '0xRecordHash1', targetIdHash })],
       roleRevoked: () => [fakeRoleEventLog({ transactionHash: '0xd', blockNumber: 1006, index: 0, recordIdHash: '0xRecordHash1', targetIdHash })],
       roleChanged: () => [fakeRoleChangedEventLog({ transactionHash: '0xe', blockNumber: 1007, index: 0, recordIdHash: '0xRecordHash1', targetIdHash })],
+      memberStatusChanged: () => [fakeStatusChangedEventLog({ transactionHash: '0xf', blockNumber: 1008, index: 0 })],
+      ownershipVoluntarilyLeft: () => [fakeOwnershipLeftEventLog({ transactionHash: '0xg', blockNumber: 1009, index: 0 })],
+      trusteeProposed: () => [fakeTrusteeProposedAcceptedEventLog({ transactionHash: '0xh', blockNumber: 1002, index: 0 })],
+      trusteeAccepted: () => [fakeTrusteeProposedAcceptedEventLog({ transactionHash: '0xi', blockNumber: 1003, index: 0 })],
+      trusteeDeclined: () => [fakeTrusteeDeclinedEventLog({ transactionHash: '0xj', blockNumber: 1004, index: 0 })],
+      trusteeRevoked: () => [fakeTrusteeRevokedEventLog({ transactionHash: '0xk', blockNumber: 1005, index: 0 })],
+      trusteeLevelUpdated: () => [fakeTrusteeLevelUpdatedEventLog({ transactionHash: '0xl', blockNumber: 1006, index: 0 })],
     });
 
     const result = await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 })); // targetBlock 1010
 
-    expect(result.eventsFound).toBe(5);
-    expect(result.newlyCached).toBe(5);
-    expect(await getCheckpointBlock()).toBe(1010); // all five filters shared the same [1000,1010] range
+    expect(result.eventsFound).toBe(12);
+    expect(result.newlyCached).toBe(12);
+    expect(await getCheckpointBlock()).toBe(1010); // all twelve filters shared the same [1000,1010] range
     expect((await getCachedEvent('0xa', 0))?.eventName).toBe('MemberRegistered');
     expect((await getCachedEvent('0xb', 0))?.eventName).toBe('WalletLinked');
     expect((await getCachedEvent('0xc', 0))?.eventName).toBe('RoleGranted');
     expect((await getCachedEvent('0xd', 0))?.eventName).toBe('RoleRevoked');
     expect((await getCachedEvent('0xe', 0))?.eventName).toBe('RoleChanged');
+    expect((await getCachedEvent('0xf', 0))?.eventName).toBe('MemberStatusChanged');
+    expect((await getCachedEvent('0xg', 0))?.eventName).toBe('OwnershipVoluntarilyLeft');
+    expect((await getCachedEvent('0xh', 0))?.eventName).toBe('TrusteeProposed');
+    expect((await getCachedEvent('0xi', 0))?.eventName).toBe('TrusteeAccepted');
+    expect((await getCachedEvent('0xj', 0))?.eventName).toBe('TrusteeDeclined');
+    expect((await getCachedEvent('0xk', 0))?.eventName).toBe('TrusteeRevoked');
+    expect((await getCachedEvent('0xl', 0))?.eventName).toBe('TrusteeLevelUpdated');
   });
 });
 
@@ -855,6 +1030,495 @@ describe('runChainEventIndexerCycle — RoleChanged (Slice 3)', () => {
     );
 
     const cached = await getCachedEvent('0xchangetx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
+  });
+});
+
+describe('runChainEventIndexerCycle — MemberStatusChanged (Slice 4)', () => {
+  it('classifies as matched when the target user\'s onChainStatus history already has this status', async () => {
+    await admin
+      .firestore()
+      .collection('users')
+      .doc('user-1')
+      .set({
+        onChainIdentity: {
+          userIdHash: '0xHash1',
+          onChainStatus: [{ status: 'Verified', statusUpdatedAt: new Date() }],
+        },
+      });
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      memberStatusChanged: () => [
+        fakeStatusChangedEventLog({ transactionHash: '0xstatustx1', blockNumber: 1005, index: 0, newStatus: 3 }), // Verified
+      ],
+    });
+
+    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+
+    const cached = await getCachedEvent('0xstatustx1', 0);
+    expect(cached).toMatchObject({
+      eventName: 'MemberStatusChanged',
+      reconciliationStatus: 'matched',
+      matchedFirestoreRef: 'users/user-1',
+    });
+  });
+
+  it('does not match when the user exists but their history never recorded this status', async () => {
+    await admin
+      .firestore()
+      .collection('users')
+      .doc('user-1')
+      .set({ onChainIdentity: { userIdHash: '0xHash1', onChainStatus: [{ status: 'Active' }] } });
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      memberStatusChanged: () => [
+        fakeStatusChangedEventLog({ transactionHash: '0xstatustx1', blockNumber: 1005, index: 0, newStatus: 4 }), // VerifiedProvider — never recorded
+      ],
+    });
+
+    await runChainEventIndexerCycle(
+      admin.firestore(),
+      makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xstatustx1': '0xSomeRealUserWallet' } })
+    );
+
+    const cached = await getCachedEvent('0xstatustx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
+  });
+
+  // Reproduces e2e cleanup directly: staging.ts's deactivateOnChain calls setUserStatus(...,
+  // Inactive), which emits exactly this event — and then deletes the Firestore user doc.
+  it('classifies as deactivated_tracked when unmatched and the identity is Inactive on-chain', async () => {
+    mockContract.userStatus.mockResolvedValue(MEMBER_STATUS_INACTIVE);
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      memberStatusChanged: () => [
+        fakeStatusChangedEventLog({ transactionHash: '0xstatustx1', blockNumber: 1005, index: 0, newStatus: 1 }), // Inactive
+      ],
+    });
+
+    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+
+    const cached = await getCachedEvent('0xstatustx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'deactivated_tracked' });
+  });
+
+  it('classifies as admin_untracked when unmatched, Active on-chain (not deactivated), and signed by the admin wallet', async () => {
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      memberStatusChanged: () => [
+        fakeStatusChangedEventLog({ transactionHash: '0xstatustx1', blockNumber: 1005, index: 0, newStatus: 2 }), // Active — matches beforeEach's default mock, not Inactive
+      ],
+    });
+
+    await runChainEventIndexerCycle(
+      admin.firestore(),
+      makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xstatustx1': ADMIN_ADDRESS } })
+    );
+
+    const cached = await getCachedEvent('0xstatustx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'admin_untracked' });
+  });
+});
+
+describe('runChainEventIndexerCycle — OwnershipVoluntarilyLeft (Slice 4)', () => {
+  const leavingUserId = 'user-owner';
+  const userIdHash = ethers.id(leavingUserId);
+
+  it('classifies as matched against a permissionHistory doc recording a self-authored full owner removal', async () => {
+    await admin
+      .firestore()
+      .collection('records')
+      .doc('rec-1')
+      .collection('permissionHistory')
+      .doc('event-1')
+      .set({
+        recordIdHash: '0xRecordHash1',
+        changedBy: leavingUserId,
+        changedByIdHash: userIdHash,
+        changes: [{ action: 'revoked', userId: leavingUserId, previousRole: 'owner', newRole: null }],
+      });
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      ownershipVoluntarilyLeft: () => [
+        fakeOwnershipLeftEventLog({ transactionHash: '0xownertx1', blockNumber: 1005, index: 0, recordIdHash: '0xRecordHash1', userIdHash }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+
+    const cached = await getCachedEvent('0xownertx1', 0);
+    expect(cached).toMatchObject({
+      eventName: 'OwnershipVoluntarilyLeft',
+      reconciliationStatus: 'matched',
+      matchedFirestoreRef: 'records/rec-1/permissionHistory/event-1',
+    });
+  });
+
+  it('does not match a same-shaped revoked/owner/null entry authored by someone else — only a self-authored removal counts', async () => {
+    await admin
+      .firestore()
+      .collection('records')
+      .doc('rec-1')
+      .collection('permissionHistory')
+      .doc('event-1')
+      .set({
+        recordIdHash: '0xRecordHash1',
+        changedBy: 'some-other-admin',
+        changedByIdHash: ethers.id('some-other-admin'),
+        changes: [{ action: 'revoked', userId: leavingUserId, previousRole: 'owner', newRole: null }],
+      });
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      ownershipVoluntarilyLeft: () => [
+        fakeOwnershipLeftEventLog({ transactionHash: '0xownertx1', blockNumber: 1005, index: 0, recordIdHash: '0xRecordHash1', userIdHash }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(
+      admin.firestore(),
+      makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xownertx1': '0xSomeRealUserWallet' } })
+    );
+
+    const cached = await getCachedEvent('0xownertx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
+  });
+
+  it('classifies as legitimate_chain_only when unmatched, no sync-queue entry, and signed by some other real wallet', async () => {
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      ownershipVoluntarilyLeft: () => [
+        fakeOwnershipLeftEventLog({ transactionHash: '0xownertx1', blockNumber: 1005, index: 0, recordIdHash: '0xRecordHash1', userIdHash }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(
+      admin.firestore(),
+      makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xownertx1': '0xSomeRealUserWallet' } })
+    );
+
+    const cached = await getCachedEvent('0xownertx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
+  });
+});
+
+describe('runChainEventIndexerCycle — TrusteeProposed/TrusteeAccepted (Slice 5)', () => {
+  const trustorId = 'user-trustor';
+  const trusteeId = 'user-trustee';
+  const trustorIdHash = ethers.id(trustorId);
+  const trusteeIdHash = ethers.id(trusteeId);
+
+  it('classifies TrusteeProposed as matched against a trusteeHistory "propose" entry with the same level', async () => {
+    await admin
+      .firestore()
+      .collection('trusteeRelationships')
+      .doc('rel-1')
+      .collection('trusteeHistory')
+      .doc('event-1')
+      .set({ trustorIdHash, trusteeIdHash, action: 'propose', trustLevel: 'custodian' });
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      trusteeProposed: () => [
+        fakeTrusteeProposedAcceptedEventLog({ transactionHash: '0xtptx1', blockNumber: 1005, index: 0, trustorIdHash, trusteeIdHash, level: 1 }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+
+    const cached = await getCachedEvent('0xtptx1', 0);
+    expect(cached).toMatchObject({
+      eventName: 'TrusteeProposed',
+      reconciliationStatus: 'matched',
+      matchedFirestoreRef: 'trusteeRelationships/rel-1/trusteeHistory/event-1',
+    });
+  });
+
+  it('classifies TrusteeAccepted as matched against a trusteeHistory "accept" entry — level not required to be present', async () => {
+    await admin
+      .firestore()
+      .collection('trusteeRelationships')
+      .doc('rel-1')
+      .collection('trusteeHistory')
+      .doc('event-1')
+      .set({ trustorIdHash, trusteeIdHash, action: 'accept' });
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      trusteeAccepted: () => [
+        fakeTrusteeProposedAcceptedEventLog({ transactionHash: '0xtatx1', blockNumber: 1005, index: 0, trustorIdHash, trusteeIdHash }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+
+    const cached = await getCachedEvent('0xtatx1', 0);
+    expect(cached).toMatchObject({ eventName: 'TrusteeAccepted', reconciliationStatus: 'matched' });
+  });
+
+  // bootstrapDependentTrustee (onlyAdmin) emits both TrusteeProposed and TrusteeAccepted, so
+  // unlike TrusteeDeclined/Revoked/LevelUpdated, admin_untracked is genuinely reachable here.
+  it('classifies TrusteeProposed as admin_untracked when unmatched, no sync-queue entry, and signed by the admin wallet', async () => {
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      trusteeProposed: () => [
+        fakeTrusteeProposedAcceptedEventLog({ transactionHash: '0xtptx1', blockNumber: 1005, index: 0, trustorIdHash, trusteeIdHash }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(
+      admin.firestore(),
+      makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xtptx1': ADMIN_ADDRESS } })
+    );
+
+    const cached = await getCachedEvent('0xtptx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'admin_untracked' });
+  });
+
+  it('classifies TrusteeAccepted as legitimate_chain_only when unmatched, no sync-queue entry, and signed by some other real wallet', async () => {
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      trusteeAccepted: () => [
+        fakeTrusteeProposedAcceptedEventLog({ transactionHash: '0xtatx1', blockNumber: 1005, index: 0, trustorIdHash, trusteeIdHash }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(
+      admin.firestore(),
+      makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xtatx1': '0xSomeRealUserWallet' } })
+    );
+
+    const cached = await getCachedEvent('0xtatx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
+  });
+});
+
+describe('runChainEventIndexerCycle — TrusteeDeclined (Slice 5)', () => {
+  const trustorId = 'user-trustor';
+  const trusteeId = 'user-trustee';
+  const trustorIdHash = ethers.id(trustorId);
+  const trusteeIdHash = ethers.id(trusteeId);
+
+  it('classifies as matched against a trusteeHistory "decline" entry', async () => {
+    await admin
+      .firestore()
+      .collection('trusteeRelationships')
+      .doc('rel-1')
+      .collection('trusteeHistory')
+      .doc('event-1')
+      .set({ trustorIdHash, trusteeIdHash, action: 'decline' });
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      trusteeDeclined: () => [
+        fakeTrusteeDeclinedEventLog({ transactionHash: '0xtdtx1', blockNumber: 1005, index: 0, trustorIdHash, trusteeIdHash }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+
+    const cached = await getCachedEvent('0xtdtx1', 0);
+    expect(cached).toMatchObject({
+      eventName: 'TrusteeDeclined',
+      reconciliationStatus: 'matched',
+      matchedFirestoreRef: 'trusteeRelationships/rel-1/trusteeHistory/event-1',
+    });
+  });
+
+  it('classifies as legitimate_chain_only when unmatched, no sync-queue entry, and signed by some other real wallet', async () => {
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      trusteeDeclined: () => [
+        fakeTrusteeDeclinedEventLog({ transactionHash: '0xtdtx1', blockNumber: 1005, index: 0, trustorIdHash, trusteeIdHash }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(
+      admin.firestore(),
+      makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xtdtx1': '0xSomeRealUserWallet' } })
+    );
+
+    const cached = await getCachedEvent('0xtdtx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
+  });
+});
+
+describe('runChainEventIndexerCycle — TrusteeRevoked (Slice 5)', () => {
+  const trustorId = 'user-trustor';
+  const trusteeId = 'user-trustee';
+  const trustorIdHash = ethers.id(trustorId);
+  const trusteeIdHash = ethers.id(trusteeId);
+
+  it('classifies as matched against a trusteeHistory "revoke" entry authored by the same revokedBy identity', async () => {
+    await admin
+      .firestore()
+      .collection('trusteeRelationships')
+      .doc('rel-1')
+      .collection('trusteeHistory')
+      .doc('event-1')
+      .set({ trustorIdHash, trusteeIdHash, action: 'revoke', changedByIdHash: trustorIdHash });
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      trusteeRevoked: () => [
+        fakeTrusteeRevokedEventLog({ transactionHash: '0xtrtx1', blockNumber: 1005, index: 0, trustorIdHash, trusteeIdHash, revokedBy: trustorIdHash }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+
+    const cached = await getCachedEvent('0xtrtx1', 0);
+    expect(cached).toMatchObject({
+      eventName: 'TrusteeRevoked',
+      reconciliationStatus: 'matched',
+      matchedFirestoreRef: 'trusteeRelationships/rel-1/trusteeHistory/event-1',
+    });
+  });
+
+  it('does not match a "revoke" entry authored by a different identity than the event\'s revokedBy', async () => {
+    await admin
+      .firestore()
+      .collection('trusteeRelationships')
+      .doc('rel-1')
+      .collection('trusteeHistory')
+      .doc('event-1')
+      .set({ trustorIdHash, trusteeIdHash, action: 'revoke', changedByIdHash: trusteeIdHash }); // revoked by trustee, not trustor
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      trusteeRevoked: () => [
+        fakeTrusteeRevokedEventLog({ transactionHash: '0xtrtx1', blockNumber: 1005, index: 0, trustorIdHash, trusteeIdHash, revokedBy: trustorIdHash }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(
+      admin.firestore(),
+      makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xtrtx1': '0xSomeRealUserWallet' } })
+    );
+
+    const cached = await getCachedEvent('0xtrtx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
+  });
+
+  it('classifies as legitimate_chain_only when unmatched, no sync-queue entry, and signed by some other real wallet', async () => {
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      trusteeRevoked: () => [
+        fakeTrusteeRevokedEventLog({ transactionHash: '0xtrtx1', blockNumber: 1005, index: 0, trustorIdHash, trusteeIdHash, revokedBy: trustorIdHash }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(
+      admin.firestore(),
+      makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xtrtx1': '0xSomeRealUserWallet' } })
+    );
+
+    const cached = await getCachedEvent('0xtrtx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
+  });
+});
+
+describe('runChainEventIndexerCycle — TrusteeLevelUpdated (Slice 5)', () => {
+  const trustorId = 'user-trustor';
+  const trusteeId = 'user-trustee';
+  const trustorIdHash = ethers.id(trustorId);
+  const trusteeIdHash = ethers.id(trusteeId);
+
+  it('classifies as matched against a trusteeHistory "level-update" entry with the same new level', async () => {
+    await admin
+      .firestore()
+      .collection('trusteeRelationships')
+      .doc('rel-1')
+      .collection('trusteeHistory')
+      .doc('event-1')
+      .set({ trustorIdHash, trusteeIdHash, action: 'level-update', trustLevel: 'controller' });
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      trusteeLevelUpdated: () => [
+        fakeTrusteeLevelUpdatedEventLog({ transactionHash: '0xtltx1', blockNumber: 1005, index: 0, trustorIdHash, trusteeIdHash, oldLevel: 1, newLevel: 2 }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+
+    const cached = await getCachedEvent('0xtltx1', 0);
+    expect(cached).toMatchObject({
+      eventName: 'TrusteeLevelUpdated',
+      reconciliationStatus: 'matched',
+      matchedFirestoreRef: 'trusteeRelationships/rel-1/trusteeHistory/event-1',
+    });
+  });
+
+  it('does not match a "level-update" entry recording a different new level', async () => {
+    await admin
+      .firestore()
+      .collection('trusteeRelationships')
+      .doc('rel-1')
+      .collection('trusteeHistory')
+      .doc('event-1')
+      .set({ trustorIdHash, trusteeIdHash, action: 'level-update', trustLevel: 'observer' });
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      trusteeLevelUpdated: () => [
+        fakeTrusteeLevelUpdatedEventLog({ transactionHash: '0xtltx1', blockNumber: 1005, index: 0, trustorIdHash, trusteeIdHash, oldLevel: 1, newLevel: 2 }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(
+      admin.firestore(),
+      makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xtltx1': '0xSomeRealUserWallet' } })
+    );
+
+    const cached = await getCachedEvent('0xtltx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
+  });
+
+  it('classifies as legitimate_chain_only when unmatched, no sync-queue entry, and signed by some other real wallet', async () => {
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      trusteeLevelUpdated: () => [
+        fakeTrusteeLevelUpdatedEventLog({ transactionHash: '0xtltx1', blockNumber: 1005, index: 0, trustorIdHash, trusteeIdHash }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(
+      admin.firestore(),
+      makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xtltx1': '0xSomeRealUserWallet' } })
+    );
+
+    const cached = await getCachedEvent('0xtltx1', 0);
     expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
   });
 });

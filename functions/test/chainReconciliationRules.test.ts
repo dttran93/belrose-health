@@ -13,6 +13,13 @@ import {
   findSyncQueueEntryForTxHash,
   findMatchingPermissionHistoryForRoleEvent,
   findMatchingPermissionHistoryForRoleChangedEvent,
+  findMatchingUserForStatusEvent,
+  findMatchingPermissionHistoryForOwnershipLeftEvent,
+  findMatchingTrusteeHistoryForProposedEvent,
+  findMatchingTrusteeHistoryForAcceptedEvent,
+  findMatchingTrusteeHistoryForDeclinedEvent,
+  findMatchingTrusteeHistoryForRevokedEvent,
+  findMatchingTrusteeHistoryForLevelUpdatedEvent,
 } from '../src/chainIndexer/reconciliationRules';
 import { ethers } from 'ethers';
 
@@ -357,6 +364,302 @@ describe('findMatchingPermissionHistoryForRoleChangedEvent', () => {
     await expect(findMatchingPermissionHistoryForRoleChangedEvent(db, changedArgs)).resolves.toEqual({
       matched: false,
       matchedFirestoreRef: null,
+    });
+  });
+});
+
+describe('findMatchingUserForStatusEvent', () => {
+  const args = { userIdHash: '0xHash1', newStatus: 3 }; // Verified
+
+  it('matches when onChainStatus history contains an entry with the matching status label', async () => {
+    const db = fakeFirestore({
+      users: [
+        {
+          id: 'user-1',
+          data: { onChainIdentity: { userIdHash: '0xHash1', onChainStatus: [{ status: 'Active' }, { status: 'Verified' }] } },
+        },
+      ],
+    });
+
+    await expect(findMatchingUserForStatusEvent(db, args)).resolves.toEqual({ matched: true, matchedFirestoreRef: 'users/user-1' });
+  });
+
+  it('does not match when the user exists but their history never recorded this status', async () => {
+    const db = fakeFirestore({
+      users: [{ id: 'user-1', data: { onChainIdentity: { userIdHash: '0xHash1', onChainStatus: [{ status: 'Active' }] } } }],
+    });
+
+    await expect(findMatchingUserForStatusEvent(db, args)).resolves.toEqual({ matched: false, matchedFirestoreRef: null });
+  });
+
+  it('does not match when no user has this userIdHash at all', async () => {
+    const db = fakeFirestore({ users: [] });
+    await expect(findMatchingUserForStatusEvent(db, args)).resolves.toEqual({ matched: false, matchedFirestoreRef: null });
+  });
+
+  it('does not match on an unrecognized status number, even if the history array is present', async () => {
+    const db = fakeFirestore({
+      users: [{ id: 'user-1', data: { onChainIdentity: { userIdHash: '0xHash1', onChainStatus: [{ status: 'Verified' }] } } }],
+    });
+    await expect(findMatchingUserForStatusEvent(db, { userIdHash: '0xHash1', newStatus: 99 })).resolves.toEqual({
+      matched: false,
+      matchedFirestoreRef: null,
+    });
+  });
+});
+
+describe('findMatchingPermissionHistoryForOwnershipLeftEvent', () => {
+  const leavingUserId = 'user-owner';
+  const userIdHash = ethers.id(leavingUserId);
+  const args = { recordIdHash: '0xRecordHash1', userIdHash };
+
+  it('matches a self-authored full owner removal (revoked, previousRole owner, newRole null)', async () => {
+    const db = fakeFirestore(
+      {},
+      {
+        permissionHistory: [
+          {
+            id: 'event-1',
+            path: 'records/rec-1/permissionHistory/event-1',
+            data: {
+              recordIdHash: '0xRecordHash1',
+              changedByIdHash: userIdHash,
+              changes: [{ action: 'revoked', userId: leavingUserId, previousRole: 'owner', newRole: null }],
+            },
+          },
+        ],
+      }
+    );
+
+    await expect(findMatchingPermissionHistoryForOwnershipLeftEvent(db, args)).resolves.toEqual({
+      matched: true,
+      matchedFirestoreRef: 'records/rec-1/permissionHistory/event-1',
+    });
+  });
+
+  it('does not match the identical changes[] shape when changedByIdHash belongs to someone else', async () => {
+    const db = fakeFirestore(
+      {},
+      {
+        permissionHistory: [
+          {
+            id: 'event-1',
+            path: 'records/rec-1/permissionHistory/event-1',
+            data: {
+              recordIdHash: '0xRecordHash1',
+              changedByIdHash: ethers.id('some-other-admin'),
+              changes: [{ action: 'revoked', userId: leavingUserId, previousRole: 'owner', newRole: null }],
+            },
+          },
+        ],
+      }
+    );
+
+    await expect(findMatchingPermissionHistoryForOwnershipLeftEvent(db, args)).resolves.toEqual({
+      matched: false,
+      matchedFirestoreRef: null,
+    });
+  });
+
+  it('does not match a demotion (newRole non-null) even from the same self-authored doc', async () => {
+    const db = fakeFirestore(
+      {},
+      {
+        permissionHistory: [
+          {
+            id: 'event-1',
+            path: 'records/rec-1/permissionHistory/event-1',
+            data: {
+              recordIdHash: '0xRecordHash1',
+              changedByIdHash: userIdHash,
+              changes: [{ action: 'downgraded', userId: leavingUserId, previousRole: 'owner', newRole: 'administrator' }],
+            },
+          },
+        ],
+      }
+    );
+
+    await expect(findMatchingPermissionHistoryForOwnershipLeftEvent(db, args)).resolves.toEqual({
+      matched: false,
+      matchedFirestoreRef: null,
+    });
+  });
+
+  it('does not match when no permissionHistory doc exists for that recordIdHash at all', async () => {
+    const db = fakeFirestore({}, { permissionHistory: [] });
+    await expect(findMatchingPermissionHistoryForOwnershipLeftEvent(db, args)).resolves.toEqual({
+      matched: false,
+      matchedFirestoreRef: null,
+    });
+  });
+});
+
+describe('trustee history match rules', () => {
+  const trustorIdHash = '0xTrustorHash1';
+  const trusteeIdHash = '0xTrusteeHash1';
+
+  describe('findMatchingTrusteeHistoryForProposedEvent', () => {
+    it('matches a propose entry with the same level', async () => {
+      const db = fakeFirestore(
+        {},
+        {
+          trusteeHistory: [
+            {
+              id: 'event-1',
+              path: 'trusteeRelationships/rel-1/trusteeHistory/event-1',
+              data: { trustorIdHash, trusteeIdHash, action: 'propose', trustLevel: 'custodian' },
+            },
+          ],
+        }
+      );
+
+      await expect(findMatchingTrusteeHistoryForProposedEvent(db, { trustorIdHash, trusteeIdHash, level: 1 })).resolves.toEqual({
+        matched: true,
+        matchedFirestoreRef: 'trusteeRelationships/rel-1/trusteeHistory/event-1',
+      });
+    });
+
+    it('does not match an accept entry even for the same pair', async () => {
+      const db = fakeFirestore(
+        {},
+        { trusteeHistory: [{ id: 'event-1', path: 'p', data: { trustorIdHash, trusteeIdHash, action: 'accept' } }] }
+      );
+
+      await expect(
+        findMatchingTrusteeHistoryForProposedEvent(db, { trustorIdHash, trusteeIdHash, level: 1 })
+      ).resolves.toEqual({ matched: false, matchedFirestoreRef: null });
+    });
+
+    it('does not match when no trusteeHistory doc exists for this pair at all', async () => {
+      const db = fakeFirestore({}, { trusteeHistory: [] });
+      await expect(
+        findMatchingTrusteeHistoryForProposedEvent(db, { trustorIdHash, trusteeIdHash, level: 1 })
+      ).resolves.toEqual({ matched: false, matchedFirestoreRef: null });
+    });
+  });
+
+  describe('findMatchingTrusteeHistoryForAcceptedEvent', () => {
+    it('matches an accept entry regardless of trustLevel (not guaranteed present on accept entries)', async () => {
+      const db = fakeFirestore(
+        {},
+        {
+          trusteeHistory: [
+            { id: 'event-1', path: 'trusteeRelationships/rel-1/trusteeHistory/event-1', data: { trustorIdHash, trusteeIdHash, action: 'accept' } },
+          ],
+        }
+      );
+
+      await expect(findMatchingTrusteeHistoryForAcceptedEvent(db, { trustorIdHash, trusteeIdHash })).resolves.toEqual({
+        matched: true,
+        matchedFirestoreRef: 'trusteeRelationships/rel-1/trusteeHistory/event-1',
+      });
+    });
+
+    it('does not match a propose entry', async () => {
+      const db = fakeFirestore(
+        {},
+        { trusteeHistory: [{ id: 'event-1', path: 'p', data: { trustorIdHash, trusteeIdHash, action: 'propose' } }] }
+      );
+
+      await expect(findMatchingTrusteeHistoryForAcceptedEvent(db, { trustorIdHash, trusteeIdHash })).resolves.toEqual({
+        matched: false,
+        matchedFirestoreRef: null,
+      });
+    });
+  });
+
+  describe('findMatchingTrusteeHistoryForDeclinedEvent', () => {
+    it('matches a decline entry', async () => {
+      const db = fakeFirestore(
+        {},
+        { trusteeHistory: [{ id: 'event-1', path: 'trusteeRelationships/rel-1/trusteeHistory/event-1', data: { trustorIdHash, trusteeIdHash, action: 'decline' } }] }
+      );
+
+      await expect(findMatchingTrusteeHistoryForDeclinedEvent(db, { trustorIdHash, trusteeIdHash })).resolves.toEqual({
+        matched: true,
+        matchedFirestoreRef: 'trusteeRelationships/rel-1/trusteeHistory/event-1',
+      });
+    });
+
+    it('does not match when no trusteeHistory doc exists for this pair at all', async () => {
+      const db = fakeFirestore({}, { trusteeHistory: [] });
+      await expect(findMatchingTrusteeHistoryForDeclinedEvent(db, { trustorIdHash, trusteeIdHash })).resolves.toEqual({
+        matched: false,
+        matchedFirestoreRef: null,
+      });
+    });
+  });
+
+  describe('findMatchingTrusteeHistoryForRevokedEvent', () => {
+    const revokerId = 'revoker-uid';
+    const revokedBy = ethers.id(revokerId);
+
+    it('matches a revoke entry authored by the same caller as revokedBy', async () => {
+      const db = fakeFirestore(
+        {},
+        {
+          trusteeHistory: [
+            {
+              id: 'event-1',
+              path: 'trusteeRelationships/rel-1/trusteeHistory/event-1',
+              data: { trustorIdHash, trusteeIdHash, action: 'revoke', changedByIdHash: revokedBy },
+            },
+          ],
+        }
+      );
+
+      await expect(findMatchingTrusteeHistoryForRevokedEvent(db, { trustorIdHash, trusteeIdHash, revokedBy })).resolves.toEqual({
+        matched: true,
+        matchedFirestoreRef: 'trusteeRelationships/rel-1/trusteeHistory/event-1',
+      });
+    });
+
+    it('does not match a revoke entry authored by someone else', async () => {
+      const db = fakeFirestore(
+        {},
+        {
+          trusteeHistory: [
+            { id: 'event-1', path: 'p', data: { trustorIdHash, trusteeIdHash, action: 'revoke', changedByIdHash: ethers.id('someone-else') } },
+          ],
+        }
+      );
+
+      await expect(findMatchingTrusteeHistoryForRevokedEvent(db, { trustorIdHash, trusteeIdHash, revokedBy })).resolves.toEqual({
+        matched: false,
+        matchedFirestoreRef: null,
+      });
+    });
+  });
+
+  describe('findMatchingTrusteeHistoryForLevelUpdatedEvent', () => {
+    it('matches a level-update entry with the same new level', async () => {
+      const db = fakeFirestore(
+        {},
+        {
+          trusteeHistory: [
+            {
+              id: 'event-1',
+              path: 'trusteeRelationships/rel-1/trusteeHistory/event-1',
+              data: { trustorIdHash, trusteeIdHash, action: 'level-update', trustLevel: 'controller' },
+            },
+          ],
+        }
+      );
+
+      await expect(
+        findMatchingTrusteeHistoryForLevelUpdatedEvent(db, { trustorIdHash, trusteeIdHash, newLevel: 2 })
+      ).resolves.toEqual({ matched: true, matchedFirestoreRef: 'trusteeRelationships/rel-1/trusteeHistory/event-1' });
+    });
+
+    it('does not match a level-update entry with a different level', async () => {
+      const db = fakeFirestore(
+        {},
+        { trusteeHistory: [{ id: 'event-1', path: 'p', data: { trustorIdHash, trusteeIdHash, action: 'level-update', trustLevel: 'observer' } }] }
+      );
+
+      await expect(
+        findMatchingTrusteeHistoryForLevelUpdatedEvent(db, { trustorIdHash, trusteeIdHash, newLevel: 2 })
+      ).resolves.toEqual({ matched: false, matchedFirestoreRef: null });
     });
   });
 });
