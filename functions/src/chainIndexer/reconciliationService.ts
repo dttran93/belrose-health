@@ -17,11 +17,17 @@
 // in bucket 3. The pipeline still checks for it generically (rather than special-casing this
 // event type) because later slices (e.g. Permissions' RoleGranted, which real users CAN call
 // directly) genuinely need it.
+//
+// reconcileMemberEvent additionally checks for deactivation before bucket 2 — see
+// isDeactivatedOnChain's own comment — producing a 5th outcome, 'deactivated_tracked', specific
+// to Member events (deactivation isn't a meaningful concept for the role-event reconcilers).
 
 import type { Firestore } from 'firebase-admin/firestore';
 import { Timestamp } from 'firebase-admin/firestore';
 import type { Provider } from 'ethers';
 import type { ChainEventCacheDoc } from '../_shared';
+import { MEMBER_ROLE_MANAGER } from '../_shared';
+import { MemberRoleManager__factory } from '../_shared/typechain';
 import {
   findMatchingUserForMemberEvent,
   findMatchingPermissionHistoryForRoleEvent,
@@ -30,6 +36,10 @@ import {
   type SyncQueueMatch,
 } from './reconciliationRules';
 import { getAdminWallet } from '../utils/adminWallet';
+
+// Mirrors MemberRoleManager.sol's MemberStatus enum — see memberRegistry.ts's own statusMap and
+// e2e/helpers/backend/staging.ts's own MEMBER_STATUS_INACTIVE constant.
+const MEMBER_STATUS_INACTIVE = 1;
 
 export type ReconciliationResult = Pick<
   ChainEventCacheDoc,
@@ -71,7 +81,25 @@ async function classifyUnmatchedEvent(
   };
 }
 
-export async function reconcileMemberRoleManagerEvent(
+/**
+ * A real instrumentation bug never self-deactivates an account, so an unmatched
+ * MemberRegistered/WalletLinked event whose identity is currently Inactive on-chain is a strong
+ * signal this isn't admin_untracked/sync_queue_confirmed_missing_write at all — it's most likely
+ * deliberate deactivation after the fact (e2e test cleanup being the known case; see
+ * e2e/helpers/backend/staging.ts's deactivateOnChain, which deactivates on-chain but deletes the
+ * Firestore user doc, leaving exactly this shape behind). Checked before falling through to the
+ * sync-queue/admin-wallet checks so this collapses into one accurate bucket regardless of an
+ * implementation detail that shouldn't affect the classification: whether a sync-queue entry
+ * happens to exist for this txHash (it does for e2e runs after registerMemberOnChainComplete
+ * started tracking sync-queue entries, doesn't for older runs).
+ */
+async function isDeactivatedOnChain(provider: Provider, userIdHash: string): Promise<boolean> {
+  const contract = MemberRoleManager__factory.connect(MEMBER_ROLE_MANAGER.proxy, provider);
+  const status = await contract.userStatus(userIdHash);
+  return Number(status) === MEMBER_STATUS_INACTIVE;
+}
+
+export async function reconcileMemberEvent(
   db: Firestore,
   provider: Provider,
   doc: Pick<ChainEventCacheDoc, 'args' | 'blockchainRef'>
@@ -88,12 +116,21 @@ export async function reconcileMemberRoleManagerEvent(
     };
   }
 
+  if (await isDeactivatedOnChain(provider, args.userIdHash)) {
+    return {
+      reconciliationStatus: 'deactivated_tracked',
+      matchedSyncQueueId: null,
+      matchedFirestoreRef: null,
+      reconciledAt: Timestamp.now(),
+    };
+  }
+
   return classifyUnmatchedEvent(db, provider, doc.blockchainRef.txHash);
 }
 
 /**
  * RoleGranted/RoleRevoked reconciler (Slice 2). Same 4-bucket shape as
- * reconcileMemberRoleManagerEvent, but bucket 1 checks records/{recordId}/permissionHistory
+ * reconcileMemberEvent, but bucket 1 checks records/{recordId}/permissionHistory
  * instead of users — see findMatchingPermissionHistoryForRoleEvent's own comment for why
  * userIdHash is deliberately excluded from that match. Unlike Slice 1's events (which can only
  * ever be admin-signed, per MemberRoleManager.sol's onlyAdmin gating), grantRole/revokeRole are

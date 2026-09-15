@@ -21,7 +21,7 @@ import {
   type RawRoleChangedEventLog,
 } from './eventDecoders';
 import {
-  reconcileMemberRoleManagerEvent,
+  reconcileMemberEvent,
   reconcileRoleEvent,
   reconcileRoleChangedEvent,
   type ReconciliationResult,
@@ -48,13 +48,13 @@ export const CHAIN_EVENT_REGISTRY: Record<MemberRoleManagerEventName, ChainEvent
     getFilter: contract => contract.filters.MemberRegistered(),
     toRawArgs: log => ({ wallet: log.args.wallet as string, userIdHash: log.args.userIdHash as string }),
     decode: log => decodeMemberRoleManagerLog(log as RawMemberRoleManagerLog),
-    reconcile: reconcileMemberRoleManagerEvent,
+    reconcile: reconcileMemberEvent,
   },
   WalletLinked: {
     getFilter: contract => contract.filters.WalletLinked(),
     toRawArgs: log => ({ wallet: log.args.wallet as string, userIdHash: log.args.userIdHash as string }),
     decode: log => decodeMemberRoleManagerLog(log as RawMemberRoleManagerLog),
-    reconcile: reconcileMemberRoleManagerEvent,
+    reconcile: reconcileMemberEvent,
   },
   RoleGranted: {
     getFilter: contract => contract.filters.RoleGranted(),

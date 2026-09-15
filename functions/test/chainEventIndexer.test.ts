@@ -23,6 +23,7 @@ const { mockContract, connectMock } = vi.hoisted(() => {
       RoleChanged: vi.fn(() => 'RoleChanged-filter'),
     },
     queryFilter: vi.fn(),
+    userStatus: vi.fn(),
   };
   return { mockContract, connectMock: vi.fn(() => mockContract) };
 });
@@ -181,10 +182,18 @@ async function getCachedEvent(txHash: string, logIndex: number) {
   return snap.exists ? snap.data() : null;
 }
 
+// Mirrors MemberRoleManager.sol's MemberStatus enum — see memberRegistry.ts's own statusMap.
+const MEMBER_STATUS_ACTIVE = 2;
+const MEMBER_STATUS_INACTIVE = 1;
+
 beforeEach(async () => {
   await clearFirestore();
   vi.clearAllMocks();
   connectMock.mockReturnValue(mockContract);
+  // Active by default — every existing Member-event test predates the deactivation check
+  // (isDeactivatedOnChain) and expects to reach its own branch of the pipeline; tests that
+  // specifically want the deactivated_tracked path override this explicitly.
+  mockContract.userStatus.mockResolvedValue(MEMBER_STATUS_ACTIVE);
 });
 
 describe('runChainEventIndexerCycle — basic scan + checkpoint', () => {
@@ -386,6 +395,75 @@ describe('runChainEventIndexerCycle — reconciliation classification', () => {
 
     const cached = await getCachedEvent('0xtx1', 0);
     expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
+  });
+
+  // Reproduces e2e test cleanup (e2e/helpers/backend/staging.ts's deactivateOnChain): the
+  // identity is genuinely deactivated on-chain, but its Firestore user doc is gone — checked
+  // before both the sync-queue and admin-wallet checks, so this fires regardless of whether a
+  // sync-queue entry happens to exist for this txHash.
+  it('classifies as deactivated_tracked when unmatched and the identity is Inactive on-chain — even with a confirmed sync-queue entry', async () => {
+    await admin
+      .firestore()
+      .collection('blockchainSyncQueue')
+      .doc('sync-1')
+      .set({ txHash: '0xtx1', status: 'confirmed', action: 'addMember', userId: 'user-1', contract: 'MemberRoleManager' });
+    mockContract.userStatus.mockResolvedValue(MEMBER_STATUS_INACTIVE);
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [
+        fakeEventLog({ eventName: 'MemberRegistered', transactionHash: '0xtx1', blockNumber: 1005, index: 0 }),
+      ],
+      walletLinked: () => [],
+    });
+
+    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+
+    const cached = await getCachedEvent('0xtx1', 0);
+    expect(cached).toMatchObject({
+      reconciliationStatus: 'deactivated_tracked',
+      matchedSyncQueueId: null,
+      matchedFirestoreRef: null,
+    });
+  });
+
+  it('classifies as deactivated_tracked when unmatched, Inactive on-chain, and no sync-queue entry either — not admin_untracked', async () => {
+    mockContract.userStatus.mockResolvedValue(MEMBER_STATUS_INACTIVE);
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [
+        fakeEventLog({ eventName: 'MemberRegistered', transactionHash: '0xtx1', blockNumber: 1005, index: 0 }),
+      ],
+      walletLinked: () => [],
+    });
+
+    await runChainEventIndexerCycle(
+      admin.firestore(),
+      makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xtx1': ADMIN_ADDRESS } })
+    );
+
+    const cached = await getCachedEvent('0xtx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'deactivated_tracked' });
+  });
+
+  it('does not apply deactivated_tracked to an already-matched event — the on-chain status check only runs for unmatched events', async () => {
+    await admin
+      .firestore()
+      .collection('users')
+      .doc('user-1')
+      .set({ onChainIdentity: { userIdHash: '0xHash1' }, wallet: { address: '0xWallet1' } });
+    mockContract.userStatus.mockResolvedValue(MEMBER_STATUS_INACTIVE); // even a deactivated real user should still report 'matched'
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [
+        fakeEventLog({ eventName: 'MemberRegistered', transactionHash: '0xtx1', blockNumber: 1005, index: 0 }),
+      ],
+      walletLinked: () => [],
+    });
+
+    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+
+    const cached = await getCachedEvent('0xtx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'matched' });
   });
 });
 

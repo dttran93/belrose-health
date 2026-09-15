@@ -30,12 +30,20 @@ import { TimestampLike } from './timestamp';
 //     wallet. Since only our backend holds that key, this can only mean our own code failed to
 //     instrument a call site (the same class of bug already found for
 //     registerMemberOnChainComplete) — never user activity.
+//   - 'deactivated_tracked' — MemberRegistered/WalletLinked only. No Firestore match, but the
+//     identity's on-chain status is Inactive. A real instrumentation bug never self-deactivates
+//     an account, so this is a strong signal the account was deliberately deactivated after the
+//     fact (e.g. e2e test cleanup — see e2e/helpers/backend/staging.ts's deactivateOnChain, which
+//     deactivates on-chain but deletes the Firestore user doc) rather than a missed write. Named
+//     "tracked" rather than "untracked" — we're not missing anything here, we're accurately
+//     recording that this identity is inactive on-chain.
 export type ChainEventReconciliationStatus =
   | 'unclassified'
   | 'matched'
   | 'sync_queue_confirmed_missing_write'
   | 'legitimate_chain_only'
-  | 'admin_untracked';
+  | 'admin_untracked'
+  | 'deactivated_tracked';
 
 export interface ChainEventCacheDoc {
   contract: BlockchainContract;
