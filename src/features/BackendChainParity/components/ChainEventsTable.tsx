@@ -48,6 +48,9 @@ const STATUS_STYLE: Record<ChainEventReconciliationStatus, string> = {
   legitimate_chain_only: 'bg-blue-100 text-blue-700',
   sync_queue_confirmed_missing_write: 'bg-red-100 text-red-700',
   admin_untracked: 'bg-amber-100 text-amber-700',
+  deactivated_tracked: 'bg-purple-100 text-purple-700',
+  infrastructure: 'bg-slate-100 text-slate-600',
+  infrastructure_admin_mismatch: 'bg-orange-100 text-orange-700',
 };
 
 const STATUS_LABEL: Record<ChainEventReconciliationStatus, string> = {
@@ -56,6 +59,9 @@ const STATUS_LABEL: Record<ChainEventReconciliationStatus, string> = {
   legitimate_chain_only: 'Chain-Only (Expected)',
   sync_queue_confirmed_missing_write: 'Sync Confirmed, Write Missing',
   admin_untracked: 'Admin Write Untracked',
+  deactivated_tracked: 'Deactivated, Tracked',
+  infrastructure: 'Infrastructure',
+  infrastructure_admin_mismatch: 'Admin Key Mismatch',
 };
 
 interface ChainEventsTableProps {
@@ -161,6 +167,10 @@ export const ChainEventsTable: React.FC<ChainEventsTableProps> = ({ items, searc
     sync_queue_confirmed_missing_write: items.filter(i => i.reconciliationStatus === 'sync_queue_confirmed_missing_write')
       .length,
     admin_untracked: items.filter(i => i.reconciliationStatus === 'admin_untracked').length,
+    deactivated_tracked: items.filter(i => i.reconciliationStatus === 'deactivated_tracked').length,
+    infrastructure: items.filter(i => i.reconciliationStatus === 'infrastructure').length,
+    infrastructure_admin_mismatch: items.filter(i => i.reconciliationStatus === 'infrastructure_admin_mismatch')
+      .length,
   };
 
   const filtered = items.filter(item => {
@@ -179,8 +189,11 @@ export const ChainEventsTable: React.FC<ChainEventsTableProps> = ({ items, searc
     { value: 'all', label: 'All' },
     { value: 'admin_untracked', label: 'Admin Untracked' },
     { value: 'sync_queue_confirmed_missing_write', label: 'Sync Confirmed, Missing Write' },
+    { value: 'infrastructure_admin_mismatch', label: 'Admin Key Mismatch' },
     { value: 'legitimate_chain_only', label: 'Chain-Only (Expected)' },
+    { value: 'deactivated_tracked', label: 'Deactivated, Tracked' },
     { value: 'matched', label: 'Matched' },
+    { value: 'infrastructure', label: 'Infrastructure' },
     { value: 'unclassified', label: 'Unclassified' },
   ];
 

@@ -30,12 +30,33 @@ import { TimestampLike } from './timestamp';
 //     wallet. Since only our backend holds that key, this can only mean our own code failed to
 //     instrument a call site (the same class of bug already found for
 //     registerMemberOnChainComplete) — never user activity.
+//   - 'deactivated_tracked' — MemberRegistered/WalletLinked only. No Firestore match, but the
+//     identity's on-chain status is Inactive. A real instrumentation bug never self-deactivates
+//     an account, so this is a strong signal the account was deliberately deactivated after the
+//     fact (e.g. e2e test cleanup — see e2e/helpers/backend/staging.ts's deactivateOnChain, which
+//     deactivates on-chain but deletes the Firestore user doc) rather than a missed write. Named
+//     "tracked" rather than "untracked" — we're not missing anything here, we're accurately
+//     recording that this identity is inactive on-chain.
+//   - 'infrastructure' — HealthRecordCoreUpdated/AdminTransferred only. Both are onlyAdmin
+//     contract-configuration events (repointing the linked HealthRecordCore address; rotating the
+//     admin key) with no app call site and no Firestore collection that could ever represent
+//     either action — running them through the matched/admin_untracked pipeline would always land
+//     on admin_untracked with zero diagnostic value. This status means "expected, deliberate
+//     configuration," not a bug.
+//   - 'infrastructure_admin_mismatch' — same two events, but the on-chain caller didn't match our
+//     configured admin wallet (getAdminWallet().address). Since onlyAdmin only ever accepts a call
+//     from whoever the contract currently considers its admin, this is a real signal that our
+//     ADMIN_WALLET_PRIVATE_KEY secret is out of sync with the contract's actual admin — e.g. an
+//     untracked key rotation — not an instrumentation gap.
 export type ChainEventReconciliationStatus =
   | 'unclassified'
   | 'matched'
   | 'sync_queue_confirmed_missing_write'
   | 'legitimate_chain_only'
-  | 'admin_untracked';
+  | 'admin_untracked'
+  | 'deactivated_tracked'
+  | 'infrastructure'
+  | 'infrastructure_admin_mismatch';
 
 export interface ChainEventCacheDoc {
   contract: BlockchainContract;

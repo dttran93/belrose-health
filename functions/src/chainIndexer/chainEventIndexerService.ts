@@ -25,15 +25,61 @@ import type { MemberRoleManager } from '../_shared/typechain';
 import type {
   DecodedMemberRoleManagerEvent,
   DecodedRoleEvent,
+  DecodedRoleChangedEvent,
+  DecodedMemberStatusChangedEvent,
+  DecodedOwnershipVoluntarilyLeftEvent,
+  DecodedTrusteeProposedAcceptedEvent,
+  DecodedTrusteeDeclinedEvent,
+  DecodedTrusteeRevokedEvent,
+  DecodedTrusteeLevelUpdatedEvent,
+  DecodedVouchEvent,
+  DecodedHealthRecordCoreUpdatedEvent,
+  DecodedAdminTransferredEvent,
   MemberRoleManagerEventName,
   RawMemberRoleManagerLog,
   RawRoleEventLog,
+  RawRoleChangedEventLog,
+  RawMemberStatusChangedEventLog,
+  RawOwnershipVoluntarilyLeftEventLog,
+  RawTrusteeProposedAcceptedEventLog,
+  RawTrusteeDeclinedEventLog,
+  RawTrusteeRevokedEventLog,
+  RawTrusteeLevelUpdatedEventLog,
+  RawVouchEventLog,
+  RawHealthRecordCoreUpdatedEventLog,
+  RawAdminTransferredEventLog,
 } from './eventDecoders';
 import { CHAIN_EVENT_REGISTRY } from './eventRegistry';
 
 // Every event registered in CHAIN_EVENT_REGISTRY shares this shape except `args`, whose inner
 // fields vary per event type — see eventRegistry.ts.
-type DecodedChainEvent = DecodedMemberRoleManagerEvent | DecodedRoleEvent;
+type DecodedChainEvent =
+  | DecodedMemberRoleManagerEvent
+  | DecodedRoleEvent
+  | DecodedRoleChangedEvent
+  | DecodedMemberStatusChangedEvent
+  | DecodedOwnershipVoluntarilyLeftEvent
+  | DecodedTrusteeProposedAcceptedEvent
+  | DecodedTrusteeDeclinedEvent
+  | DecodedTrusteeRevokedEvent
+  | DecodedTrusteeLevelUpdatedEvent
+  | DecodedVouchEvent
+  | DecodedHealthRecordCoreUpdatedEvent
+  | DecodedAdminTransferredEvent;
+
+type RawChainLog =
+  | RawMemberRoleManagerLog
+  | RawRoleEventLog
+  | RawRoleChangedEventLog
+  | RawMemberStatusChangedEventLog
+  | RawOwnershipVoluntarilyLeftEventLog
+  | RawTrusteeProposedAcceptedEventLog
+  | RawTrusteeDeclinedEventLog
+  | RawTrusteeRevokedEventLog
+  | RawTrusteeLevelUpdatedEventLog
+  | RawVouchEventLog
+  | RawHealthRecordCoreUpdatedEventLog
+  | RawAdminTransferredEventLog;
 
 const REORG_CONFIRMATION_BUFFER = 20; // blocks — guards against reading logs an L2 reorg could still drop. TBD could be adjusted based on chain behavior
 const INITIAL_CHUNK_SIZE = 500;
@@ -144,7 +190,7 @@ function toRawLog(
   eventName: MemberRoleManagerEventName,
   contractAddress: string,
   chainId: number
-): RawMemberRoleManagerLog | RawRoleEventLog {
+): RawChainLog {
   return {
     eventName,
     transactionHash: log.transactionHash,
@@ -156,7 +202,7 @@ function toRawLog(
       ...CHAIN_EVENT_REGISTRY[eventName].toRawArgs(log),
       timestamp: log.args.timestamp as bigint,
     },
-  } as RawMemberRoleManagerLog | RawRoleEventLog;
+  } as RawChainLog;
 }
 
 /**
