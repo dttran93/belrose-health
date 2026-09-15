@@ -16,6 +16,8 @@ import {
   decodeTrusteeRevokedEventLog,
   decodeTrusteeLevelUpdatedEventLog,
   decodeVouchEventLog,
+  decodeHealthRecordCoreUpdatedEventLog,
+  decodeAdminTransferredEventLog,
   type RawMemberRoleManagerLog,
   type RawRoleEventLog,
   type RawRoleChangedEventLog,
@@ -26,6 +28,8 @@ import {
   type RawTrusteeRevokedEventLog,
   type RawTrusteeLevelUpdatedEventLog,
   type RawVouchEventLog,
+  type RawHealthRecordCoreUpdatedEventLog,
+  type RawAdminTransferredEventLog,
 } from '../src/chainIndexer/eventDecoders';
 
 function fakeLog(overrides: Partial<RawMemberRoleManagerLog> = {}): RawMemberRoleManagerLog {
@@ -489,5 +493,81 @@ describe('decodeVouchEventLog', () => {
     const decoded = decodeVouchEventLog(fakeVouchLog({ eventName: 'VouchRetracted', transactionHash: '0xvouch2' }));
 
     expect(decoded).toMatchObject({ eventName: 'VouchRetracted', txHash: '0xvouch2' });
+  });
+});
+
+function fakeHealthRecordCoreUpdatedLog(
+  overrides: Partial<RawHealthRecordCoreUpdatedEventLog> = {}
+): RawHealthRecordCoreUpdatedEventLog {
+  return {
+    eventName: 'HealthRecordCoreUpdated',
+    transactionHash: '0xhrctx1',
+    blockNumber: 1100,
+    index: 0,
+    contractAddress: '0xMemberRoleManagerProxy',
+    chainId: 84532,
+    args: {
+      newAddress: '0xNewHealthRecordCoreAddress',
+      timestamp: 1_700_000_000n,
+    },
+    ...overrides,
+  };
+}
+
+describe('decodeHealthRecordCoreUpdatedEventLog', () => {
+  it('decodes a HealthRecordCoreUpdated log', () => {
+    const decoded = decodeHealthRecordCoreUpdatedEventLog(fakeHealthRecordCoreUpdatedLog());
+
+    expect(decoded).toEqual({
+      eventName: 'HealthRecordCoreUpdated',
+      txHash: '0xhrctx1',
+      blockNumber: 1100,
+      logIndex: 0,
+      contractAddress: '0xMemberRoleManagerProxy',
+      chainId: 84532,
+      blockTimestampSeconds: 1_700_000_000,
+      args: {
+        newAddress: '0xNewHealthRecordCoreAddress',
+      },
+    });
+  });
+});
+
+function fakeAdminTransferredLog(
+  overrides: Partial<RawAdminTransferredEventLog> = {}
+): RawAdminTransferredEventLog {
+  return {
+    eventName: 'AdminTransferred',
+    transactionHash: '0xadmintx1',
+    blockNumber: 1200,
+    index: 0,
+    contractAddress: '0xMemberRoleManagerProxy',
+    chainId: 84532,
+    args: {
+      oldAdmin: '0xOldAdminAddress',
+      newAdmin: '0xNewAdminAddress',
+      timestamp: 1_700_000_000n,
+    },
+    ...overrides,
+  };
+}
+
+describe('decodeAdminTransferredEventLog', () => {
+  it('decodes an AdminTransferred log, keeping oldAdmin and newAdmin distinct', () => {
+    const decoded = decodeAdminTransferredEventLog(fakeAdminTransferredLog());
+
+    expect(decoded).toEqual({
+      eventName: 'AdminTransferred',
+      txHash: '0xadmintx1',
+      blockNumber: 1200,
+      logIndex: 0,
+      contractAddress: '0xMemberRoleManagerProxy',
+      chainId: 84532,
+      blockTimestampSeconds: 1_700_000_000,
+      args: {
+        oldAdmin: '0xOldAdminAddress',
+        newAdmin: '0xNewAdminAddress',
+      },
+    });
   });
 });

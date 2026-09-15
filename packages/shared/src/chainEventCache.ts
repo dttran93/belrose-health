@@ -37,13 +37,26 @@ import { TimestampLike } from './timestamp';
 //     deactivates on-chain but deletes the Firestore user doc) rather than a missed write. Named
 //     "tracked" rather than "untracked" — we're not missing anything here, we're accurately
 //     recording that this identity is inactive on-chain.
+//   - 'infrastructure' — HealthRecordCoreUpdated/AdminTransferred only. Both are onlyAdmin
+//     contract-configuration events (repointing the linked HealthRecordCore address; rotating the
+//     admin key) with no app call site and no Firestore collection that could ever represent
+//     either action — running them through the matched/admin_untracked pipeline would always land
+//     on admin_untracked with zero diagnostic value. This status means "expected, deliberate
+//     configuration," not a bug.
+//   - 'infrastructure_admin_mismatch' — same two events, but the on-chain caller didn't match our
+//     configured admin wallet (getAdminWallet().address). Since onlyAdmin only ever accepts a call
+//     from whoever the contract currently considers its admin, this is a real signal that our
+//     ADMIN_WALLET_PRIVATE_KEY secret is out of sync with the contract's actual admin — e.g. an
+//     untracked key rotation — not an instrumentation gap.
 export type ChainEventReconciliationStatus =
   | 'unclassified'
   | 'matched'
   | 'sync_queue_confirmed_missing_write'
   | 'legitimate_chain_only'
   | 'admin_untracked'
-  | 'deactivated_tracked';
+  | 'deactivated_tracked'
+  | 'infrastructure'
+  | 'infrastructure_admin_mismatch';
 
 export interface ChainEventCacheDoc {
   contract: BlockchainContract;

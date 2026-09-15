@@ -417,3 +417,57 @@ export async function reconcileVouchRetractedEvent(
 
   return classifyUnmatchedEvent(db, provider, doc.blockchainRef.txHash);
 }
+
+/**
+ * HealthRecordCoreUpdated / AdminTransferred reconcilers (Slice 7). Both events are emitted
+ * exclusively by onlyAdmin functions with no app call site at all (neither appears anywhere in
+ * functions/src or src/ outside typechain — these only ever run out-of-band, e.g. a Hardhat
+ * console/script), and no Firestore collection could ever represent "this pointer was updated" or
+ * "this admin was rotated." Skipping classifyUnmatchedEvent entirely: bucket 2
+ * (sync_queue_confirmed_missing_write) is just as structurally unreachable as bucket 1 (matched)
+ * here, since the app never writes a sync-queue entry for a call it never makes — running these
+ * through the normal pipeline would always land on admin_untracked, wrongly implying a bug every
+ * time either fires. Land in 'infrastructure' instead: expected, deliberate configuration.
+ *
+ * One check is still worth making: onlyAdmin only ever accepts a call from whoever the contract
+ * considers its admin AT THAT BLOCK, which may not match our own ADMIN_WALLET_PRIVATE_KEY-derived
+ * address if the admin key was ever rotated (via AdminTransferred itself) without updating our
+ * secret — a real security signal (a rogue or rotated admin key), not "our code missed a write."
+ * Surfaced as a distinct 'infrastructure_admin_mismatch' status rather than a new field, keeping
+ * ReconciliationResult's shape unchanged. An unresolved signer (tx lookup returns null) is treated
+ * as a mismatch, not assumed safe — same fail-safe direction classifyUnmatchedEvent's own signer
+ * check already takes.
+ */
+export async function reconcileAdminTransferredEvent(
+  _db: Firestore,
+  _provider: Provider,
+  doc: Pick<ChainEventCacheDoc, 'args' | 'blockchainRef'>
+): Promise<ReconciliationResult> {
+  const args = doc.args as { oldAdmin: string; newAdmin: string };
+  // transferAdmin's onlyAdmin guard means oldAdmin (emitted before reassignment) IS msg.sender —
+  // no provider.getTransaction round trip needed, unlike HealthRecordCoreUpdated below.
+  const adminAddress = getAdminWallet().address.toLowerCase();
+  const isMismatch = args.oldAdmin.toLowerCase() !== adminAddress;
+  return {
+    reconciliationStatus: isMismatch ? 'infrastructure_admin_mismatch' : 'infrastructure',
+    matchedSyncQueueId: null,
+    matchedFirestoreRef: null,
+    reconciledAt: Timestamp.now(),
+  };
+}
+
+export async function reconcileHealthRecordCoreUpdatedEvent(
+  _db: Firestore,
+  provider: Provider,
+  doc: Pick<ChainEventCacheDoc, 'args' | 'blockchainRef'>
+): Promise<ReconciliationResult> {
+  const adminAddress = getAdminWallet().address.toLowerCase();
+  const tx = await provider.getTransaction(doc.blockchainRef.txHash);
+  const signer = tx?.from?.toLowerCase();
+  return {
+    reconciliationStatus: signer === adminAddress ? 'infrastructure' : 'infrastructure_admin_mismatch',
+    matchedSyncQueueId: null,
+    matchedFirestoreRef: null,
+    reconciledAt: Timestamp.now(),
+  };
+}

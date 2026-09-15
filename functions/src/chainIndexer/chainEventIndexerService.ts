@@ -33,6 +33,8 @@ import type {
   DecodedTrusteeRevokedEvent,
   DecodedTrusteeLevelUpdatedEvent,
   DecodedVouchEvent,
+  DecodedHealthRecordCoreUpdatedEvent,
+  DecodedAdminTransferredEvent,
   MemberRoleManagerEventName,
   RawMemberRoleManagerLog,
   RawRoleEventLog,
@@ -44,6 +46,8 @@ import type {
   RawTrusteeRevokedEventLog,
   RawTrusteeLevelUpdatedEventLog,
   RawVouchEventLog,
+  RawHealthRecordCoreUpdatedEventLog,
+  RawAdminTransferredEventLog,
 } from './eventDecoders';
 import { CHAIN_EVENT_REGISTRY } from './eventRegistry';
 
@@ -59,7 +63,9 @@ type DecodedChainEvent =
   | DecodedTrusteeDeclinedEvent
   | DecodedTrusteeRevokedEvent
   | DecodedTrusteeLevelUpdatedEvent
-  | DecodedVouchEvent;
+  | DecodedVouchEvent
+  | DecodedHealthRecordCoreUpdatedEvent
+  | DecodedAdminTransferredEvent;
 
 type RawChainLog =
   | RawMemberRoleManagerLog
@@ -71,7 +77,9 @@ type RawChainLog =
   | RawTrusteeDeclinedEventLog
   | RawTrusteeRevokedEventLog
   | RawTrusteeLevelUpdatedEventLog
-  | RawVouchEventLog;
+  | RawVouchEventLog
+  | RawHealthRecordCoreUpdatedEventLog
+  | RawAdminTransferredEventLog;
 
 const REORG_CONFIRMATION_BUFFER = 20; // blocks — guards against reading logs an L2 reorg could still drop. TBD could be adjusted based on chain behavior
 const INITIAL_CHUNK_SIZE = 500;

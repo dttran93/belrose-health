@@ -23,7 +23,13 @@
 // (voucherIdHash, voucheeIdHash, timestamp) shape as each other, matched against the flat
 // top-level `vouches` collection (vouchService.ts), which — like trusteeHistory — already stores
 // both hashes directly on the doc, so this is a plain two-field equality query, not even a
-// collectionGroup scan.
+// collectionGroup scan. Slice 7 adds the last two events on the contract, HealthRecordCoreUpdated
+// (setHealthRecordCore) and AdminTransferred (transferAdmin) — both onlyAdmin, both with no app
+// call site at all (only ever run out-of-band, e.g. a Hardhat script) and no Firestore collection
+// that could ever represent either action. Unlike every prior slice, these don't get a match rule
+// in reconciliationRules.ts at all — see reconciliationService.ts's reconcileHealthRecordCoreUpdatedEvent/
+// reconcileAdminTransferredEvent for why the matched/admin_untracked pipeline is skipped entirely
+// for this pair.
 
 export type MemberRoleManagerEventName =
   | 'MemberRegistered'
@@ -39,7 +45,9 @@ export type MemberRoleManagerEventName =
   | 'TrusteeRevoked'
   | 'TrusteeLevelUpdated'
   | 'VouchGiven'
-  | 'VouchRetracted';
+  | 'VouchRetracted'
+  | 'HealthRecordCoreUpdated'
+  | 'AdminTransferred';
 
 // Minimal shape of what ethers' queryFilter returns for these two events — just enough to
 // decode, not the full EventLog surface.
@@ -601,6 +609,103 @@ export function decodeVouchEventLog(log: RawVouchEventLog): DecodedVouchEvent {
     args: {
       voucherIdHash: log.args.voucherIdHash,
       voucheeIdHash: log.args.voucheeIdHash,
+    },
+  };
+}
+
+// ============================================================================
+// HealthRecordCoreUpdated (Slice 7)
+// ============================================================================
+
+export interface RawHealthRecordCoreUpdatedEventLog {
+  eventName: 'HealthRecordCoreUpdated';
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  contractAddress: string;
+  chainId: number;
+  args: {
+    newAddress: string;
+    timestamp: bigint | number;
+  };
+}
+
+export interface DecodedHealthRecordCoreUpdatedEvent {
+  eventName: 'HealthRecordCoreUpdated';
+  txHash: string;
+  blockNumber: number;
+  logIndex: number;
+  contractAddress: string;
+  chainId: number;
+  blockTimestampSeconds: number;
+  args: {
+    newAddress: string;
+  };
+}
+
+export function decodeHealthRecordCoreUpdatedEventLog(
+  log: RawHealthRecordCoreUpdatedEventLog
+): DecodedHealthRecordCoreUpdatedEvent {
+  return {
+    eventName: log.eventName,
+    txHash: log.transactionHash,
+    blockNumber: log.blockNumber,
+    logIndex: log.index,
+    contractAddress: log.contractAddress,
+    chainId: log.chainId,
+    blockTimestampSeconds: Number(log.args.timestamp),
+    args: {
+      newAddress: log.args.newAddress,
+    },
+  };
+}
+
+// ============================================================================
+// AdminTransferred (Slice 7)
+// ============================================================================
+
+export interface RawAdminTransferredEventLog {
+  eventName: 'AdminTransferred';
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  contractAddress: string;
+  chainId: number;
+  args: {
+    oldAdmin: string;
+    newAdmin: string;
+    timestamp: bigint | number;
+  };
+}
+
+export interface DecodedAdminTransferredEvent {
+  eventName: 'AdminTransferred';
+  txHash: string;
+  blockNumber: number;
+  logIndex: number;
+  contractAddress: string;
+  chainId: number;
+  blockTimestampSeconds: number;
+  args: {
+    oldAdmin: string;
+    newAdmin: string;
+  };
+}
+
+export function decodeAdminTransferredEventLog(
+  log: RawAdminTransferredEventLog
+): DecodedAdminTransferredEvent {
+  return {
+    eventName: log.eventName,
+    txHash: log.transactionHash,
+    blockNumber: log.blockNumber,
+    logIndex: log.index,
+    contractAddress: log.contractAddress,
+    chainId: log.chainId,
+    blockTimestampSeconds: Number(log.args.timestamp),
+    args: {
+      oldAdmin: log.args.oldAdmin,
+      newAdmin: log.args.newAdmin,
     },
   };
 }

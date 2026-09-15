@@ -22,6 +22,8 @@ import {
   decodeTrusteeRevokedEventLog,
   decodeTrusteeLevelUpdatedEventLog,
   decodeVouchEventLog,
+  decodeHealthRecordCoreUpdatedEventLog,
+  decodeAdminTransferredEventLog,
   type MemberRoleManagerEventName,
   type RawMemberRoleManagerLog,
   type RawRoleEventLog,
@@ -33,6 +35,8 @@ import {
   type RawTrusteeRevokedEventLog,
   type RawTrusteeLevelUpdatedEventLog,
   type RawVouchEventLog,
+  type RawHealthRecordCoreUpdatedEventLog,
+  type RawAdminTransferredEventLog,
 } from './eventDecoders';
 import {
   reconcileMemberEvent,
@@ -47,6 +51,8 @@ import {
   reconcileTrusteeLevelUpdatedEvent,
   reconcileVouchGivenEvent,
   reconcileVouchRetractedEvent,
+  reconcileHealthRecordCoreUpdatedEvent,
+  reconcileAdminTransferredEvent,
   type ReconciliationResult,
 } from './reconciliationService';
 
@@ -60,7 +66,9 @@ type AnyRawLog =
   | RawTrusteeDeclinedEventLog
   | RawTrusteeRevokedEventLog
   | RawTrusteeLevelUpdatedEventLog
-  | RawVouchEventLog;
+  | RawVouchEventLog
+  | RawHealthRecordCoreUpdatedEventLog
+  | RawAdminTransferredEventLog;
 
 type AnyDecoder =
   | typeof decodeMemberRoleManagerLog
@@ -72,7 +80,9 @@ type AnyDecoder =
   | typeof decodeTrusteeDeclinedEventLog
   | typeof decodeTrusteeRevokedEventLog
   | typeof decodeTrusteeLevelUpdatedEventLog
-  | typeof decodeVouchEventLog;
+  | typeof decodeVouchEventLog
+  | typeof decodeHealthRecordCoreUpdatedEventLog
+  | typeof decodeAdminTransferredEventLog;
 
 export interface ChainEventRegistryEntry {
   getFilter: (contract: MemberRoleManager) => ethers.DeferredTopicFilter;
@@ -222,5 +232,20 @@ export const CHAIN_EVENT_REGISTRY: Record<MemberRoleManagerEventName, ChainEvent
     }),
     decode: log => decodeVouchEventLog(log as RawVouchEventLog),
     reconcile: reconcileVouchRetractedEvent,
+  },
+  HealthRecordCoreUpdated: {
+    getFilter: contract => contract.filters.HealthRecordCoreUpdated(),
+    toRawArgs: log => ({ newAddress: log.args.newAddress as string }),
+    decode: log => decodeHealthRecordCoreUpdatedEventLog(log as RawHealthRecordCoreUpdatedEventLog),
+    reconcile: reconcileHealthRecordCoreUpdatedEvent,
+  },
+  AdminTransferred: {
+    getFilter: contract => contract.filters.AdminTransferred(),
+    toRawArgs: log => ({
+      oldAdmin: log.args.oldAdmin as string,
+      newAdmin: log.args.newAdmin as string,
+    }),
+    decode: log => decodeAdminTransferredEventLog(log as RawAdminTransferredEventLog),
+    reconcile: reconcileAdminTransferredEvent,
   },
 };

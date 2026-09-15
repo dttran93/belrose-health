@@ -30,6 +30,8 @@ const { mockContract, connectMock } = vi.hoisted(() => {
       TrusteeLevelUpdated: vi.fn(() => 'TrusteeLevelUpdated-filter'),
       VouchGiven: vi.fn(() => 'VouchGiven-filter'),
       VouchRetracted: vi.fn(() => 'VouchRetracted-filter'),
+      HealthRecordCoreUpdated: vi.fn(() => 'HealthRecordCoreUpdated-filter'),
+      AdminTransferred: vi.fn(() => 'AdminTransferred-filter'),
     },
     queryFilter: vi.fn(),
     userStatus: vi.fn(),
@@ -281,6 +283,44 @@ function fakeVouchEventLog(overrides: {
   };
 }
 
+function fakeHealthRecordCoreUpdatedEventLog(overrides: {
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  newAddress?: string;
+  timestamp?: bigint;
+}) {
+  return {
+    transactionHash: overrides.transactionHash,
+    blockNumber: overrides.blockNumber,
+    index: overrides.index,
+    args: {
+      newAddress: overrides.newAddress ?? '0xNewHealthRecordCoreAddress',
+      timestamp: overrides.timestamp ?? 1_700_000_000n,
+    },
+  };
+}
+
+function fakeAdminTransferredEventLog(overrides: {
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  oldAdmin?: string;
+  newAdmin?: string;
+  timestamp?: bigint;
+}) {
+  return {
+    transactionHash: overrides.transactionHash,
+    blockNumber: overrides.blockNumber,
+    index: overrides.index,
+    args: {
+      oldAdmin: overrides.oldAdmin ?? '0xOldAdminAddress',
+      newAdmin: overrides.newAdmin ?? '0xNewAdminAddress',
+      timestamp: overrides.timestamp ?? 1_700_000_000n,
+    },
+  };
+}
+
 // Every existing test only cares about MemberRegistered/WalletLinked and expects role-event
 // filters to just come back empty — roleGranted/roleRevoked/etc. are optional so those tests
 // don't need updating for a slice they predate.
@@ -299,6 +339,8 @@ function configureQueryFilter(handlers: {
   trusteeLevelUpdated?: (from: number, to: number) => unknown[];
   vouchGiven?: (from: number, to: number) => unknown[];
   vouchRetracted?: (from: number, to: number) => unknown[];
+  healthRecordCoreUpdated?: (from: number, to: number) => unknown[];
+  adminTransferred?: (from: number, to: number) => unknown[];
 }) {
   mockContract.queryFilter.mockImplementation(async (filter: unknown, from: number, to: number) => {
     switch (filter) {
@@ -330,6 +372,10 @@ function configureQueryFilter(handlers: {
         return (handlers.vouchGiven ?? (() => []))(from, to);
       case 'VouchRetracted-filter':
         return (handlers.vouchRetracted ?? (() => []))(from, to);
+      case 'HealthRecordCoreUpdated-filter':
+        return (handlers.healthRecordCoreUpdated ?? (() => []))(from, to);
+      case 'AdminTransferred-filter':
+        return (handlers.adminTransferred ?? (() => []))(from, to);
       default:
         throw new Error(`Unexpected filter in test: ${String(filter)}`);
     }
@@ -891,7 +937,7 @@ describe('runChainEventIndexerCycle — RoleGranted/RoleRevoked (Slice 2)', () =
     expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
   });
 
-  it('handles all fourteen event types found in the same chunk, advancing the checkpoint to the min toBlock across all fourteen filters', async () => {
+  it('handles all sixteen event types found in the same chunk, advancing the checkpoint to the min toBlock across all sixteen filters', async () => {
     await seedCheckpoint(999);
     configureQueryFilter({
       memberRegistered: () => [fakeEventLog({ eventName: 'MemberRegistered', transactionHash: '0xa', blockNumber: 1002, index: 0 })],
@@ -908,13 +954,15 @@ describe('runChainEventIndexerCycle — RoleGranted/RoleRevoked (Slice 2)', () =
       trusteeLevelUpdated: () => [fakeTrusteeLevelUpdatedEventLog({ transactionHash: '0xl', blockNumber: 1006, index: 0 })],
       vouchGiven: () => [fakeVouchEventLog({ eventName: 'VouchGiven', transactionHash: '0xm', blockNumber: 1007, index: 0 })],
       vouchRetracted: () => [fakeVouchEventLog({ eventName: 'VouchRetracted', transactionHash: '0xn', blockNumber: 1008, index: 0 })],
+      healthRecordCoreUpdated: () => [fakeHealthRecordCoreUpdatedEventLog({ transactionHash: '0xo', blockNumber: 1009, index: 0 })],
+      adminTransferred: () => [fakeAdminTransferredEventLog({ transactionHash: '0xp', blockNumber: 1010, index: 0 })],
     });
 
     const result = await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 })); // targetBlock 1010
 
-    expect(result.eventsFound).toBe(14);
-    expect(result.newlyCached).toBe(14);
-    expect(await getCheckpointBlock()).toBe(1010); // all fourteen filters shared the same [1000,1010] range
+    expect(result.eventsFound).toBe(16);
+    expect(result.newlyCached).toBe(16);
+    expect(await getCheckpointBlock()).toBe(1010); // all sixteen filters shared the same [1000,1010] range
     expect((await getCachedEvent('0xa', 0))?.eventName).toBe('MemberRegistered');
     expect((await getCachedEvent('0xb', 0))?.eventName).toBe('WalletLinked');
     expect((await getCachedEvent('0xc', 0))?.eventName).toBe('RoleGranted');
@@ -929,6 +977,8 @@ describe('runChainEventIndexerCycle — RoleGranted/RoleRevoked (Slice 2)', () =
     expect((await getCachedEvent('0xl', 0))?.eventName).toBe('TrusteeLevelUpdated');
     expect((await getCachedEvent('0xm', 0))?.eventName).toBe('VouchGiven');
     expect((await getCachedEvent('0xn', 0))?.eventName).toBe('VouchRetracted');
+    expect((await getCachedEvent('0xo', 0))?.eventName).toBe('HealthRecordCoreUpdated');
+    expect((await getCachedEvent('0xp', 0))?.eventName).toBe('AdminTransferred');
   });
 });
 
@@ -1677,5 +1727,97 @@ describe('runChainEventIndexerCycle — VouchGiven/VouchRetracted (Slice 6)', ()
 
     const cached = await getCachedEvent('0xvrtx1', 0);
     expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
+  });
+});
+
+describe('runChainEventIndexerCycle — HealthRecordCoreUpdated/AdminTransferred (Slice 7)', () => {
+  it('classifies HealthRecordCoreUpdated as infrastructure when signed by our configured admin wallet', async () => {
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      healthRecordCoreUpdated: () => [
+        fakeHealthRecordCoreUpdatedEventLog({ transactionHash: '0xhrctx1', blockNumber: 1005, index: 0 }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(
+      admin.firestore(),
+      makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xhrctx1': ADMIN_ADDRESS } })
+    );
+
+    const cached = await getCachedEvent('0xhrctx1', 0);
+    expect(cached).toMatchObject({ eventName: 'HealthRecordCoreUpdated', reconciliationStatus: 'infrastructure' });
+  });
+
+  it('classifies HealthRecordCoreUpdated as infrastructure_admin_mismatch when signed by some other address', async () => {
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      healthRecordCoreUpdated: () => [
+        fakeHealthRecordCoreUpdatedEventLog({ transactionHash: '0xhrctx1', blockNumber: 1005, index: 0 }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(
+      admin.firestore(),
+      makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xhrctx1': '0xSomeOtherWallet' } })
+    );
+
+    const cached = await getCachedEvent('0xhrctx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'infrastructure_admin_mismatch' });
+  });
+
+  it('classifies HealthRecordCoreUpdated as infrastructure_admin_mismatch when the signer cannot be resolved at all', async () => {
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      healthRecordCoreUpdated: () => [
+        fakeHealthRecordCoreUpdatedEventLog({ transactionHash: '0xhrctx1', blockNumber: 1005, index: 0 }),
+      ],
+    });
+
+    // No txFromByHash entry for '0xhrctx1' — makeMockProvider's getTransaction resolves to null,
+    // same as a pruned/unavailable node. Fail-safe direction: treated as a mismatch, not assumed safe.
+    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+
+    const cached = await getCachedEvent('0xhrctx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'infrastructure_admin_mismatch' });
+  });
+
+  it('classifies AdminTransferred as infrastructure when oldAdmin matches our configured admin wallet — no getTransaction call needed', async () => {
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      adminTransferred: () => [
+        fakeAdminTransferredEventLog({ transactionHash: '0xadmintx1', blockNumber: 1005, index: 0, oldAdmin: ADMIN_ADDRESS }),
+      ],
+    });
+
+    // Deliberately no txFromByHash entry — AdminTransferred's reconciler never calls
+    // provider.getTransaction, since oldAdmin (emitted before reassignment) IS the signer already.
+    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+
+    const cached = await getCachedEvent('0xadmintx1', 0);
+    expect(cached).toMatchObject({ eventName: 'AdminTransferred', reconciliationStatus: 'infrastructure' });
+  });
+
+  it('classifies AdminTransferred as infrastructure_admin_mismatch when oldAdmin differs from our configured admin wallet', async () => {
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      adminTransferred: () => [
+        fakeAdminTransferredEventLog({ transactionHash: '0xadmintx1', blockNumber: 1005, index: 0, oldAdmin: '0xSomeOtherWallet' }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+
+    const cached = await getCachedEvent('0xadmintx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'infrastructure_admin_mismatch' });
   });
 });
