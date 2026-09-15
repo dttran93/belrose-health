@@ -15,6 +15,7 @@ import {
   decodeTrusteeDeclinedEventLog,
   decodeTrusteeRevokedEventLog,
   decodeTrusteeLevelUpdatedEventLog,
+  decodeVouchEventLog,
   type RawMemberRoleManagerLog,
   type RawRoleEventLog,
   type RawRoleChangedEventLog,
@@ -24,6 +25,7 @@ import {
   type RawTrusteeDeclinedEventLog,
   type RawTrusteeRevokedEventLog,
   type RawTrusteeLevelUpdatedEventLog,
+  type RawVouchEventLog,
 } from '../src/chainIndexer/eventDecoders';
 
 function fakeLog(overrides: Partial<RawMemberRoleManagerLog> = {}): RawMemberRoleManagerLog {
@@ -444,5 +446,48 @@ describe('decodeTrusteeLevelUpdatedEventLog', () => {
         newLevel: 2,
       },
     });
+  });
+});
+
+function fakeVouchLog(overrides: Partial<RawVouchEventLog> = {}): RawVouchEventLog {
+  return {
+    eventName: 'VouchGiven',
+    transactionHash: '0xvouch1',
+    blockNumber: 1000,
+    index: 0,
+    contractAddress: '0xMemberRoleManagerProxy',
+    chainId: 84532,
+    args: {
+      voucherIdHash: '0xVoucherIdHash',
+      voucheeIdHash: '0xVoucheeIdHash',
+      timestamp: 1_700_000_000n,
+    },
+    ...overrides,
+  };
+}
+
+describe('decodeVouchEventLog', () => {
+  it('decodes a VouchGiven log', () => {
+    const decoded = decodeVouchEventLog(fakeVouchLog());
+
+    expect(decoded).toEqual({
+      eventName: 'VouchGiven',
+      txHash: '0xvouch1',
+      blockNumber: 1000,
+      logIndex: 0,
+      contractAddress: '0xMemberRoleManagerProxy',
+      chainId: 84532,
+      blockTimestampSeconds: 1_700_000_000,
+      args: {
+        voucherIdHash: '0xVoucherIdHash',
+        voucheeIdHash: '0xVoucheeIdHash',
+      },
+    });
+  });
+
+  it('decodes a VouchRetracted log — same shape, shared decoder', () => {
+    const decoded = decodeVouchEventLog(fakeVouchLog({ eventName: 'VouchRetracted', transactionHash: '0xvouch2' }));
+
+    expect(decoded).toMatchObject({ eventName: 'VouchRetracted', txHash: '0xvouch2' });
   });
 });

@@ -21,6 +21,7 @@ import {
   decodeTrusteeDeclinedEventLog,
   decodeTrusteeRevokedEventLog,
   decodeTrusteeLevelUpdatedEventLog,
+  decodeVouchEventLog,
   type MemberRoleManagerEventName,
   type RawMemberRoleManagerLog,
   type RawRoleEventLog,
@@ -31,6 +32,7 @@ import {
   type RawTrusteeDeclinedEventLog,
   type RawTrusteeRevokedEventLog,
   type RawTrusteeLevelUpdatedEventLog,
+  type RawVouchEventLog,
 } from './eventDecoders';
 import {
   reconcileMemberEvent,
@@ -43,6 +45,8 @@ import {
   reconcileTrusteeDeclinedEvent,
   reconcileTrusteeRevokedEvent,
   reconcileTrusteeLevelUpdatedEvent,
+  reconcileVouchGivenEvent,
+  reconcileVouchRetractedEvent,
   type ReconciliationResult,
 } from './reconciliationService';
 
@@ -55,7 +59,8 @@ type AnyRawLog =
   | RawTrusteeProposedAcceptedEventLog
   | RawTrusteeDeclinedEventLog
   | RawTrusteeRevokedEventLog
-  | RawTrusteeLevelUpdatedEventLog;
+  | RawTrusteeLevelUpdatedEventLog
+  | RawVouchEventLog;
 
 type AnyDecoder =
   | typeof decodeMemberRoleManagerLog
@@ -66,7 +71,8 @@ type AnyDecoder =
   | typeof decodeTrusteeProposedAcceptedEventLog
   | typeof decodeTrusteeDeclinedEventLog
   | typeof decodeTrusteeRevokedEventLog
-  | typeof decodeTrusteeLevelUpdatedEventLog;
+  | typeof decodeTrusteeLevelUpdatedEventLog
+  | typeof decodeVouchEventLog;
 
 export interface ChainEventRegistryEntry {
   getFilter: (contract: MemberRoleManager) => ethers.DeferredTopicFilter;
@@ -198,5 +204,23 @@ export const CHAIN_EVENT_REGISTRY: Record<MemberRoleManagerEventName, ChainEvent
     }),
     decode: log => decodeTrusteeLevelUpdatedEventLog(log as RawTrusteeLevelUpdatedEventLog),
     reconcile: reconcileTrusteeLevelUpdatedEvent,
+  },
+  VouchGiven: {
+    getFilter: contract => contract.filters.VouchGiven(),
+    toRawArgs: log => ({
+      voucherIdHash: log.args.voucherIdHash as string,
+      voucheeIdHash: log.args.voucheeIdHash as string,
+    }),
+    decode: log => decodeVouchEventLog(log as RawVouchEventLog),
+    reconcile: reconcileVouchGivenEvent,
+  },
+  VouchRetracted: {
+    getFilter: contract => contract.filters.VouchRetracted(),
+    toRawArgs: log => ({
+      voucherIdHash: log.args.voucherIdHash as string,
+      voucheeIdHash: log.args.voucheeIdHash as string,
+    }),
+    decode: log => decodeVouchEventLog(log as RawVouchEventLog),
+    reconcile: reconcileVouchRetractedEvent,
   },
 };

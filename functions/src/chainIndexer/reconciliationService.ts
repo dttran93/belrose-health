@@ -39,6 +39,8 @@ import {
   findMatchingTrusteeHistoryForDeclinedEvent,
   findMatchingTrusteeHistoryForRevokedEvent,
   findMatchingTrusteeHistoryForLevelUpdatedEvent,
+  findMatchingVouchForGivenEvent,
+  findMatchingVouchForRetractedEvent,
   findSyncQueueEntryForTxHash,
   type SyncQueueMatch,
 } from './reconciliationRules';
@@ -355,6 +357,55 @@ export async function reconcileTrusteeLevelUpdatedEvent(
   const args = doc.args as { trustorIdHash: string; trusteeIdHash: string; newLevel: number };
 
   const match = await findMatchingTrusteeHistoryForLevelUpdatedEvent(db, args);
+  if (match.matched) {
+    return {
+      reconciliationStatus: 'matched',
+      matchedSyncQueueId: null,
+      matchedFirestoreRef: match.matchedFirestoreRef,
+      reconciledAt: Timestamp.now(),
+    };
+  }
+
+  return classifyUnmatchedEvent(db, provider, doc.blockchainRef.txHash);
+}
+
+/**
+ * Vouch reconcilers (Slice 6). Same 4-bucket shape as the others; bucket 1 checks the flat
+ * `vouches` collection instead of a collectionGroup — see findMatchingVouchForGivenEvent/
+ * findMatchingVouchForRetractedEvent's own comments. Both giveVouch/retractVouch are
+ * onlyActiveMember with no admin-stand-in path (structurally user-only, same asymmetry as
+ * TrusteeDeclined/Revoked/LevelUpdated), so bucket 4 ('legitimate_chain_only') is the reachable
+ * one for genuinely untracked vouches — checked generically here rather than special-cased,
+ * consistent with every other reconciler in this file.
+ */
+export async function reconcileVouchGivenEvent(
+  db: Firestore,
+  provider: Provider,
+  doc: Pick<ChainEventCacheDoc, 'args' | 'blockchainRef'>
+): Promise<ReconciliationResult> {
+  const args = doc.args as { voucherIdHash: string; voucheeIdHash: string };
+
+  const match = await findMatchingVouchForGivenEvent(db, args);
+  if (match.matched) {
+    return {
+      reconciliationStatus: 'matched',
+      matchedSyncQueueId: null,
+      matchedFirestoreRef: match.matchedFirestoreRef,
+      reconciledAt: Timestamp.now(),
+    };
+  }
+
+  return classifyUnmatchedEvent(db, provider, doc.blockchainRef.txHash);
+}
+
+export async function reconcileVouchRetractedEvent(
+  db: Firestore,
+  provider: Provider,
+  doc: Pick<ChainEventCacheDoc, 'args' | 'blockchainRef'>
+): Promise<ReconciliationResult> {
+  const args = doc.args as { voucherIdHash: string; voucheeIdHash: string };
+
+  const match = await findMatchingVouchForRetractedEvent(db, args);
   if (match.matched) {
     return {
       reconciliationStatus: 'matched',

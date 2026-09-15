@@ -398,3 +398,71 @@ export async function findMatchingTrusteeHistoryForLevelUpdatedEvent(
     entry => entry.action === 'level-update' && (levelLabel === undefined || entry.trustLevel === levelLabel)
   );
 }
+
+// ============================================================================
+// Vouch events (Slice 6)
+// ============================================================================
+
+export interface VouchEventMatchResult {
+  matched: boolean;
+  matchedFirestoreRef: string | null; // e.g. 'vouches/{voucherId}_{voucheeId}'
+}
+
+interface VouchOnChainEventEntry {
+  action?: string;
+}
+
+/**
+ * Shared query + predicate-matching shell for both vouch match rules. Unlike permissionHistory/
+ * trusteeHistory, `vouches` is a flat top-level collection (vouchService.ts's getVouchId:
+ * `{voucherId}_{voucheeId}`) — but since the doc ID itself is built from plain UIDs, not hashes,
+ * it's not derivable from the on-chain event either, so this is still a query by the stored
+ * voucherIdHash/voucheeIdHash fields, not a doc lookup. At most one doc can ever match a given
+ * (voucherIdHash, voucheeIdHash) pair (that's the whole point of the deterministic ID), so
+ * `.limit(1)` is safe.
+ */
+async function findMatchingVouch(
+  db: Firestore,
+  voucherIdHash: string,
+  voucheeIdHash: string,
+  predicate: (entry: VouchOnChainEventEntry) => boolean
+): Promise<VouchEventMatchResult> {
+  const snap = await db
+    .collection('vouches')
+    .where('voucherIdHash', '==', voucherIdHash)
+    .where('voucheeIdHash', '==', voucheeIdHash)
+    .limit(1)
+    .get();
+
+  if (snap.empty) return { matched: false, matchedFirestoreRef: null };
+
+  const doc = snap.docs[0];
+  const history: VouchOnChainEventEntry[] = doc.data().onChainHistory ?? [];
+  const matched = history.some(predicate);
+  return { matched, matchedFirestoreRef: matched ? doc.ref.path : null };
+}
+
+/**
+ * VouchGiven match rule. Matches on "some vouched/re-vouched entry exists in history" rather than
+ * correlating the exact txHash/timestamp of this specific call — same looseness precedent as
+ * RoleGranted/TrusteeProposed. A vouch that's since been retracted still counts: this only asks
+ * whether Firestore ever recorded giving this vouch, not whether it's currently active.
+ */
+export async function findMatchingVouchForGivenEvent(
+  db: Firestore,
+  args: { voucherIdHash: string; voucheeIdHash: string }
+): Promise<VouchEventMatchResult> {
+  return findMatchingVouch(
+    db,
+    args.voucherIdHash,
+    args.voucheeIdHash,
+    entry => entry.action === 'vouched' || entry.action === 're-vouched'
+  );
+}
+
+export async function findMatchingVouchForRetractedEvent(
+  db: Firestore,
+  args: { voucherIdHash: string; voucheeIdHash: string }
+): Promise<VouchEventMatchResult> {
+  return findMatchingVouch(db, args.voucherIdHash, args.voucheeIdHash, entry => entry.action === 'retracted');
+}

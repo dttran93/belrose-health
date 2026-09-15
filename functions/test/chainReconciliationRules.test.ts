@@ -20,6 +20,8 @@ import {
   findMatchingTrusteeHistoryForDeclinedEvent,
   findMatchingTrusteeHistoryForRevokedEvent,
   findMatchingTrusteeHistoryForLevelUpdatedEvent,
+  findMatchingVouchForGivenEvent,
+  findMatchingVouchForRetractedEvent,
 } from '../src/chainIndexer/reconciliationRules';
 import { ethers } from 'ethers';
 
@@ -660,6 +662,93 @@ describe('trustee history match rules', () => {
       await expect(
         findMatchingTrusteeHistoryForLevelUpdatedEvent(db, { trustorIdHash, trusteeIdHash, newLevel: 2 })
       ).resolves.toEqual({ matched: false, matchedFirestoreRef: null });
+    });
+  });
+});
+
+describe('vouch match rules', () => {
+  const voucherIdHash = '0xVoucherHash1';
+  const voucheeIdHash = '0xVoucheeHash1';
+
+  describe('findMatchingVouchForGivenEvent', () => {
+    it('matches a "vouched" entry in onChainHistory', async () => {
+      const db = fakeFirestore({
+        vouches: [
+          {
+            id: 'voucher-uid_vouchee-uid',
+            data: { voucherIdHash, voucheeIdHash, onChainHistory: [{ action: 'vouched' }] },
+          },
+        ],
+      });
+
+      await expect(findMatchingVouchForGivenEvent(db, { voucherIdHash, voucheeIdHash })).resolves.toEqual({
+        matched: true,
+        matchedFirestoreRef: 'voucher-uid_vouchee-uid',
+      });
+    });
+
+    it('matches a "re-vouched" entry too — re-vouching after retraction still counts', async () => {
+      const db = fakeFirestore({
+        vouches: [
+          {
+            id: 'voucher-uid_vouchee-uid',
+            data: { voucherIdHash, voucheeIdHash, onChainHistory: [{ action: 'retracted' }, { action: 're-vouched' }] },
+          },
+        ],
+      });
+
+      await expect(findMatchingVouchForGivenEvent(db, { voucherIdHash, voucheeIdHash })).resolves.toEqual({
+        matched: true,
+        matchedFirestoreRef: 'voucher-uid_vouchee-uid',
+      });
+    });
+
+    it('does not match when the doc exists but has no vouched/re-vouched entry', async () => {
+      const db = fakeFirestore({
+        vouches: [{ id: 'voucher-uid_vouchee-uid', data: { voucherIdHash, voucheeIdHash, onChainHistory: [{ action: 'retracted' }] } }],
+      });
+
+      await expect(findMatchingVouchForGivenEvent(db, { voucherIdHash, voucheeIdHash })).resolves.toEqual({
+        matched: false,
+        matchedFirestoreRef: null,
+      });
+    });
+
+    it('does not match when no vouches doc exists for this pair at all', async () => {
+      const db = fakeFirestore({ vouches: [] });
+      await expect(findMatchingVouchForGivenEvent(db, { voucherIdHash, voucheeIdHash })).resolves.toEqual({
+        matched: false,
+        matchedFirestoreRef: null,
+      });
+    });
+  });
+
+  describe('findMatchingVouchForRetractedEvent', () => {
+    it('matches a "retracted" entry in onChainHistory', async () => {
+      const db = fakeFirestore({
+        vouches: [
+          {
+            id: 'voucher-uid_vouchee-uid',
+            data: { voucherIdHash, voucheeIdHash, onChainHistory: [{ action: 'vouched' }, { action: 'retracted' }] },
+          },
+        ],
+      });
+
+      await expect(findMatchingVouchForRetractedEvent(db, { voucherIdHash, voucheeIdHash })).resolves.toEqual({
+        matched: true,
+        matchedFirestoreRef: 'voucher-uid_vouchee-uid',
+      });
+    });
+
+    it('does not match a doc that was only ever vouched, never retracted', async () => {
+      const db = fakeFirestore({
+        vouches: [{ id: 'voucher-uid_vouchee-uid', data: { voucherIdHash, voucheeIdHash, onChainHistory: [{ action: 'vouched' }] } }],
+      });
+
+      await expect(findMatchingVouchForRetractedEvent(db, { voucherIdHash, voucheeIdHash })).resolves.toEqual({
+        matched: false,
+        matchedFirestoreRef: null,
+      });
     });
   });
 });

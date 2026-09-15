@@ -28,6 +28,8 @@ const { mockContract, connectMock } = vi.hoisted(() => {
       TrusteeDeclined: vi.fn(() => 'TrusteeDeclined-filter'),
       TrusteeRevoked: vi.fn(() => 'TrusteeRevoked-filter'),
       TrusteeLevelUpdated: vi.fn(() => 'TrusteeLevelUpdated-filter'),
+      VouchGiven: vi.fn(() => 'VouchGiven-filter'),
+      VouchRetracted: vi.fn(() => 'VouchRetracted-filter'),
     },
     queryFilter: vi.fn(),
     userStatus: vi.fn(),
@@ -258,6 +260,27 @@ function fakeTrusteeLevelUpdatedEventLog(overrides: {
   };
 }
 
+function fakeVouchEventLog(overrides: {
+  eventName: 'VouchGiven' | 'VouchRetracted';
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  voucherIdHash?: string;
+  voucheeIdHash?: string;
+  timestamp?: bigint;
+}) {
+  return {
+    transactionHash: overrides.transactionHash,
+    blockNumber: overrides.blockNumber,
+    index: overrides.index,
+    args: {
+      voucherIdHash: overrides.voucherIdHash ?? '0xVoucherHash1',
+      voucheeIdHash: overrides.voucheeIdHash ?? '0xVoucheeHash1',
+      timestamp: overrides.timestamp ?? 1_700_000_000n,
+    },
+  };
+}
+
 // Every existing test only cares about MemberRegistered/WalletLinked and expects role-event
 // filters to just come back empty — roleGranted/roleRevoked/etc. are optional so those tests
 // don't need updating for a slice they predate.
@@ -274,6 +297,8 @@ function configureQueryFilter(handlers: {
   trusteeDeclined?: (from: number, to: number) => unknown[];
   trusteeRevoked?: (from: number, to: number) => unknown[];
   trusteeLevelUpdated?: (from: number, to: number) => unknown[];
+  vouchGiven?: (from: number, to: number) => unknown[];
+  vouchRetracted?: (from: number, to: number) => unknown[];
 }) {
   mockContract.queryFilter.mockImplementation(async (filter: unknown, from: number, to: number) => {
     switch (filter) {
@@ -301,6 +326,10 @@ function configureQueryFilter(handlers: {
         return (handlers.trusteeRevoked ?? (() => []))(from, to);
       case 'TrusteeLevelUpdated-filter':
         return (handlers.trusteeLevelUpdated ?? (() => []))(from, to);
+      case 'VouchGiven-filter':
+        return (handlers.vouchGiven ?? (() => []))(from, to);
+      case 'VouchRetracted-filter':
+        return (handlers.vouchRetracted ?? (() => []))(from, to);
       default:
         throw new Error(`Unexpected filter in test: ${String(filter)}`);
     }
@@ -862,7 +891,7 @@ describe('runChainEventIndexerCycle — RoleGranted/RoleRevoked (Slice 2)', () =
     expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
   });
 
-  it('handles all twelve event types found in the same chunk, advancing the checkpoint to the min toBlock across all twelve filters', async () => {
+  it('handles all fourteen event types found in the same chunk, advancing the checkpoint to the min toBlock across all fourteen filters', async () => {
     await seedCheckpoint(999);
     configureQueryFilter({
       memberRegistered: () => [fakeEventLog({ eventName: 'MemberRegistered', transactionHash: '0xa', blockNumber: 1002, index: 0 })],
@@ -877,13 +906,15 @@ describe('runChainEventIndexerCycle — RoleGranted/RoleRevoked (Slice 2)', () =
       trusteeDeclined: () => [fakeTrusteeDeclinedEventLog({ transactionHash: '0xj', blockNumber: 1004, index: 0 })],
       trusteeRevoked: () => [fakeTrusteeRevokedEventLog({ transactionHash: '0xk', blockNumber: 1005, index: 0 })],
       trusteeLevelUpdated: () => [fakeTrusteeLevelUpdatedEventLog({ transactionHash: '0xl', blockNumber: 1006, index: 0 })],
+      vouchGiven: () => [fakeVouchEventLog({ eventName: 'VouchGiven', transactionHash: '0xm', blockNumber: 1007, index: 0 })],
+      vouchRetracted: () => [fakeVouchEventLog({ eventName: 'VouchRetracted', transactionHash: '0xn', blockNumber: 1008, index: 0 })],
     });
 
     const result = await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 })); // targetBlock 1010
 
-    expect(result.eventsFound).toBe(12);
-    expect(result.newlyCached).toBe(12);
-    expect(await getCheckpointBlock()).toBe(1010); // all twelve filters shared the same [1000,1010] range
+    expect(result.eventsFound).toBe(14);
+    expect(result.newlyCached).toBe(14);
+    expect(await getCheckpointBlock()).toBe(1010); // all fourteen filters shared the same [1000,1010] range
     expect((await getCachedEvent('0xa', 0))?.eventName).toBe('MemberRegistered');
     expect((await getCachedEvent('0xb', 0))?.eventName).toBe('WalletLinked');
     expect((await getCachedEvent('0xc', 0))?.eventName).toBe('RoleGranted');
@@ -896,6 +927,8 @@ describe('runChainEventIndexerCycle — RoleGranted/RoleRevoked (Slice 2)', () =
     expect((await getCachedEvent('0xj', 0))?.eventName).toBe('TrusteeDeclined');
     expect((await getCachedEvent('0xk', 0))?.eventName).toBe('TrusteeRevoked');
     expect((await getCachedEvent('0xl', 0))?.eventName).toBe('TrusteeLevelUpdated');
+    expect((await getCachedEvent('0xm', 0))?.eventName).toBe('VouchGiven');
+    expect((await getCachedEvent('0xn', 0))?.eventName).toBe('VouchRetracted');
   });
 });
 
@@ -1519,6 +1552,130 @@ describe('runChainEventIndexerCycle — TrusteeLevelUpdated (Slice 5)', () => {
     );
 
     const cached = await getCachedEvent('0xtltx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
+  });
+});
+
+describe('runChainEventIndexerCycle — VouchGiven/VouchRetracted (Slice 6)', () => {
+  const voucherId = 'user-voucher';
+  const voucheeId = 'user-vouchee';
+  const voucherIdHash = ethers.id(voucherId);
+  const voucheeIdHash = ethers.id(voucheeId);
+
+  it('classifies VouchGiven as matched against a vouches doc with a "vouched" onChainHistory entry', async () => {
+    await admin
+      .firestore()
+      .collection('vouches')
+      .doc(`${voucherId}_${voucheeId}`)
+      .set({ voucherIdHash, voucheeIdHash, chainStatus: 'Active', onChainHistory: [{ action: 'vouched' }] });
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      vouchGiven: () => [
+        fakeVouchEventLog({ eventName: 'VouchGiven', transactionHash: '0xvgtx1', blockNumber: 1005, index: 0, voucherIdHash, voucheeIdHash }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+
+    const cached = await getCachedEvent('0xvgtx1', 0);
+    expect(cached).toMatchObject({
+      eventName: 'VouchGiven',
+      reconciliationStatus: 'matched',
+      matchedFirestoreRef: `vouches/${voucherId}_${voucheeId}`,
+    });
+  });
+
+  it('classifies VouchGiven as legitimate_chain_only when unmatched, no sync-queue entry, and signed by some other real wallet', async () => {
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      vouchGiven: () => [
+        fakeVouchEventLog({ eventName: 'VouchGiven', transactionHash: '0xvgtx1', blockNumber: 1005, index: 0, voucherIdHash, voucheeIdHash }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(
+      admin.firestore(),
+      makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xvgtx1': '0xSomeRealUserWallet' } })
+    );
+
+    const cached = await getCachedEvent('0xvgtx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
+  });
+
+  it('classifies VouchRetracted as matched against a vouches doc with a "retracted" onChainHistory entry', async () => {
+    await admin
+      .firestore()
+      .collection('vouches')
+      .doc(`${voucherId}_${voucheeId}`)
+      .set({
+        voucherIdHash,
+        voucheeIdHash,
+        chainStatus: 'Retracted',
+        onChainHistory: [{ action: 'vouched' }, { action: 'retracted' }],
+      });
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      vouchRetracted: () => [
+        fakeVouchEventLog({ eventName: 'VouchRetracted', transactionHash: '0xvrtx1', blockNumber: 1005, index: 0, voucherIdHash, voucheeIdHash }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+
+    const cached = await getCachedEvent('0xvrtx1', 0);
+    expect(cached).toMatchObject({
+      eventName: 'VouchRetracted',
+      reconciliationStatus: 'matched',
+      matchedFirestoreRef: `vouches/${voucherId}_${voucheeId}`,
+    });
+  });
+
+  it('does not match VouchRetracted against a doc that was only ever vouched, never retracted', async () => {
+    await admin
+      .firestore()
+      .collection('vouches')
+      .doc(`${voucherId}_${voucheeId}`)
+      .set({ voucherIdHash, voucheeIdHash, chainStatus: 'Active', onChainHistory: [{ action: 'vouched' }] });
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      vouchRetracted: () => [
+        fakeVouchEventLog({ eventName: 'VouchRetracted', transactionHash: '0xvrtx1', blockNumber: 1005, index: 0, voucherIdHash, voucheeIdHash }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(
+      admin.firestore(),
+      makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xvrtx1': '0xSomeRealUserWallet' } })
+    );
+
+    const cached = await getCachedEvent('0xvrtx1', 0);
+    expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
+  });
+
+  it('classifies VouchRetracted as legitimate_chain_only when unmatched, no sync-queue entry, and signed by some other real wallet', async () => {
+    await seedCheckpoint(999);
+    configureQueryFilter({
+      memberRegistered: () => [],
+      walletLinked: () => [],
+      vouchRetracted: () => [
+        fakeVouchEventLog({ eventName: 'VouchRetracted', transactionHash: '0xvrtx1', blockNumber: 1005, index: 0, voucherIdHash, voucheeIdHash }),
+      ],
+    });
+
+    await runChainEventIndexerCycle(
+      admin.firestore(),
+      makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xvrtx1': '0xSomeRealUserWallet' } })
+    );
+
+    const cached = await getCachedEvent('0xvrtx1', 0);
     expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
   });
 });

@@ -19,6 +19,11 @@
 // trusteeRelationships/{id}/trusteeHistory, a subcollection parallel to permissionHistory that
 // (unlike permissionHistory) already stores trustorIdHash/trusteeIdHash directly on each event,
 // so no in-memory hash recomputation is needed at match time — see reconciliationRules.ts.
+// Slice 6 adds VouchGiven/VouchRetracted — both onlyActiveMember (giveVouch/retractVouch), same
+// (voucherIdHash, voucheeIdHash, timestamp) shape as each other, matched against the flat
+// top-level `vouches` collection (vouchService.ts), which — like trusteeHistory — already stores
+// both hashes directly on the doc, so this is a plain two-field equality query, not even a
+// collectionGroup scan.
 
 export type MemberRoleManagerEventName =
   | 'MemberRegistered'
@@ -32,7 +37,9 @@ export type MemberRoleManagerEventName =
   | 'TrusteeAccepted'
   | 'TrusteeDeclined'
   | 'TrusteeRevoked'
-  | 'TrusteeLevelUpdated';
+  | 'TrusteeLevelUpdated'
+  | 'VouchGiven'
+  | 'VouchRetracted';
 
 // Minimal shape of what ethers' queryFilter returns for these two events — just enough to
 // decode, not the full EventLog surface.
@@ -544,6 +551,56 @@ export function decodeTrusteeLevelUpdatedEventLog(
       trusteeIdHash: log.args.trusteeIdHash,
       oldLevel: Number(log.args.oldLevel),
       newLevel: Number(log.args.newLevel),
+    },
+  };
+}
+
+// ============================================================================
+// VouchGiven / VouchRetracted (Slice 6)
+// ============================================================================
+
+export type VouchEventName = 'VouchGiven' | 'VouchRetracted';
+
+export interface RawVouchEventLog {
+  eventName: VouchEventName;
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  contractAddress: string;
+  chainId: number;
+  args: {
+    voucherIdHash: string;
+    voucheeIdHash: string;
+    timestamp: bigint | number;
+  };
+}
+
+export interface DecodedVouchEvent {
+  eventName: VouchEventName;
+  txHash: string;
+  blockNumber: number;
+  logIndex: number;
+  contractAddress: string;
+  chainId: number;
+  blockTimestampSeconds: number;
+  args: {
+    voucherIdHash: string;
+    voucheeIdHash: string;
+  };
+}
+
+export function decodeVouchEventLog(log: RawVouchEventLog): DecodedVouchEvent {
+  return {
+    eventName: log.eventName,
+    txHash: log.transactionHash,
+    blockNumber: log.blockNumber,
+    logIndex: log.index,
+    contractAddress: log.contractAddress,
+    chainId: log.chainId,
+    blockTimestampSeconds: Number(log.args.timestamp),
+    args: {
+      voucherIdHash: log.args.voucherIdHash,
+      voucheeIdHash: log.args.voucheeIdHash,
     },
   };
 }
