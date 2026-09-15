@@ -1,5 +1,12 @@
 # Belrose Health — Claude Code Context
 
+> This file is written for Claude Code, but it doubles as an engineering
+> reference for humans too. If you're a new contributor getting set up,
+> start with [`docs/README.md`](docs/README.md) (setup) and
+> [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) (conventions, architecture
+> primer, credentials checklist) — then come back here for the day-to-day
+> reference below.
+
 ## Project Overview
 
 Belrose Health is a **decentralized, patient-controlled health records platform**. Patients can collect, standardize (FHIR), store with end-to-end encryption, and share their health data as desired. A credibility system involving record hashes, verifications, and disputes is stored on the Base blockchain. All health data is stored with end-to-end encryption. NEVER store plaintext health data.
