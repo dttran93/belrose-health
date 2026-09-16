@@ -1,8 +1,11 @@
 // functions/src/chainIndexer/chainEventIndexerService.ts
 //
-// Core, testable logic for the event-based on-chain indexer (Slice 1: MemberRoleManager's
-// MemberRegistered/WalletLinked only — see the plan's "Deferred to follow-up tickets" section for
-// what comes next).
+// Core, testable logic for the event-based on-chain indexer. Generic over which contract it's
+// scanning (see chainIndexerContractConfig.ts's ChainIndexerContractConfig) — originally built
+// hardcoded to MemberRoleManager only (Slice 1 onward), generalized when HealthRecordCore was
+// added as a second contract. Every internal reference to a specific contract's proxy address,
+// deployment block, or event registry now comes from the `config` parameter instead of a
+// module-level constant.
 //
 // Per invocation: resume from the persisted checkpoint (seeded at the contract's deployment
 // block on first run), scan forward in chunks up to `currentBlock - REORG_CONFIRMATION_BUFFER`
@@ -12,81 +15,26 @@
 
 import { Firestore, Timestamp, getFirestore } from 'firebase-admin/firestore';
 import { ethers } from 'ethers';
-import {
-  MEMBER_ROLE_MANAGER,
-  NETWORK_CORE,
-  buildRpcUrl,
-  buildChainEventCacheDocId,
-  buildChainIndexerCheckpointDocId,
-} from '../_shared';
-import type { ChainEventCacheDoc, ChainIndexerCheckpoint } from '../_shared';
-import { MemberRoleManager__factory } from '../_shared/typechain';
-import type { MemberRoleManager } from '../_shared/typechain';
+import { buildRpcUrl, buildChainEventCacheDocId, buildChainIndexerCheckpointDocId } from '../_shared';
+import type { ChainEventCacheDoc, ChainIndexerCheckpoint, BlockchainContract } from '../_shared';
+import { NETWORK_CORE } from '../_shared';
 import type {
-  DecodedMemberRoleManagerEvent,
-  DecodedRoleEvent,
-  DecodedRoleChangedEvent,
-  DecodedMemberStatusChangedEvent,
-  DecodedOwnershipVoluntarilyLeftEvent,
-  DecodedTrusteeProposedAcceptedEvent,
-  DecodedTrusteeDeclinedEvent,
-  DecodedTrusteeRevokedEvent,
-  DecodedTrusteeLevelUpdatedEvent,
-  DecodedVouchEvent,
-  DecodedHealthRecordCoreUpdatedEvent,
-  DecodedAdminTransferredEvent,
-  MemberRoleManagerEventName,
-  RawMemberRoleManagerLog,
-  RawRoleEventLog,
-  RawRoleChangedEventLog,
-  RawMemberStatusChangedEventLog,
-  RawOwnershipVoluntarilyLeftEventLog,
-  RawTrusteeProposedAcceptedEventLog,
-  RawTrusteeDeclinedEventLog,
-  RawTrusteeRevokedEventLog,
-  RawTrusteeLevelUpdatedEventLog,
-  RawVouchEventLog,
-  RawHealthRecordCoreUpdatedEventLog,
-  RawAdminTransferredEventLog,
-} from './eventDecoders';
-import { CHAIN_EVENT_REGISTRY } from './eventRegistry';
-
-// Every event registered in CHAIN_EVENT_REGISTRY shares this shape except `args`, whose inner
-// fields vary per event type — see eventRegistry.ts.
-type DecodedChainEvent =
-  | DecodedMemberRoleManagerEvent
-  | DecodedRoleEvent
-  | DecodedRoleChangedEvent
-  | DecodedMemberStatusChangedEvent
-  | DecodedOwnershipVoluntarilyLeftEvent
-  | DecodedTrusteeProposedAcceptedEvent
-  | DecodedTrusteeDeclinedEvent
-  | DecodedTrusteeRevokedEvent
-  | DecodedTrusteeLevelUpdatedEvent
-  | DecodedVouchEvent
-  | DecodedHealthRecordCoreUpdatedEvent
-  | DecodedAdminTransferredEvent;
-
-type RawChainLog =
-  | RawMemberRoleManagerLog
-  | RawRoleEventLog
-  | RawRoleChangedEventLog
-  | RawMemberStatusChangedEventLog
-  | RawOwnershipVoluntarilyLeftEventLog
-  | RawTrusteeProposedAcceptedEventLog
-  | RawTrusteeDeclinedEventLog
-  | RawTrusteeRevokedEventLog
-  | RawTrusteeLevelUpdatedEventLog
-  | RawVouchEventLog
-  | RawHealthRecordCoreUpdatedEventLog
-  | RawAdminTransferredEventLog;
+  ChainIndexerContractConfig,
+  QueryableChainContract,
+  GenericRawChainLog,
+  GenericDecodedChainEvent,
+} from './chainIndexerContractConfig';
+import { MEMBER_ROLE_MANAGER_INDEXER_CONFIG } from './memberRoleManagerEventRegistry';
+import { HEALTH_RECORD_CORE_INDEXER_CONFIG } from './healthRecordCoreEventRegistry';
 
 const REORG_CONFIRMATION_BUFFER = 20; // blocks — guards against reading logs an L2 reorg could still drop. TBD could be adjusted based on chain behavior
 const INITIAL_CHUNK_SIZE = 500;
 const MIN_CHUNK_SIZE = 25;
 // Caps the per-cycle "sweep lingering unclassified docs" pass (see sweepUnclassifiedEvents) so a
 // large backlog of stuck docs can't itself cause this sweep to run long enough to be killed by
-// the function timeout — any remainder just gets picked up on the next cycle.
+// the function timeout — any remainder just gets picked up on the next cycle. Per-contract-per-
+// cycle since sweepUnclassifiedEvents now scopes its query by contract (see that function's own
+// comment) — one contract's backlog can no longer crowd out another's sweep budget.
 const UNCLASSIFIED_SWEEP_LIMIT = 200;
 
 export function getReadOnlyProvider(): ethers.JsonRpcProvider {
@@ -118,8 +66,8 @@ function isAlreadyExistsError(error: unknown): boolean {
 // bare contract name — so a future network/proxy change (ticket #474) can never resume scanning
 // the wrong contract from a stale block number. It just starts a brand-new checkpoint under a new
 // ID instead, since chainId/contractAddress are baked into the ID itself. Always resolves to the
-// same ID today (one network, one permanent proxy address per CLAUDE.md), but costs nothing to
-// get right now versus a real data migration once a checkpoint doc actually exists in production.
+// same ID today (one network, one permanent proxy address per contract, per CLAUDE.md), but costs
+// nothing to get right now versus a real data migration once a checkpoint doc actually exists.
 async function getCheckpoint(db: Firestore, docId: string): Promise<ChainIndexerCheckpoint | null> {
   const snap = await db.collection('chainIndexerCheckpoints').doc(docId).get();
   return snap.exists ? (snap.data() as ChainIndexerCheckpoint) : null;
@@ -128,6 +76,7 @@ async function getCheckpoint(db: Firestore, docId: string): Promise<ChainIndexer
 async function saveCheckpoint(
   db: Firestore,
   docId: string,
+  contract: BlockchainContract,
   chainId: number,
   contractAddress: string,
   lastScannedBlock: number,
@@ -135,7 +84,7 @@ async function saveCheckpoint(
   error?: string
 ): Promise<void> {
   const checkpoint: ChainIndexerCheckpoint = {
-    contract: 'MemberRoleManager',
+    contract,
     chainId,
     contractAddress,
     lastScannedBlock,
@@ -155,9 +104,10 @@ interface ChunkResult {
  *  error until it succeeds or hits MIN_CHUNK_SIZE (at which point the error is real, not a range
  *  problem, and is rethrown). Returns the logs found and the block the scan actually reached, so
  *  the caller knows how far it got even when it had to back off. */
-async function queryFilterWithBackoff(
-  contract: MemberRoleManager,
-  eventName: MemberRoleManagerEventName,
+async function queryFilterWithBackoff<TContract extends QueryableChainContract, TEventName extends string>(
+  contract: TContract,
+  eventName: TEventName,
+  registry: ChainIndexerContractConfig<TContract, TEventName>['registry'],
   fromBlock: number,
   toBlock: number
 ): Promise<ChunkResult> {
@@ -165,7 +115,7 @@ async function queryFilterWithBackoff(
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
-      const filter = CHAIN_EVENT_REGISTRY[eventName].getFilter(contract);
+      const filter = registry[eventName].getFilter(contract);
       const logs = await contract.queryFilter(filter, fromBlock, attemptToBlock);
       return { logs: logs as unknown as ethers.EventLog[], toBlock: attemptToBlock };
     } catch (error) {
@@ -178,19 +128,20 @@ async function queryFilterWithBackoff(
 
 /**
  * Builds the raw-log shape each registry entry's `decode` expects. `timestamp` is pulled off
- * generically here (every event registered in CHAIN_EVENT_REGISTRY carries it) — only the
- * event-specific fields come from the per-type `toRawArgs`. The union cast at the end is the one
- * deliberate dynamic-dispatch point in this file: the registry's whole point is one generic loop
- * over differently-shaped events, which necessarily costs static type-checking here (same
- * tradeoff already accepted in blockchainSyncRetryService.ts's REPLAY_REGISTRY) — correctness for
- * this seam leans on the per-event-type tests in chainEventDecoders.test.ts instead.
+ * generically here (every event registered anywhere carries it) — only the event-specific fields
+ * come from the per-type `toRawArgs`. The union cast at the end is the one deliberate
+ * dynamic-dispatch point in this file: the registry's whole point is one generic loop over
+ * differently-shaped events, which necessarily costs static type-checking here (same tradeoff
+ * already accepted in blockchainSyncRetryService.ts's REPLAY_REGISTRY) — correctness for this
+ * seam leans on the per-event-type decoder tests instead.
  */
-function toRawLog(
+function toRawLog<TContract extends QueryableChainContract, TEventName extends string>(
   log: ethers.EventLog,
-  eventName: MemberRoleManagerEventName,
+  eventName: TEventName,
+  registry: ChainIndexerContractConfig<TContract, TEventName>['registry'],
   contractAddress: string,
   chainId: number
-): RawChainLog {
+): GenericRawChainLog {
   return {
     eventName,
     transactionHash: log.transactionHash,
@@ -199,10 +150,10 @@ function toRawLog(
     contractAddress,
     chainId,
     args: {
-      ...CHAIN_EVENT_REGISTRY[eventName].toRawArgs(log),
+      ...registry[eventName].toRawArgs(log),
       timestamp: log.args.timestamp as bigint,
     },
-  } as RawChainLog;
+  };
 }
 
 /**
@@ -213,24 +164,35 @@ function toRawLog(
  * blocks so a re-scan would never revisit them anyway — this sweep is the only way they'd ever
  * get classified. Bounded by UNCLASSIFIED_SWEEP_LIMIT so a large backlog can't itself risk timing
  * out; run again next cycle to pick up any remainder.
+ *
+ * Scoped to config.contract via a `.where('contract', '==', ...)` filter — once there are two
+ * contracts, a global cross-contract query would either need a second lookup to find the right
+ * registry per doc, or risk one contract's backlog starving the other's sweep budget. Scoping the
+ * query itself is simpler and needs no new Firestore index (an equality filter on a second field,
+ * same as every other multi-`where` query already in this file/codebase).
  */
-async function sweepUnclassifiedEvents(db: Firestore, provider: ethers.Provider): Promise<number> {
+async function sweepUnclassifiedEvents<TContract extends QueryableChainContract, TEventName extends string>(
+  db: Firestore,
+  provider: ethers.Provider,
+  config: ChainIndexerContractConfig<TContract, TEventName>
+): Promise<number> {
   const snap = await db
     .collection('chainEventCache')
     .where('reconciliationStatus', '==', 'unclassified')
+    .where('contract', '==', config.contract)
     .limit(UNCLASSIFIED_SWEEP_LIMIT)
     .get();
 
   let reconciled = 0;
   for (const doc of snap.docs) {
     const data = doc.data() as ChainEventCacheDoc;
-    const entry = CHAIN_EVENT_REGISTRY[data.eventName as MemberRoleManagerEventName];
+    const entry = config.registry[data.eventName as TEventName];
     if (!entry) {
       // Shouldn't happen — every doc is written with an eventName this file itself just cached
       // it under — but a doc with an unrecognized eventName must never take down the whole sweep
       // batch; skip it and let it show up in logs instead.
       console.error(
-        `⚠️ chainEventCache/${doc.id} has unrecognized eventName "${data.eventName}" — skipping sweep`
+        `⚠️ chainEventCache/${doc.id} has unrecognized eventName "${data.eventName}" for contract ${config.contract} — skipping sweep`
       );
       continue;
     }
@@ -249,28 +211,28 @@ export interface ChainEventIndexerCycleResult {
   reconciledUnclassified: number;
 }
 
-export async function runChainEventIndexerCycle(
+export async function runChainEventIndexerCycle<TContract extends QueryableChainContract, TEventName extends string>(
+  config: ChainIndexerContractConfig<TContract, TEventName>,
   db: Firestore = getFirestore(),
   provider: ethers.JsonRpcProvider = getReadOnlyProvider()
 ): Promise<ChainEventIndexerCycleResult> {
-  const contract = MemberRoleManager__factory.connect(MEMBER_ROLE_MANAGER.proxy, provider);
+  const contract = config.connect(config.proxyAddress, provider);
   // Captured once per cycle from what's actually being queried (not re-read from global config
-  // later at cache-write time) — see eventDecoders.ts's RawMemberRoleManagerLog comment.
+  // later at cache-write time) — see memberRoleManagerEventDecoders.ts's RawMemberRoleManagerLog
+  // comment.
   const contractAddress = contract.target as string;
   const chainId = Number((await provider.getNetwork()).chainId);
-  const checkpointDocId = buildChainIndexerCheckpointDocId('MemberRoleManager', chainId, contractAddress);
+  const checkpointDocId = buildChainIndexerCheckpointDocId(config.contract, chainId, contractAddress);
 
   // Runs first, independent of the forward scan below — catches any doc left stuck at
   // 'unclassified' by a prior interrupted run (see this function's own timeout — a real
   // production incident on 2026-09-11: no explicit timeoutSeconds meant every run was being
   // killed by Cloud Functions' 60s default mid-backfill, leaving events uncatchable by the
   // forward scan alone since the checkpoint had already moved past their blocks).
-  const reconciledUnclassified = await sweepUnclassifiedEvents(db, provider);
+  const reconciledUnclassified = await sweepUnclassifiedEvents(db, provider, config);
 
   const checkpoint = await getCheckpoint(db, checkpointDocId);
-  const startBlock = checkpoint
-    ? checkpoint.lastScannedBlock + 1
-    : MEMBER_ROLE_MANAGER.deploymentBlock;
+  const startBlock = checkpoint ? checkpoint.lastScannedBlock + 1 : config.deploymentBlock;
 
   const currentBlock = await provider.getBlockNumber();
   const targetBlock = currentBlock - REORG_CONFIRMATION_BUFFER;
@@ -294,9 +256,9 @@ export async function runChainEventIndexerCycle(
     while (cursor <= targetBlock) {
       const chunkEnd = Math.min(cursor + chunkSize - 1, targetBlock);
 
-      const eventNames = Object.keys(CHAIN_EVENT_REGISTRY) as MemberRoleManagerEventName[];
+      const eventNames = Object.keys(config.registry) as TEventName[];
       const results = await Promise.all(
-        eventNames.map(name => queryFilterWithBackoff(contract, name, cursor, chunkEnd))
+        eventNames.map(name => queryFilterWithBackoff(contract, name, config.registry, cursor, chunkEnd))
       );
       // Every filter targets the same [cursor, chunkEnd] range and only backs off on the same
       // kind of error, so in practice they all land on the same actual toBlock; take the smallest
@@ -307,17 +269,17 @@ export async function runChainEventIndexerCycle(
       chunkSize = actualChunkEnd - cursor + 1;
 
       const logs = eventNames
-        .flatMap((name, i) => results[i].logs.map(l => toRawLog(l, name, contractAddress, chainId)))
+        .flatMap((name, i) => results[i].logs.map(l => toRawLog(l, name, config.registry, contractAddress, chainId)))
         .filter(l => l.blockNumber <= actualChunkEnd);
       eventsFound += logs.length;
 
       for (const log of logs) {
-        const decoded = CHAIN_EVENT_REGISTRY[log.eventName].decode(log);
-        const wasNew = await cacheAndReconcile(db, provider, decoded);
+        const decoded = config.registry[log.eventName as TEventName].decode(log);
+        const wasNew = await cacheAndReconcile(db, provider, config, decoded);
         if (wasNew) newlyCached++;
       }
 
-      await saveCheckpoint(db, checkpointDocId, chainId, contractAddress, actualChunkEnd, 'ok');
+      await saveCheckpoint(db, checkpointDocId, config.contract, chainId, contractAddress, actualChunkEnd, 'ok');
       cursor = actualChunkEnd + 1;
       chunkSize = INITIAL_CHUNK_SIZE; // reset for the next chunk — no reason to stay small once one succeeds
     }
@@ -325,6 +287,7 @@ export async function runChainEventIndexerCycle(
     await saveCheckpoint(
       db,
       checkpointDocId,
+      config.contract,
       chainId,
       contractAddress,
       cursor - 1,
@@ -346,21 +309,22 @@ export async function runChainEventIndexerCycle(
 /** Writes the event to chainEventCache (idempotent via `.create()` — a doc that already exists,
  *  possibly already reconciled by a prior run, is left untouched) and reconciles it if new.
  *  Returns whether this was a newly-cached event. */
-async function cacheAndReconcile(
+async function cacheAndReconcile<TContract extends QueryableChainContract, TEventName extends string>(
   db: Firestore,
   provider: ethers.Provider,
-  decoded: DecodedChainEvent
+  config: ChainIndexerContractConfig<TContract, TEventName>,
+  decoded: GenericDecodedChainEvent
 ): Promise<boolean> {
   const docId = buildChainEventCacheDocId(decoded.txHash, decoded.logIndex);
   const docRef = db.collection('chainEventCache').doc(docId);
 
   const doc: ChainEventCacheDoc = {
-    contract: 'MemberRoleManager',
+    contract: config.contract,
     eventName: decoded.eventName,
     logIndex: decoded.logIndex,
     // Built straight from what the decoded event itself captured at query time, not re-derived
-    // via buildMemberRegistryRef (which would silently re-read MEMBER_ROLE_MANAGER.proxy/
-    // NETWORK_CORE.chainId fresh from current config) — see eventDecoders.ts's comment.
+    // via a build*Ref helper (which would silently re-read the contract's proxy/chainId fresh
+    // from current config) — see memberRoleManagerEventDecoders.ts's comment.
     blockchainRef: {
       txHash: decoded.txHash,
       blockNumber: decoded.blockNumber,
@@ -383,7 +347,44 @@ async function cacheAndReconcile(
     throw error;
   }
 
-  const classification = await CHAIN_EVENT_REGISTRY[decoded.eventName].reconcile(db, provider, doc);
+  const classification = await config.registry[decoded.eventName as TEventName].reconcile(db, provider, doc);
   await docRef.update(classification);
   return true;
+}
+
+/** Every contract this indexer currently covers. Order matters for
+ *  runChainEventIndexerCycleForAllContracts: MemberRoleManager first so its steady-state catch-up
+ *  scan is never starved by HealthRecordCore's (much larger, one-time) initial historical
+ *  backfill sharing the same function invocation's time budget. */
+export const CHAIN_INDEXER_CONTRACTS = [MEMBER_ROLE_MANAGER_INDEXER_CONFIG, HEALTH_RECORD_CORE_INDEXER_CONFIG] as const;
+
+/**
+ * Runs one cycle for every registered contract, in order. Used by both the scheduled function and
+ * the manual "Run Indexer Now" callable — see functions/src/handlers/chainEventIndexer.ts.
+ *
+ * One contract's cycle throwing (e.g. a transient RPC failure) must never cost another contract
+ * its own scan window this tick — caught and recorded per-contract rather than propagated, since
+ * each contract's own checkpoint doc already carries the durable 'error' status/lastError for
+ * whichever one failed (see saveCheckpoint's catch branch above).
+ */
+export async function runChainEventIndexerCycleForAllContracts(
+  db: Firestore = getFirestore(),
+  provider: ethers.JsonRpcProvider = getReadOnlyProvider()
+): Promise<Record<BlockchainContract, ChainEventIndexerCycleResult | { error: string }>> {
+  const results = {} as Record<BlockchainContract, ChainEventIndexerCycleResult | { error: string }>;
+  for (const config of CHAIN_INDEXER_CONTRACTS) {
+    try {
+      // Each element of CHAIN_INDEXER_CONTRACTS is a differently-instantiated
+      // ChainIndexerContractConfig<TContract, TEventName> (MemberRoleManager's own event names vs
+      // HealthRecordCore's own) — TypeScript can't infer a single TContract/TEventName pair that
+      // fits every element of a heterogeneous tuple, so this cast erases to the widest shape
+      // runChainEventIndexerCycle's generic signature accepts. Same "dynamic dispatch, tests carry
+      // correctness" tradeoff already accepted for toRawLog's own union cast above.
+      const genericConfig = config as unknown as ChainIndexerContractConfig<QueryableChainContract, string>;
+      results[config.contract] = await runChainEventIndexerCycle(genericConfig, db, provider);
+    } catch (error) {
+      results[config.contract] = { error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  return results;
 }

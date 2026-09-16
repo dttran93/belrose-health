@@ -1,4 +1,4 @@
-// functions/test/chainEventDecoders.test.ts
+// functions/test/memberRoleManagerEventDecoders.test.ts
 //
 // Pure unit tests for the event decoders — no Firestore/emulator/network involved. Feeds
 // fabricated raw-log fixtures (matching the minimal duck-typed shape decodeMemberRoleManagerLog
@@ -30,7 +30,7 @@ import {
   type RawVouchEventLog,
   type RawHealthRecordCoreUpdatedEventLog,
   type RawAdminTransferredEventLog,
-} from '../src/chainIndexer/eventDecoders';
+} from '../src/chainIndexer/memberRoleManagerEventDecoders';
 
 function fakeLog(overrides: Partial<RawMemberRoleManagerLog> = {}): RawMemberRoleManagerLog {
   return {

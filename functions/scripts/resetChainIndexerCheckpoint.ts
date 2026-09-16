@@ -41,7 +41,7 @@ import * as admin from 'firebase-admin';
 import * as path from 'path';
 import { getFirestore } from 'firebase-admin/firestore';
 import { MEMBER_ROLE_MANAGER, NETWORK_CORE, buildChainIndexerCheckpointDocId } from '../src/_shared';
-import { CHAIN_EVENT_REGISTRY } from '../src/chainIndexer/eventRegistry';
+import { CHAIN_EVENT_REGISTRY } from '../src/chainIndexer/memberRoleManagerEventRegistry';
 import { getReadOnlyProvider } from '../src/chainIndexer/chainEventIndexerService';
 
 // ── Firebase init ─────────────────────────────────────────────────────────────

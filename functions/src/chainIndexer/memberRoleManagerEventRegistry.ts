@@ -1,4 +1,4 @@
-// functions/src/chainIndexer/eventRegistry.ts
+// functions/src/chainIndexer/memberRoleManagerEventRegistry.ts
 //
 // Per-event-type dispatch table for the chain event indexer — mirrors
 // functions/src/services/blockchainSyncRetryService.ts's REPLAY_REGISTRY shape: one generic
@@ -6,11 +6,14 @@
 // entry for the two pieces that actually vary by event — how to filter/decode the raw log, and
 // how to reconcile it against Firestore. Adding a new event type means adding one entry here and
 // nowhere else in chainEventIndexerService.ts's loop logic.
+//
+// Covers MemberRoleManager only — see healthRecordCoreEventRegistry.ts for the HealthRecordCore
+// contract's own registry, added when this indexer became multi-contract.
 
-import type { ethers, Provider } from 'ethers';
-import type { Firestore } from 'firebase-admin/firestore';
 import type { MemberRoleManager } from '../_shared/typechain';
-import type { ChainEventCacheDoc } from '../_shared';
+import { MemberRoleManager__factory } from '../_shared/typechain';
+import { MEMBER_ROLE_MANAGER } from '../_shared';
+import type { ChainEventRegistryEntry, ChainIndexerContractConfig } from './chainIndexerContractConfig';
 import {
   decodeMemberRoleManagerLog,
   decodeRoleEventLog,
@@ -37,7 +40,7 @@ import {
   type RawVouchEventLog,
   type RawHealthRecordCoreUpdatedEventLog,
   type RawAdminTransferredEventLog,
-} from './eventDecoders';
+} from './memberRoleManagerEventDecoders';
 import {
   reconcileMemberEvent,
   reconcileRoleEvent,
@@ -53,52 +56,9 @@ import {
   reconcileVouchRetractedEvent,
   reconcileHealthRecordCoreUpdatedEvent,
   reconcileAdminTransferredEvent,
-  type ReconciliationResult,
-} from './reconciliationService';
+} from './memberRoleManagerReconciliationService';
 
-type AnyRawLog =
-  | RawMemberRoleManagerLog
-  | RawRoleEventLog
-  | RawRoleChangedEventLog
-  | RawMemberStatusChangedEventLog
-  | RawOwnershipVoluntarilyLeftEventLog
-  | RawTrusteeProposedAcceptedEventLog
-  | RawTrusteeDeclinedEventLog
-  | RawTrusteeRevokedEventLog
-  | RawTrusteeLevelUpdatedEventLog
-  | RawVouchEventLog
-  | RawHealthRecordCoreUpdatedEventLog
-  | RawAdminTransferredEventLog;
-
-type AnyDecoder =
-  | typeof decodeMemberRoleManagerLog
-  | typeof decodeRoleEventLog
-  | typeof decodeRoleChangedEventLog
-  | typeof decodeMemberStatusChangedEventLog
-  | typeof decodeOwnershipVoluntarilyLeftEventLog
-  | typeof decodeTrusteeProposedAcceptedEventLog
-  | typeof decodeTrusteeDeclinedEventLog
-  | typeof decodeTrusteeRevokedEventLog
-  | typeof decodeTrusteeLevelUpdatedEventLog
-  | typeof decodeVouchEventLog
-  | typeof decodeHealthRecordCoreUpdatedEventLog
-  | typeof decodeAdminTransferredEventLog;
-
-export interface ChainEventRegistryEntry {
-  getFilter: (contract: MemberRoleManager) => ethers.DeferredTopicFilter;
-  // Pulls the event-specific fields off a raw ethers EventLog's .args — timestamp is handled
-  // once, generically, by chainEventIndexerService.ts's toRawLog, since every event registered
-  // here carries it.
-  toRawArgs: (log: ethers.EventLog) => Record<string, unknown>;
-  decode: (log: AnyRawLog) => ReturnType<AnyDecoder>;
-  reconcile: (
-    db: Firestore,
-    provider: Provider,
-    doc: Pick<ChainEventCacheDoc, 'args' | 'blockchainRef'>
-  ) => Promise<ReconciliationResult>;
-}
-
-export const CHAIN_EVENT_REGISTRY: Record<MemberRoleManagerEventName, ChainEventRegistryEntry> = {
+export const CHAIN_EVENT_REGISTRY: Record<MemberRoleManagerEventName, ChainEventRegistryEntry<MemberRoleManager>> = {
   MemberRegistered: {
     getFilter: contract => contract.filters.MemberRegistered(),
     toRawArgs: log => ({ wallet: log.args.wallet as string, userIdHash: log.args.userIdHash as string }),
@@ -248,4 +208,18 @@ export const CHAIN_EVENT_REGISTRY: Record<MemberRoleManagerEventName, ChainEvent
     decode: log => decodeAdminTransferredEventLog(log as RawAdminTransferredEventLog),
     reconcile: reconcileAdminTransferredEvent,
   },
+};
+
+/** Everything chainEventIndexerService.ts's generic loop needs to run a full cycle against
+ *  MemberRoleManager — see chainIndexerContractConfig.ts's own doc comment for why this shape
+ *  exists (multi-contract support). */
+export const MEMBER_ROLE_MANAGER_INDEXER_CONFIG: ChainIndexerContractConfig<
+  MemberRoleManager,
+  MemberRoleManagerEventName
+> = {
+  contract: 'MemberRoleManager',
+  connect: MemberRoleManager__factory.connect,
+  proxyAddress: MEMBER_ROLE_MANAGER.proxy,
+  deploymentBlock: MEMBER_ROLE_MANAGER.deploymentBlock,
+  registry: CHAIN_EVENT_REGISTRY,
 };

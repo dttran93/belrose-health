@@ -1,4 +1,4 @@
-// functions/test/chainReconciliationRules.test.ts
+// functions/test/memberRoleManagerReconciliationRules.test.ts
 //
 // Pure unit tests for the reconciliation predicates — no Firestore emulator involved. A minimal
 // fake Firestore stands in for the real Admin SDK, supporting only the exact chain these rules
@@ -22,7 +22,7 @@ import {
   findMatchingTrusteeHistoryForLevelUpdatedEvent,
   findMatchingVouchForGivenEvent,
   findMatchingVouchForRetractedEvent,
-} from '../src/chainIndexer/reconciliationRules';
+} from '../src/chainIndexer/memberRoleManagerReconciliationRules';
 import { ethers } from 'ethers';
 
 interface FakeDoc {

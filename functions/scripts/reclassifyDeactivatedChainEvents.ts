@@ -25,7 +25,7 @@ import * as path from 'path';
 import { ethers } from 'ethers';
 import * as dotenv from 'dotenv';
 import { getFirestore } from 'firebase-admin/firestore';
-import { reconcileMemberEvent } from '../src/chainIndexer/reconciliationService';
+import { reconcileMemberEvent } from '../src/chainIndexer/memberRoleManagerReconciliationService';
 
 dotenv.config({ path: path.join(__dirname, '..', '..', '.env.local') });
 

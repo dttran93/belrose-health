@@ -1,4 +1,4 @@
-// functions/test/chainEventIndexer.test.ts
+// functions/test/memberRoleManagerEventIndexer.test.ts
 //
 // Functions layer — the chain event indexer's core cycle. Mirrors
 // functions/test/blockchainSyncRetry.test.ts's mocking pattern: MemberRoleManager__factory is
@@ -39,11 +39,17 @@ const { mockContract, connectMock } = vi.hoisted(() => {
   return { mockContract, connectMock: vi.fn(() => mockContract) };
 });
 
+// chainEventIndexerService.ts now transitively imports HealthRecordCore__factory too (via
+// healthRecordCoreEventRegistry.ts's HEALTH_RECORD_CORE_INDEXER_CONFIG, constructed at module
+// load time) — this mock stubs it out unused-but-present so that construction doesn't crash on
+// `HealthRecordCore__factory.connect` being undefined. This file only exercises MemberRoleManager.
 vi.mock('../src/_shared/typechain', () => ({
   MemberRoleManager__factory: { connect: connectMock },
+  HealthRecordCore__factory: { connect: vi.fn() },
 }));
 
 import { runChainEventIndexerCycle } from '../src/chainIndexer/chainEventIndexerService';
+import { MEMBER_ROLE_MANAGER_INDEXER_CONFIG } from '../src/chainIndexer/memberRoleManagerEventRegistry';
 import { buildChainIndexerCheckpointDocId } from '../src/_shared';
 
 // Matches mockContract.target + the mock provider's chainId — the real doc ID the code under
@@ -443,7 +449,7 @@ describe('runChainEventIndexerCycle — basic scan + checkpoint', () => {
     });
     const provider = makeMockProvider({ currentBlock: 1030 }); // targetBlock = 1010
 
-    const result = await runChainEventIndexerCycle(admin.firestore(), provider);
+    const result = await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), provider);
 
     expect(result).toMatchObject({ scannedFromBlock: 1000, scannedToBlock: 1010, eventsFound: 1, newlyCached: 1 });
     expect(await getCheckpointBlock()).toBe(1010);
@@ -462,7 +468,7 @@ describe('runChainEventIndexerCycle — basic scan + checkpoint', () => {
   it('resumes from the persisted checkpoint on a subsequent run rather than rescanning', async () => {
     await seedCheckpoint(999);
     configureQueryFilter({ memberRegistered: () => [], walletLinked: () => [] });
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
     expect(await getCheckpointBlock()).toBe(1010);
 
     const secondCallRanges: Array<[number, number]> = [];
@@ -473,7 +479,7 @@ describe('runChainEventIndexerCycle — basic scan + checkpoint', () => {
       },
       walletLinked: () => [],
     });
-    const result = await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1050 }));
+    const result = await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1050 }));
 
     expect(result.scannedFromBlock).toBe(1011); // resumed right after the prior checkpoint
     expect(secondCallRanges[0][0]).toBe(1011);
@@ -484,7 +490,7 @@ describe('runChainEventIndexerCycle — basic scan + checkpoint', () => {
     await seedCheckpoint(1010);
     configureQueryFilter({ memberRegistered: () => [], walletLinked: () => [] });
 
-    const result = await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1025 })); // target = 1005, already behind checkpoint
+    const result = await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1025 })); // target = 1005, already behind checkpoint
 
     expect(result.eventsFound).toBe(0);
     expect(mockContract.queryFilter).not.toHaveBeenCalled();
@@ -499,12 +505,12 @@ describe('runChainEventIndexerCycle — basic scan + checkpoint', () => {
       ],
       walletLinked: () => [],
     });
-    const first = await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    const first = await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
     expect(first.newlyCached).toBe(1);
 
     // Simulate an overlapping rescan: reset the checkpoint back and feed the identical event again.
     await seedCheckpoint(999);
-    const second = await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    const second = await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     expect(second.eventsFound).toBe(1); // the log is "found" again by the scan
     expect(second.newlyCached).toBe(0); // but not newly cached — already exists
@@ -527,7 +533,7 @@ describe('runChainEventIndexerCycle — chunked scanning with backoff', () => {
       walletLinked: () => [],
     });
 
-    const result = await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 700 }));
+    const result = await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 700 }));
 
     expect(attempts.length).toBeGreaterThanOrEqual(2);
     const [firstFrom, firstTo] = attempts[0];
@@ -547,7 +553,7 @@ describe('runChainEventIndexerCycle — chunked scanning with backoff', () => {
     });
 
     await expect(
-      runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }))
+      runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }))
     ).rejects.toThrow('network timeout');
 
     // Checkpoint left at the last successfully-completed block (none here), marked as errored.
@@ -571,7 +577,7 @@ describe('runChainEventIndexerCycle — reconciliation classification', () => {
       walletLinked: () => [],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xtx1', 0);
     expect(cached).toMatchObject({ reconciliationStatus: 'matched', matchedFirestoreRef: 'users/user-1' });
@@ -591,7 +597,7 @@ describe('runChainEventIndexerCycle — reconciliation classification', () => {
       walletLinked: () => [],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xtx1', 0);
     expect(cached).toMatchObject({ reconciliationStatus: 'sync_queue_confirmed_missing_write', matchedSyncQueueId: 'sync-1' });
@@ -607,6 +613,7 @@ describe('runChainEventIndexerCycle — reconciliation classification', () => {
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xtx1': ADMIN_ADDRESS } })
     );
@@ -625,6 +632,7 @@ describe('runChainEventIndexerCycle — reconciliation classification', () => {
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xtx1': '0xSomeUnrelatedSigner' } })
     );
@@ -652,7 +660,7 @@ describe('runChainEventIndexerCycle — reconciliation classification', () => {
       walletLinked: () => [],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xtx1', 0);
     expect(cached).toMatchObject({
@@ -673,6 +681,7 @@ describe('runChainEventIndexerCycle — reconciliation classification', () => {
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xtx1': ADMIN_ADDRESS } })
     );
@@ -696,7 +705,7 @@ describe('runChainEventIndexerCycle — reconciliation classification', () => {
       walletLinked: () => [],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xtx1', 0);
     expect(cached).toMatchObject({ reconciliationStatus: 'matched' });
@@ -736,6 +745,7 @@ describe('runChainEventIndexerCycle — sweeping lingering unclassified events',
     configureQueryFilter({ memberRegistered: () => [], walletLinked: () => [] });
 
     const result = await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xstuck': ADMIN_ADDRESS } })
     );
@@ -763,7 +773,7 @@ describe('runChainEventIndexerCycle — sweeping lingering unclassified events',
     await seedCheckpoint(999);
     configureQueryFilter({ memberRegistered: () => [], walletLinked: () => [] });
 
-    const result = await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    const result = await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     expect(result.reconciledUnclassified).toBe(0);
     const snap = await admin.firestore().collection('chainEventCache').doc('0xdone_0').get();
@@ -798,7 +808,7 @@ describe('runChainEventIndexerCycle — RoleGranted/RoleRevoked (Slice 2)', () =
       ],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xroletx1', 0);
     expect(cached).toMatchObject({
@@ -831,7 +841,7 @@ describe('runChainEventIndexerCycle — RoleGranted/RoleRevoked (Slice 2)', () =
       ],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xroletx1', 0);
     expect(cached).toMatchObject({ reconciliationStatus: 'matched' });
@@ -868,7 +878,7 @@ describe('runChainEventIndexerCycle — RoleGranted/RoleRevoked (Slice 2)', () =
       ],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xroletx1', 0);
     expect(cached).toMatchObject({ reconciliationStatus: 'matched' });
@@ -889,7 +899,7 @@ describe('runChainEventIndexerCycle — RoleGranted/RoleRevoked (Slice 2)', () =
       ],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xroletx1', 0);
     expect(cached).toMatchObject({ eventName: 'RoleRevoked', reconciliationStatus: 'sync_queue_confirmed_missing_write', matchedSyncQueueId: 'sync-1' });
@@ -906,6 +916,7 @@ describe('runChainEventIndexerCycle — RoleGranted/RoleRevoked (Slice 2)', () =
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xroletx1': ADMIN_ADDRESS } })
     );
@@ -929,6 +940,7 @@ describe('runChainEventIndexerCycle — RoleGranted/RoleRevoked (Slice 2)', () =
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xroletx1': '0xSomeRealUserWallet' } })
     );
@@ -958,7 +970,7 @@ describe('runChainEventIndexerCycle — RoleGranted/RoleRevoked (Slice 2)', () =
       adminTransferred: () => [fakeAdminTransferredEventLog({ transactionHash: '0xp', blockNumber: 1010, index: 0 })],
     });
 
-    const result = await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 })); // targetBlock 1010
+    const result = await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 })); // targetBlock 1010
 
     expect(result.eventsFound).toBe(16);
     expect(result.newlyCached).toBe(16);
@@ -1016,7 +1028,7 @@ describe('runChainEventIndexerCycle — RoleChanged (Slice 3)', () => {
       ],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xchangetx1', 0);
     expect(cached).toMatchObject({
@@ -1057,7 +1069,7 @@ describe('runChainEventIndexerCycle — RoleChanged (Slice 3)', () => {
       ],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xchangetx1', 0);
     expect(cached).toMatchObject({ reconciliationStatus: 'matched' });
@@ -1091,7 +1103,7 @@ describe('runChainEventIndexerCycle — RoleChanged (Slice 3)', () => {
       ],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xchangetx1', 0);
     expect(cached).toMatchObject({ reconciliationStatus: expect.not.stringMatching('matched') });
@@ -1108,6 +1120,7 @@ describe('runChainEventIndexerCycle — RoleChanged (Slice 3)', () => {
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xchangetx1': '0xSomeRealUserWallet' } })
     );
@@ -1138,7 +1151,7 @@ describe('runChainEventIndexerCycle — MemberStatusChanged (Slice 4)', () => {
       ],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xstatustx1', 0);
     expect(cached).toMatchObject({
@@ -1164,6 +1177,7 @@ describe('runChainEventIndexerCycle — MemberStatusChanged (Slice 4)', () => {
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xstatustx1': '0xSomeRealUserWallet' } })
     );
@@ -1185,7 +1199,7 @@ describe('runChainEventIndexerCycle — MemberStatusChanged (Slice 4)', () => {
       ],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xstatustx1', 0);
     expect(cached).toMatchObject({ reconciliationStatus: 'deactivated_tracked' });
@@ -1202,6 +1216,7 @@ describe('runChainEventIndexerCycle — MemberStatusChanged (Slice 4)', () => {
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xstatustx1': ADMIN_ADDRESS } })
     );
@@ -1237,7 +1252,7 @@ describe('runChainEventIndexerCycle — OwnershipVoluntarilyLeft (Slice 4)', () 
       ],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xownertx1', 0);
     expect(cached).toMatchObject({
@@ -1270,6 +1285,7 @@ describe('runChainEventIndexerCycle — OwnershipVoluntarilyLeft (Slice 4)', () 
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xownertx1': '0xSomeRealUserWallet' } })
     );
@@ -1289,6 +1305,7 @@ describe('runChainEventIndexerCycle — OwnershipVoluntarilyLeft (Slice 4)', () 
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xownertx1': '0xSomeRealUserWallet' } })
     );
@@ -1321,7 +1338,7 @@ describe('runChainEventIndexerCycle — TrusteeProposed/TrusteeAccepted (Slice 5
       ],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xtptx1', 0);
     expect(cached).toMatchObject({
@@ -1348,7 +1365,7 @@ describe('runChainEventIndexerCycle — TrusteeProposed/TrusteeAccepted (Slice 5
       ],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xtatx1', 0);
     expect(cached).toMatchObject({ eventName: 'TrusteeAccepted', reconciliationStatus: 'matched' });
@@ -1367,6 +1384,7 @@ describe('runChainEventIndexerCycle — TrusteeProposed/TrusteeAccepted (Slice 5
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xtptx1': ADMIN_ADDRESS } })
     );
@@ -1386,6 +1404,7 @@ describe('runChainEventIndexerCycle — TrusteeProposed/TrusteeAccepted (Slice 5
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xtatx1': '0xSomeRealUserWallet' } })
     );
@@ -1418,7 +1437,7 @@ describe('runChainEventIndexerCycle — TrusteeDeclined (Slice 5)', () => {
       ],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xtdtx1', 0);
     expect(cached).toMatchObject({
@@ -1439,6 +1458,7 @@ describe('runChainEventIndexerCycle — TrusteeDeclined (Slice 5)', () => {
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xtdtx1': '0xSomeRealUserWallet' } })
     );
@@ -1471,7 +1491,7 @@ describe('runChainEventIndexerCycle — TrusteeRevoked (Slice 5)', () => {
       ],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xtrtx1', 0);
     expect(cached).toMatchObject({
@@ -1499,6 +1519,7 @@ describe('runChainEventIndexerCycle — TrusteeRevoked (Slice 5)', () => {
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xtrtx1': '0xSomeRealUserWallet' } })
     );
@@ -1518,6 +1539,7 @@ describe('runChainEventIndexerCycle — TrusteeRevoked (Slice 5)', () => {
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xtrtx1': '0xSomeRealUserWallet' } })
     );
@@ -1550,7 +1572,7 @@ describe('runChainEventIndexerCycle — TrusteeLevelUpdated (Slice 5)', () => {
       ],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xtltx1', 0);
     expect(cached).toMatchObject({
@@ -1578,6 +1600,7 @@ describe('runChainEventIndexerCycle — TrusteeLevelUpdated (Slice 5)', () => {
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xtltx1': '0xSomeRealUserWallet' } })
     );
@@ -1597,6 +1620,7 @@ describe('runChainEventIndexerCycle — TrusteeLevelUpdated (Slice 5)', () => {
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xtltx1': '0xSomeRealUserWallet' } })
     );
@@ -1627,7 +1651,7 @@ describe('runChainEventIndexerCycle — VouchGiven/VouchRetracted (Slice 6)', ()
       ],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xvgtx1', 0);
     expect(cached).toMatchObject({
@@ -1648,6 +1672,7 @@ describe('runChainEventIndexerCycle — VouchGiven/VouchRetracted (Slice 6)', ()
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xvgtx1': '0xSomeRealUserWallet' } })
     );
@@ -1676,7 +1701,7 @@ describe('runChainEventIndexerCycle — VouchGiven/VouchRetracted (Slice 6)', ()
       ],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xvrtx1', 0);
     expect(cached).toMatchObject({
@@ -1702,6 +1727,7 @@ describe('runChainEventIndexerCycle — VouchGiven/VouchRetracted (Slice 6)', ()
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xvrtx1': '0xSomeRealUserWallet' } })
     );
@@ -1721,6 +1747,7 @@ describe('runChainEventIndexerCycle — VouchGiven/VouchRetracted (Slice 6)', ()
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xvrtx1': '0xSomeRealUserWallet' } })
     );
@@ -1742,6 +1769,7 @@ describe('runChainEventIndexerCycle — HealthRecordCoreUpdated/AdminTransferred
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xhrctx1': ADMIN_ADDRESS } })
     );
@@ -1761,6 +1789,7 @@ describe('runChainEventIndexerCycle — HealthRecordCoreUpdated/AdminTransferred
     });
 
     await runChainEventIndexerCycle(
+      MEMBER_ROLE_MANAGER_INDEXER_CONFIG,
       admin.firestore(),
       makeMockProvider({ currentBlock: 1030, txFromByHash: { '0xhrctx1': '0xSomeOtherWallet' } })
     );
@@ -1781,7 +1810,7 @@ describe('runChainEventIndexerCycle — HealthRecordCoreUpdated/AdminTransferred
 
     // No txFromByHash entry for '0xhrctx1' — makeMockProvider's getTransaction resolves to null,
     // same as a pruned/unavailable node. Fail-safe direction: treated as a mismatch, not assumed safe.
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xhrctx1', 0);
     expect(cached).toMatchObject({ reconciliationStatus: 'infrastructure_admin_mismatch' });
@@ -1799,7 +1828,7 @@ describe('runChainEventIndexerCycle — HealthRecordCoreUpdated/AdminTransferred
 
     // Deliberately no txFromByHash entry — AdminTransferred's reconciler never calls
     // provider.getTransaction, since oldAdmin (emitted before reassignment) IS the signer already.
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xadmintx1', 0);
     expect(cached).toMatchObject({ eventName: 'AdminTransferred', reconciliationStatus: 'infrastructure' });
@@ -1815,7 +1844,7 @@ describe('runChainEventIndexerCycle — HealthRecordCoreUpdated/AdminTransferred
       ],
     });
 
-    await runChainEventIndexerCycle(admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
+    await runChainEventIndexerCycle(MEMBER_ROLE_MANAGER_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 1030 }));
 
     const cached = await getCachedEvent('0xadmintx1', 0);
     expect(cached).toMatchObject({ reconciliationStatus: 'infrastructure_admin_mismatch' });
