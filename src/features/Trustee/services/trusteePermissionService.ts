@@ -748,34 +748,56 @@ export class TrusteePermissionService {
           continue;
         }
 
-        // Read the trustee's actual on-chain role rather than Firestore's arrays. This determines what we need to do on chain,
-        // change an existing Role or grant a new role. Firestore/wrappedKeys are always updated regardless of whether a chain call is needed.
-        const currentOnChainRoleDetails = await BlockchainRoleManagerService.getRoleDetails(
-          recordId,
-          trusteeWallet
-        );
-        const currentOnChainTrusteeRole: Role | null = currentOnChainRoleDetails.isActive
-          ? (currentOnChainRoleDetails.role as Role)
-          : null;
+        // When anchorTx is confirmed, HealthRecordCore.anchorRecord/reanchorRecord already ran
+        // MemberRoleManager.extendTrusteeGrantsOnAnchor inside that SAME transaction —
+        // deterministic, resolves the role with the exact rules resolveTrusteeRole mirrors below,
+        // and grants via _grantRoleInternal directly (no "already has a role" guard to race
+        // against). So a confirmed anchorTx already tells us on-chain state is correct — no need
+        // to read it, and no need to make our own grantRole/changeRole call. Only read on-chain
+        // state and consider our own fallback call when anchorTx is null (the anchor transaction
+        // itself failed or was never attempted, so the auto-grant never ran and this fallback is
+        // the only path that will ever get the trustee their on-chain role).
+        //
+        // Reading on-chain state unconditionally here was a real bug (see #trustee-fanout-race):
+        // getRoleDetails is a plain JsonRpcProvider read that can hit a backend node that hasn't
+        // caught up to the just-confirmed anchor tx yet, reporting no role yet even though
+        // extendTrusteeGrantsOnAnchor already granted one. That stale read made this fire its own
+        // grantRole call, which then lost the race against the already-applied auto-grant and
+        // reverted with "Target already has a role. Use changeRole() instead" — a spurious
+        // sync-queue failure even though the end state was already correct.
+        let currentOnChainTrusteeRole: Role | null = null;
+        if (!anchorTx) {
+          const currentOnChainRoleDetails = await BlockchainRoleManagerService.getRoleDetails(
+            recordId,
+            trusteeWallet
+          );
+          currentOnChainTrusteeRole = currentOnChainRoleDetails.isActive
+            ? (currentOnChainRoleDetails.role as Role)
+            : null;
+        }
 
+        // With a confirmed anchorTx, previousBackendRole (Firestore, already fetched, not racy)
+        // stands in for "current role" — it's what the trustee had immediately before this
+        // operation, exactly the baseline extendTrusteeGrantsOnAnchor itself resolved against.
+        const currentRoleForResolution = anchorTx ? previousBackendRole : currentOnChainTrusteeRole;
         const desiredRole = this.resolveTrusteeRole(
           trustLevel as TrustLevel,
           subjectRole,
-          currentOnChainTrusteeRole
+          currentRoleForResolution
         );
-        const finalRole = desiredRole ?? currentOnChainTrusteeRole;
+        const finalRole = desiredRole ?? currentRoleForResolution;
 
         if (!finalRole) {
           console.log(`ℹ️ Skipping trustee ${trusteeId} on record ${recordId} — no role needed`);
           continue;
         }
 
-        // desiredRole truthy means we need to make our own grantRole/changeRole call below —
-        // Firestore-first, so the write happens now with blockchainRef: null and gets filled in
-        // once that chain call resolves. Otherwise, either extendTrusteeGrantsOnAnchor already
-        // granted this role automatically inside the anchor transaction (cite it directly, no
-        // deferral needed), or there's nothing new to log at all.
-        const needsOwnChainCall = !!desiredRole;
+        // desiredRole truthy (and no confirmed anchorTx) means we need to make our own
+        // grantRole/changeRole call below — Firestore-first, so the write happens now with
+        // blockchainRef: null and gets filled in once that chain call resolves. Otherwise, either
+        // extendTrusteeGrantsOnAnchor already granted this role automatically inside the anchor
+        // transaction (cite it directly, no deferral needed), or there's nothing new to log at all.
+        const needsOwnChainCall = !anchorTx && !!desiredRole;
         const immediateRef =
           !needsOwnChainCall && anchorTx
             ? buildMemberRegistryRef(anchorTx.txHash, anchorTx.blockNumber)
@@ -985,20 +1007,29 @@ export class TrusteePermissionService {
           continue;
         }
 
-        const currentOnChainRoleDetails = await BlockchainRoleManagerService.getRoleDetails(
-          recordId,
-          trusteeWallet
-        );
-
-        // Firestore-first: the role change + wrappedKey update commit atomically regardless of
-        // on-chain state. retractTrusteeGrantsOnUnanchor auto-handles both outcomes on-chain —
-        // recognize either as "already handled" (no chain call needed from us, cite the
-        // unanchor tx directly). Only a genuine mismatch (Firestore/chain drift) needs our own
-        // fallback call below, so the event starts with blockchainRef: null.
-        const alreadyHandledOnChain =
-          baselineRole === null
-            ? !currentOnChainRoleDetails.isActive
-            : currentOnChainRoleDetails.isActive && currentOnChainRoleDetails.role === baselineRole;
+        // When unanchorTx is confirmed, HealthRecordCore.unanchorRecord already ran
+        // MemberRoleManager.retractTrusteeGrantsOnUnanchor inside that SAME transaction —
+        // deterministic, so a confirmed unanchorTx already tells us on-chain state is correct.
+        // Skip the getRoleDetails() read entirely in that case: it's a plain JsonRpcProvider read
+        // that can hit a backend node lagging behind the just-confirmed tx, and reading a stale
+        // pre-unanchor role here would wrongly conclude "not yet handled" and fire our own
+        // fallback revokeRole/changeRole call — the same class of race documented in
+        // grantAccessForNewRecord above. Only read on-chain state when unanchorTx is null (the
+        // unanchor transaction itself failed or was never attempted, so the auto-retract never
+        // ran and this fallback is the only path that will ever correct the trustee's on-chain
+        // role).
+        let alreadyHandledOnChain = true;
+        if (!unanchorTx) {
+          const currentOnChainRoleDetails = await BlockchainRoleManagerService.getRoleDetails(
+            recordId,
+            trusteeWallet
+          );
+          alreadyHandledOnChain =
+            baselineRole === null
+              ? !currentOnChainRoleDetails.isActive
+              : currentOnChainRoleDetails.isActive &&
+                currentOnChainRoleDetails.role === baselineRole;
+        }
         const immediateRef =
           alreadyHandledOnChain && unanchorTx
             ? buildMemberRegistryRef(unanchorTx.txHash, unanchorTx.blockNumber)

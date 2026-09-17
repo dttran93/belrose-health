@@ -864,6 +864,42 @@ describe('TrusteePermissionService (orchestration)', () => {
       expect(await getPermissionHistory(RECORD_A)).toEqual([]);
     });
 
+    it('regression: never reads on-chain state at all when anchorTx is confirmed, even if that read would be stale (real production race)', async () => {
+      // Reproduces a real production incident: extendTrusteeGrantsOnAnchor already granted the
+      // trustee's role inside the anchor transaction, but getRoleDetails — a plain read against a
+      // load-balanced RPC endpoint — can still return the pre-grant state immediately afterward
+      // (backend node lag). The old code always read on-chain state regardless of anchorTx, saw
+      // "no role yet" from that stale read, and fired its own grantRole call, which then lost the
+      // race against the already-applied auto-grant and reverted with "Target already has a
+      // role. Use changeRole() instead." The fix: skip the read entirely once anchorTx proves the
+      // auto-grant already ran deterministically inside that same transaction.
+      await seedRecord(db, RECORD_A, { owners: [TRUSTOR] });
+      await seedTrusteeRelationship(TRUSTOR, TRUSTEE, { trustLevel: 'observer' });
+      // Deliberately stale: reports no role at all, as if the auto-grant hadn't landed yet.
+      roleManagerMocks.getRoleDetails.mockResolvedValue({ role: '', isActive: false });
+
+      await TrusteePermissionService.grantAccessForNewRecord(TRUSTOR, RECORD_A, {
+        txHash: '0xanchor',
+        blockNumber: 99,
+      });
+
+      expect(roleManagerMocks.getRoleDetails).not.toHaveBeenCalled();
+      expect(roleManagerMocks.grantRole).not.toHaveBeenCalled();
+      expect(roleManagerMocks.changeRole).not.toHaveBeenCalled();
+
+      const snap = await getDoc(doc(db, 'records', RECORD_A));
+      expect(snap.data()?.viewers).toContain(TRUSTEE);
+
+      const events = await getPermissionHistory(RECORD_A);
+      expect(events[0]!.changes).toEqual([
+        { userId: TRUSTEE, action: 'granted', previousRole: null, newRole: 'viewer' },
+      ]);
+      expect(events[0]!.blockchainRef).toMatchObject({ txHash: '0xanchor', blockNumber: 99 });
+
+      const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+      expect(syncDocs.size).toBe(0);
+    });
+
     it('skips entirely (no Firestore/encryption mirroring) when no role is resolved on either side', async () => {
       // custodian/controller need a real trustorRole to resolve anything — with the trustor
       // holding no role at all on this record, resolveTrusteeRole yields null, and with no
@@ -1041,6 +1077,43 @@ describe('TrusteePermissionService (orchestration)', () => {
 
       const relSnap = await getDoc(doc(db, 'trusteeRelationships', `${TRUSTOR}_${TRUSTEE}`));
       expect(relSnap.data()?.recordIdsGranted).toEqual([]);
+    });
+
+    it('regression: never reads on-chain state at all when unanchorTx is confirmed, even if that read would be stale (real production race)', async () => {
+      // Symmetric case to grantAccessForNewRecord's own regression test above:
+      // retractTrusteeGrantsOnUnanchor already downgraded the trustee inside the unanchor
+      // transaction, but a stale getRoleDetails read could still report the pre-downgrade role,
+      // wrongly triggering a fallback changeRole/revokeRole call that races the auto-retract.
+      await seedRecord(db, RECORD_A, { owners: [TRUSTOR], administrators: [TRUSTEE] });
+      await tagTrustee(RECORD_A, TRUSTEE);
+      await seedWrappedKey(RECORD_A, TRUSTEE, { isActive: true, grantedBy: TRUSTOR });
+      await seedTrusteeRelationship(TRUSTOR, TRUSTEE, {
+        recordIdsGranted: [{ recordId: RECORD_A, previousRole: 'viewer' }],
+      });
+      // Deliberately stale: reports the pre-unanchor role, as if the auto-retract hadn't landed.
+      roleManagerMocks.getRoleDetails.mockResolvedValue({ role: 'administrator', isActive: true });
+
+      await TrusteePermissionService.revokeAccessForRemovedRecord(TRUSTOR, RECORD_A, {
+        txHash: '0xunanchor',
+        blockNumber: 55,
+      });
+
+      expect(roleManagerMocks.getRoleDetails).not.toHaveBeenCalled();
+      expect(roleManagerMocks.revokeRole).not.toHaveBeenCalled();
+      expect(roleManagerMocks.changeRole).not.toHaveBeenCalled();
+
+      const recordSnap = await getDoc(doc(db, 'records', RECORD_A));
+      expect(recordSnap.data()?.administrators).not.toContain(TRUSTEE);
+      expect(recordSnap.data()?.viewers).toContain(TRUSTEE);
+
+      const events = await getPermissionHistory(RECORD_A);
+      expect(events[0]!.changes).toEqual([
+        { userId: TRUSTEE, action: 'downgraded', previousRole: 'administrator', newRole: 'viewer' },
+      ]);
+      expect(events[0]!.blockchainRef).toMatchObject({ txHash: '0xunanchor', blockNumber: 55 });
+
+      const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+      expect(syncDocs.size).toBe(0);
     });
 
     it('calls changeRole to the baseline role as a drift correction when the on-chain state does not match it', async () => {
