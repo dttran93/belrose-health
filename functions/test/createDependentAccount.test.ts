@@ -180,6 +180,26 @@ describe('createDependentAccount — happy path', () => {
       isDependentRelationship: true,
     });
 
+    // Regression for #810: bootstrapDependentTrustee emits both TrusteeProposed and
+    // TrusteeAccepted on-chain, so the relationship doc's write must be paired with matching
+    // trusteeHistory entries — otherwise the chain event indexer's reconciliation
+    // (findMatchingTrusteeHistoryForProposedEvent/ForAcceptedEvent) always classifies these two
+    // events as admin_untracked even though Firestore has the relationship recorded.
+    const historySnap = await relSnap.ref.collection('trusteeHistory').get();
+    const historyActions = historySnap.docs.map(d => d.data().action).sort();
+    expect(historyActions).toEqual(['accept', 'propose']);
+    historySnap.docs.forEach(d => {
+      expect(d.data()).toMatchObject({
+        trustorId: result.uid,
+        trustorIdHash: expect.any(String),
+        trusteeId: GUARDIAN,
+        trusteeIdHash: expect.any(String),
+        blockchainRef: expect.objectContaining({ txHash: '0xtxhash' }),
+      });
+    });
+    const proposeEntry = historySnap.docs.find(d => d.data().action === 'propose')!.data();
+    expect(proposeEntry.trustLevel).toBe('controller');
+
     // Both on-chain writes are tracked in blockchainSyncQueue for observability, same as any
     // client-side blockchain write — this doesn't change the function's own atomic behavior,
     // it just makes the attempts visible in the same dashboard.

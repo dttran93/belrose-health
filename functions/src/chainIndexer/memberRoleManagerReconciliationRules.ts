@@ -280,15 +280,11 @@ interface TrusteeHistoryEntry {
  * prepareTrusteeHistoryEventData), so both can be filtered server-side — no in-memory hash
  * recomputation needed, just the predicate check per event type.
  *
- * Known gap, not fixed here: bootstrapDependentTrustee (MemberRoleManager.sol, onlyAdmin) emits
- * both TrusteeProposed and TrusteeAccepted, and its Firestore counterpart
- * (functions/src/handlers/createDependentAccount.ts) writes the trusteeRelationships doc
- * directly — but never a matching trusteeHistory entry (only trusteeRelationshipService.ts, the
- * client-orchestrated path, writes those). So those two events will currently show as
- * admin_untracked even though Firestore genuinely has the relationship recorded — the same shape
- * of gap already found and ticketed for registerMemberOnChainComplete's missing sync-queue
- * tracking. Worth its own ticket (add trusteeHistory writes to createDependentAccount.ts), not
- * folded into this slice.
+ * bootstrapDependentTrustee (MemberRoleManager.sol, onlyAdmin) emits both TrusteeProposed and
+ * TrusteeAccepted; its Firestore counterpart (functions/src/handlers/createDependentAccount.ts)
+ * writes matching 'propose'/'accept' trusteeHistory entries inline (Admin SDK, not via
+ * writeTrusteeHistoryEvent.ts which is a client-SDK-only module) so these two events match the
+ * same way client-orchestrated trustee actions do (belrose-health#810).
  */
 async function findMatchingTrusteeHistory(
   db: Firestore,
