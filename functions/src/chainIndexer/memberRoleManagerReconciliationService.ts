@@ -1,4 +1,4 @@
-// functions/src/chainIndexer/reconciliationService.ts
+// functions/src/chainIndexer/memberRoleManagerReconciliationService.ts
 //
 // Classifies one newly-cached chain event into one of four outcomes — see
 // ChainEventReconciliationStatus's doc comment (packages/shared/src/chainEventCache.ts) for what
@@ -43,24 +43,27 @@ import {
   findMatchingVouchForRetractedEvent,
   findSyncQueueEntryForTxHash,
   type SyncQueueMatch,
-} from './reconciliationRules';
+} from './memberRoleManagerReconciliationRules';
 import { getAdminWallet } from '../utils/adminWallet';
+import type { ReconciliationResult } from './chainIndexerContractConfig';
+
+export type { ReconciliationResult };
 
 // Mirrors MemberRoleManager.sol's MemberStatus enum — see memberRegistry.ts's own statusMap and
 // e2e/helpers/backend/staging.ts's own MEMBER_STATUS_INACTIVE constant.
 const MEMBER_STATUS_INACTIVE = 1;
 
-export type ReconciliationResult = Pick<
-  ChainEventCacheDoc,
-  'reconciliationStatus' | 'matchedSyncQueueId' | 'matchedFirestoreRef' | 'reconciledAt'
->;
-
 /**
  * Buckets 2-4 of the pipeline — shared, unchanged, across every event type. Only bucket 1 ("does
  * Firestore already have a record of this specific action") varies per event type, since that's
  * the only step that needs to know the event's own shape; everything past it is generic.
+ *
+ * Exported (not module-private) so healthRecordCoreReconciliationService.ts's reconcilers can
+ * reuse it unchanged — this pipeline was never actually MemberRoleManager-specific, it only ever
+ * touched blockchainSyncQueue (contract-agnostic) and getAdminWallet() (shared across every
+ * contract, since one admin wallet signs writes for all of them).
  */
-async function classifyUnmatchedEvent(
+export async function classifyUnmatchedEvent(
   db: Firestore,
   provider: Provider,
   txHash: string

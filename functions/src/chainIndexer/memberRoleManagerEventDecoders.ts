@@ -1,35 +1,9 @@
-// functions/src/chainIndexer/eventDecoders.ts
+// functions/src/chainIndexer/memberRoleManagerEventDecoders.ts
 //
-// Pure, no-I/O decoding: a raw on-chain log → the args shape chainEventIndexerService caches.
-// Deliberately duck-typed against a minimal log shape (not ethers' full EventLog type) so these
-// are trivial to unit-test with fabricated fixtures — see functions/test/chainEventDecoders.test.ts.
-//
-// Slice 1 covers MemberRoleManager's MemberRegistered/WalletLinked — both admin-only-triggered
-// (addMember/addMemberBatch), both carrying the identical (wallet, userIdHash, timestamp) shape.
-// Slice 2 adds RoleGranted/RoleRevoked — a genuinely different (recordIdHash, targetIdHash, role,
-// userIdHash, timestamp) shape, so they get their own Raw*/Decoded* types and decode function
-// below rather than overloading the Member* ones. Slice 3 adds RoleChanged — same call-site
-// family as Slice 2 (changeRole, voluntarilyLeaveOwnership demotions, trustee level sync), but a
-// genuinely different match shape again (oldRole/newRole against a role CHANGE, not a grant/
-// revoke) — see reconciliationRules.ts's findMatchingPermissionHistoryForRoleChangedEvent. Slice 4
-// adds MemberStatusChanged (admin-only, setUserStatus — same call-site shape as Slice 1) and
-// OwnershipVoluntarilyLeft (user-callable, the "leave with no replacement role" case of
-// voluntarilyLeaveOwnership — a narrow variant of Slice 3's shape). Slice 5 adds the 5 Trustee
-// events (Proposed/Accepted/Declined/Revoked/LevelUpdated) — matched against
-// trusteeRelationships/{id}/trusteeHistory, a subcollection parallel to permissionHistory that
-// (unlike permissionHistory) already stores trustorIdHash/trusteeIdHash directly on each event,
-// so no in-memory hash recomputation is needed at match time — see reconciliationRules.ts.
-// Slice 6 adds VouchGiven/VouchRetracted — both onlyActiveMember (giveVouch/retractVouch), same
-// (voucherIdHash, voucheeIdHash, timestamp) shape as each other, matched against the flat
-// top-level `vouches` collection (vouchService.ts), which — like trusteeHistory — already stores
-// both hashes directly on the doc, so this is a plain two-field equality query, not even a
-// collectionGroup scan. Slice 7 adds the last two events on the contract, HealthRecordCoreUpdated
-// (setHealthRecordCore) and AdminTransferred (transferAdmin) — both onlyAdmin, both with no app
-// call site at all (only ever run out-of-band, e.g. a Hardhat script) and no Firestore collection
-// that could ever represent either action. Unlike every prior slice, these don't get a match rule
-// in reconciliationRules.ts at all — see reconciliationService.ts's reconcileHealthRecordCoreUpdatedEvent/
-// reconcileAdminTransferredEvent for why the matched/admin_untracked pipeline is skipped entirely
-// for this pair.
+// Pure decoder for raw on-chain log. No RPC calls, no input or output, no firebase reads. Simply
+// taking raw-on-chain log data and transforming it into chainEventIndexerService's internal cache
+// shape. See reconciliation service for other half of pipeline in which we reconcile things to
+// firestore.
 
 export type MemberRoleManagerEventName =
   | 'MemberRegistered'

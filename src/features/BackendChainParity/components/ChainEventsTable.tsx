@@ -25,13 +25,27 @@ import type { ChainEventReconciliationStatus } from '../lib/types';
 
 const BASESCAN_TX_URL = `${NETWORK.explorerUrl}/tx/`;
 
-interface RecomputeChainEventIndexResult {
-  success: boolean;
+interface ChainIndexerCycleResult {
   scannedFromBlock: number;
   scannedToBlock: number;
   eventsFound: number;
   newlyCached: number;
   reconciledUnclassified: number;
+}
+
+// One entry per contract the indexer covers (see functions/src/chainIndexer/chainEventIndexerService.ts's
+// CHAIN_INDEXER_CONTRACTS) — a single contract's transient RPC failure is caught and recorded per
+// contract rather than failing the whole callable, so this can never assume every contract
+// succeeded.
+interface RecomputeChainEventIndexResult {
+  success: boolean;
+  results: Record<string, ChainIndexerCycleResult | { error: string }>;
+}
+
+function isCycleError(
+  result: ChainIndexerCycleResult | { error: string }
+): result is { error: string } {
+  return 'error' in result;
 }
 
 // A full historical backfill can legitimately take several minutes (see
@@ -142,14 +156,41 @@ export const ChainEventsTable: React.FC<ChainEventsTableProps> = ({ items, searc
       return result.data;
     },
     onSuccess: data => {
-      toast.success(
-        `Indexer run complete — scanned to block ${data.scannedToBlock}, ` +
-          `${data.eventsFound} event(s) found, ${data.newlyCached} newly cached, ` +
-          `${data.reconciledUnclassified} lingering event(s) reconciled.`
+      const entries = Object.entries(data.results);
+      const failed = entries.filter(([, result]) => isCycleError(result));
+      const succeeded = entries.filter(
+        (entry): entry is [string, ChainIndexerCycleResult] => !isCycleError(entry[1])
       );
+
+      if (succeeded.length > 0) {
+        const totals = succeeded.reduce(
+          (acc, [, result]) => ({
+            eventsFound: acc.eventsFound + result.eventsFound,
+            newlyCached: acc.newlyCached + result.newlyCached,
+            reconciledUnclassified: acc.reconciledUnclassified + result.reconciledUnclassified,
+          }),
+          { eventsFound: 0, newlyCached: 0, reconciledUnclassified: 0 }
+        );
+        toast.success(
+          `Indexer run complete (${succeeded.map(([contract]) => contract).join(', ')}) — ` +
+            `${totals.eventsFound} event(s) found, ${totals.newlyCached} newly cached, ` +
+            `${totals.reconciledUnclassified} lingering event(s) reconciled.`
+        );
+      }
+      for (const [contract, result] of failed) {
+        if (isCycleError(result)) {
+          // Toasts truncate/aren't clickable — some backend errors (e.g. Firestore's
+          // "query requires an index") include a URL that's only useful if you can click it, so
+          // log the full message to the console too (browsers auto-linkify URLs there).
+          console.error(`${contract} indexer run failed:`, result.error);
+          toast.error(`${contract} indexer run failed — see browser console for the full error.`);
+        }
+      }
     },
     onError: (error: unknown) => {
-      toast.error(error instanceof Error ? error.message : 'Indexer run failed');
+      const message = error instanceof Error ? error.message : 'Indexer run failed';
+      console.error('Indexer run failed:', message);
+      toast.error(`${message.length > 120 ? 'Indexer run failed — see browser console for the full error.' : message}`);
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['backend-chain-parity', 'chain-events'] });

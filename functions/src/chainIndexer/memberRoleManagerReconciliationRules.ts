@@ -1,4 +1,4 @@
-// functions/src/chainIndexer/reconciliationRules.ts
+// functions/src/chainIndexer/memberRoleManagerReconciliationRules.ts
 //
 // Firestore-read-only predicates used by reconciliationService.ts's classification pipeline.
 // Kept separate from that orchestration so each rule is independently testable against a
