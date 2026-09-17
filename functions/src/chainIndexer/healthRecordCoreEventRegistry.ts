@@ -8,11 +8,11 @@
 // (RecordAnchored/RecordUnanchored/RecordReanchored). HRC Slice 3 adds the hash-versioning family
 // (RecordHashAdded/RecordHashRetracted). HRC Slice 4 adds the verification family
 // (RecordVerified/VerificationRetracted/VerificationLevelModified). HRC Slice 5 adds the dispute
-// family (RecordDisputed/DisputeRetracted/DisputeModification). HRC Slice 6 (final slice — every
-// event on HealthRecordCore.sol is now covered) adds the unaccepted flags family
-// (UnacceptedUpdateFlagged/UnacceptedUpdateFlagRevoked). See healthRecordCoreEventDecoders.ts's
-// header for what's deliberately out of scope (setMemberRoleManager emits no event; UUPS's
-// inherited Upgraded event isn't a custom declared event either).
+// family (RecordDisputed/DisputeRetracted/DisputeModification). HRC Slice 6 adds the unaccepted
+// flags family (UnacceptedUpdateFlagged/UnacceptedUpdateFlagRevoked). HRC Slice 7 (final slice —
+// every event on HealthRecordCore.sol is now covered) adds MemberRoleManagerUpdated. See
+// healthRecordCoreEventDecoders.ts's header for what's still deliberately out of scope (UUPS's
+// inherited Upgraded event isn't a custom declared event).
 
 import type { HealthRecordCore } from '../_shared/typechain';
 import { HealthRecordCore__factory } from '../_shared/typechain';
@@ -32,6 +32,7 @@ import {
   decodeDisputeModificationEventLog,
   decodeUnacceptedUpdateFlaggedEventLog,
   decodeUnacceptedUpdateFlagRevokedEventLog,
+  decodeMemberRoleManagerUpdatedEventLog,
   type HealthRecordCoreEventName,
   type RawHealthRecordCoreAdminTransferredEventLog,
   type RawRecordAnchoredEventLog,
@@ -46,6 +47,7 @@ import {
   type RawDisputeModificationEventLog,
   type RawUnacceptedUpdateFlaggedEventLog,
   type RawUnacceptedUpdateFlagRevokedEventLog,
+  type RawMemberRoleManagerUpdatedEventLog,
 } from './healthRecordCoreEventDecoders';
 import {
   reconcileHealthRecordCoreAdminTransferredEvent,
@@ -62,6 +64,7 @@ import {
   reconcileDisputeModificationEvent,
   reconcileUnacceptedUpdateFlaggedEvent,
   reconcileUnacceptedUpdateFlagRevokedEvent,
+  reconcileMemberRoleManagerUpdatedEvent,
 } from './healthRecordCoreReconciliationService';
 
 export const HEALTH_RECORD_CORE_EVENT_REGISTRY: Record<
@@ -209,6 +212,12 @@ export const HEALTH_RECORD_CORE_EVENT_REGISTRY: Record<
     }),
     decode: log => decodeUnacceptedUpdateFlagRevokedEventLog(log as RawUnacceptedUpdateFlagRevokedEventLog),
     reconcile: reconcileUnacceptedUpdateFlagRevokedEvent,
+  },
+  MemberRoleManagerUpdated: {
+    getFilter: contract => contract.filters.MemberRoleManagerUpdated(),
+    toRawArgs: log => ({ newAddress: log.args.newAddress as string }),
+    decode: log => decodeMemberRoleManagerUpdatedEventLog(log as RawMemberRoleManagerUpdatedEventLog),
+    reconcile: reconcileMemberRoleManagerUpdatedEvent,
   },
 };
 

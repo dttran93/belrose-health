@@ -202,6 +202,7 @@ export interface HealthRecordCoreInterface extends Interface {
       | "DisputeModification"
       | "DisputeRetracted"
       | "Initialized"
+      | "MemberRoleManagerUpdated"
       | "RecordAnchored"
       | "RecordDisputed"
       | "RecordHashAdded"
@@ -839,6 +840,19 @@ export namespace InitializedEvent {
   export type OutputTuple = [version: bigint];
   export interface OutputObject {
     version: bigint;
+  }
+  export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>;
+  export type Filter = TypedDeferredTopicFilter<Event>;
+  export type Log = TypedEventLog<Event>;
+  export type LogDescription = TypedLogDescription<Event>;
+}
+
+export namespace MemberRoleManagerUpdatedEvent {
+  export type InputTuple = [newAddress: AddressLike, timestamp: BigNumberish];
+  export type OutputTuple = [newAddress: string, timestamp: bigint];
+  export interface OutputObject {
+    newAddress: string;
+    timestamp: bigint;
   }
   export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>;
   export type Filter = TypedDeferredTopicFilter<Event>;
@@ -2078,6 +2092,13 @@ export interface HealthRecordCore extends BaseContract {
     InitializedEvent.OutputObject
   >;
   getEvent(
+    key: "MemberRoleManagerUpdated"
+  ): TypedContractEvent<
+    MemberRoleManagerUpdatedEvent.InputTuple,
+    MemberRoleManagerUpdatedEvent.OutputTuple,
+    MemberRoleManagerUpdatedEvent.OutputObject
+  >;
+  getEvent(
     key: "RecordAnchored"
   ): TypedContractEvent<
     RecordAnchoredEvent.InputTuple,
@@ -2205,6 +2226,17 @@ export interface HealthRecordCore extends BaseContract {
       InitializedEvent.InputTuple,
       InitializedEvent.OutputTuple,
       InitializedEvent.OutputObject
+    >;
+
+    "MemberRoleManagerUpdated(address,uint256)": TypedContractEvent<
+      MemberRoleManagerUpdatedEvent.InputTuple,
+      MemberRoleManagerUpdatedEvent.OutputTuple,
+      MemberRoleManagerUpdatedEvent.OutputObject
+    >;
+    MemberRoleManagerUpdated: TypedContractEvent<
+      MemberRoleManagerUpdatedEvent.InputTuple,
+      MemberRoleManagerUpdatedEvent.OutputTuple,
+      MemberRoleManagerUpdatedEvent.OutputObject
     >;
 
     "RecordAnchored(bytes32,bytes32,bytes32,uint256)": TypedContractEvent<

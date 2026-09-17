@@ -13,8 +13,9 @@
 // (RecordAnchored/RecordUnanchored/RecordReanchored). HRC Slice 3 adds the hash-versioning family
 // (RecordHashAdded/RecordHashRetracted). HRC Slice 4 adds the verification family
 // (RecordVerified/VerificationRetracted/VerificationLevelModified). HRC Slice 5 adds the dispute
-// family (RecordDisputed/DisputeRetracted/DisputeModification). HRC Slice 6 (final slice) adds the
-// unaccepted flags family (UnacceptedUpdateFlagged/UnacceptedUpdateFlagRevoked).
+// family (RecordDisputed/DisputeRetracted/DisputeModification). HRC Slice 6 adds the unaccepted
+// flags family (UnacceptedUpdateFlagged/UnacceptedUpdateFlagRevoked). HRC Slice 7 (final slice —
+// every event on HealthRecordCore.sol is now covered) adds MemberRoleManagerUpdated.
 
 import type { Firestore } from 'firebase-admin/firestore';
 import { Timestamp } from 'firebase-admin/firestore';
@@ -386,4 +387,35 @@ export async function reconcileUnacceptedUpdateFlagRevokedEvent(
   }
 
   return classifyUnmatchedEvent(db, provider, doc.blockchainRef.txHash);
+}
+
+/**
+ * MemberRoleManagerUpdated reconciler (HRC Slice 7, final slice). setMemberRoleManager is
+ * onlyAdmin with no app call site at all (never appears anywhere in functions/src or src/ outside
+ * typechain — only ever run out-of-band, e.g. a Hardhat script) and no Firestore collection could
+ * ever represent "this pointer was updated". Same reasoning already established for
+ * MemberRoleManager.sol's own HealthRecordCoreUpdated/AdminTransferred (Slice 7 there): skips the
+ * matched/admin_untracked pipeline entirely and lands in 'infrastructure' instead — running this
+ * through classifyUnmatchedEvent would always land on admin_untracked, wrongly implying a bug
+ * every time it fires.
+ *
+ * Unlike AdminTransferred, the event args (newAddress, timestamp) don't include the caller, so
+ * this needs the same provider.getTransaction round trip as MemberRoleManager's own
+ * reconcileHealthRecordCoreUpdatedEvent — mirrored here rather than reused since the two live in
+ * different files scoped to their own contract's registry.
+ */
+export async function reconcileMemberRoleManagerUpdatedEvent(
+  _db: Firestore,
+  provider: Provider,
+  doc: Pick<ChainEventCacheDoc, 'args' | 'blockchainRef'>
+): Promise<ReconciliationResult> {
+  const adminAddress = getAdminWallet().address.toLowerCase();
+  const tx = await provider.getTransaction(doc.blockchainRef.txHash);
+  const signer = tx?.from?.toLowerCase();
+  return {
+    reconciliationStatus: signer === adminAddress ? 'infrastructure' : 'infrastructure_admin_mismatch',
+    matchedSyncQueueId: null,
+    matchedFirestoreRef: null,
+    reconciledAt: Timestamp.now(),
+  };
 }

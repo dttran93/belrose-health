@@ -27,9 +27,13 @@
 // the whole contract: functions/src/handlers/unacceptedFlags.ts writes subjectIdHash/recordIdHash/
 // reporterIdHash all as real hashes directly, zero recomputation and zero exclusions needed.
 //
-// Not in scope for this indexer at all: setMemberRoleManager(address) (onlyAdmin) updates a
-// cross-contract pointer but emits no event whatsoever — a contract-level blind spot this indexer
-// cannot detect or work around. UUPS's inherited `Upgraded` proxy event also isn't a custom
+// HRC Slice 7 adds MemberRoleManagerUpdated — setMemberRoleManager(address) (onlyAdmin) previously
+// updated its cross-contract pointer with no event at all, a contract-level blind spot; the
+// contract was fixed to emit this event, mirroring MemberRoleManager.sol's own
+// HealthRecordCoreUpdated exactly. This closes out every event now declared on
+// HealthRecordCore.sol.
+//
+// Still not in scope for this indexer: UUPS's inherited `Upgraded` proxy event isn't a custom
 // `event` declared in HealthRecordCore.sol — same out-of-scope status as MemberRoleManager's own
 // proxy machinery.
 
@@ -47,7 +51,8 @@ export type HealthRecordCoreEventName =
   | 'DisputeRetracted'
   | 'DisputeModification'
   | 'UnacceptedUpdateFlagged'
-  | 'UnacceptedUpdateFlagRevoked';
+  | 'UnacceptedUpdateFlagRevoked'
+  | 'MemberRoleManagerUpdated';
 
 // ============================================================================
 // AdminTransferred (HRC Slice 1)
@@ -748,6 +753,53 @@ export function decodeUnacceptedUpdateFlagRevokedEventLog(
       subjectIdHash: log.args.subjectIdHash,
       recordIdHash: log.args.recordIdHash,
       reporterIdHash: log.args.reporterIdHash,
+    },
+  };
+}
+
+// ============================================================================
+// MemberRoleManagerUpdated (HRC Slice 7)
+// ============================================================================
+
+export interface RawMemberRoleManagerUpdatedEventLog {
+  eventName: 'MemberRoleManagerUpdated';
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  contractAddress: string;
+  chainId: number;
+  args: {
+    newAddress: string;
+    timestamp: bigint | number;
+  };
+}
+
+export interface DecodedMemberRoleManagerUpdatedEvent {
+  eventName: 'MemberRoleManagerUpdated';
+  txHash: string;
+  blockNumber: number;
+  logIndex: number;
+  contractAddress: string;
+  chainId: number;
+  blockTimestampSeconds: number;
+  args: {
+    newAddress: string;
+  };
+}
+
+export function decodeMemberRoleManagerUpdatedEventLog(
+  log: RawMemberRoleManagerUpdatedEventLog
+): DecodedMemberRoleManagerUpdatedEvent {
+  return {
+    eventName: log.eventName,
+    txHash: log.transactionHash,
+    blockNumber: log.blockNumber,
+    logIndex: log.index,
+    contractAddress: log.contractAddress,
+    chainId: log.chainId,
+    blockTimestampSeconds: Number(log.args.timestamp),
+    args: {
+      newAddress: log.args.newAddress,
     },
   };
 }

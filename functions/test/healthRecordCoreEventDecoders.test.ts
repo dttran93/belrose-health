@@ -18,6 +18,7 @@ import {
   decodeDisputeModificationEventLog,
   decodeUnacceptedUpdateFlaggedEventLog,
   decodeUnacceptedUpdateFlagRevokedEventLog,
+  decodeMemberRoleManagerUpdatedEventLog,
   type RawHealthRecordCoreAdminTransferredEventLog,
   type RawRecordAnchoredEventLog,
   type RawRecordUnanchoredReanchoredEventLog,
@@ -31,6 +32,7 @@ import {
   type RawVerificationLevelModifiedEventLog,
   type RawUnacceptedUpdateFlaggedEventLog,
   type RawUnacceptedUpdateFlagRevokedEventLog,
+  type RawMemberRoleManagerUpdatedEventLog,
 } from '../src/chainIndexer/healthRecordCoreEventDecoders';
 
 function fakeAdminTransferredLog(
@@ -565,6 +567,43 @@ describe('decodeUnacceptedUpdateFlagRevokedEventLog', () => {
         subjectIdHash: '0xSubjectIdHash1',
         recordIdHash: '0xRecordIdHash1',
         reporterIdHash: '0xReporterIdHash1',
+      },
+    });
+  });
+});
+
+function fakeMemberRoleManagerUpdatedLog(
+  overrides: Partial<RawMemberRoleManagerUpdatedEventLog> = {}
+): RawMemberRoleManagerUpdatedEventLog {
+  return {
+    eventName: 'MemberRoleManagerUpdated',
+    transactionHash: '0xmrmupdatedtx1',
+    blockNumber: 4200,
+    index: 0,
+    contractAddress: '0xHealthRecordCoreProxy',
+    chainId: 84532,
+    args: {
+      newAddress: '0xNewMemberRoleManagerAddress',
+      timestamp: 1_700_000_000n,
+    },
+    ...overrides,
+  };
+}
+
+describe('decodeMemberRoleManagerUpdatedEventLog', () => {
+  it('decodes a MemberRoleManagerUpdated log', () => {
+    const decoded = decodeMemberRoleManagerUpdatedEventLog(fakeMemberRoleManagerUpdatedLog());
+
+    expect(decoded).toEqual({
+      eventName: 'MemberRoleManagerUpdated',
+      txHash: '0xmrmupdatedtx1',
+      blockNumber: 4200,
+      logIndex: 0,
+      contractAddress: '0xHealthRecordCoreProxy',
+      chainId: 84532,
+      blockTimestampSeconds: 1_700_000_000,
+      args: {
+        newAddress: '0xNewMemberRoleManagerAddress',
       },
     });
   });

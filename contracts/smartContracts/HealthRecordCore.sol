@@ -49,6 +49,7 @@ contract HealthRecordCore is Initializable, UUPSUpgradeable {
 
   address public admin;
   event AdminTransferred(address indexed oldAdmin, address indexed newAdmin, uint256 timestamp);
+  event MemberRoleManagerUpdated(address indexed newAddress, uint256 timestamp);
 
   //As in only the Admin wallet can do this function. Don't confuse with Admin role for users below
   modifier onlyAdmin() {
@@ -115,6 +116,7 @@ contract HealthRecordCore is Initializable, UUPSUpgradeable {
   function setMemberRoleManager(address _memberRoleManager) external onlyAdmin {
     require(_memberRoleManager != address(0), "Invalid address");
     memberRoleManager = MemberRoleManagerInterface(_memberRoleManager);
+    emit MemberRoleManagerUpdated(_memberRoleManager, block.timestamp);
   }
 
   // ===============================================================
