@@ -1665,12 +1665,21 @@ export class PermissionsService {
       throw new Error('User is not an owner of this record');
     }
 
-    // Rule 4: Can't remove last owner unless there's at least one admin
+    // Rule 4: Can't remove last owner unless there's at least one admin — unless the caller is
+    // demoting themselves TO administrator, which fills that role themselves. Must credit the
+    // caller's own incoming role here, mirroring the fix to voluntarilyLeaveOwnership's on-chain
+    // precondition (#808) — the contract's require() has this exact same bug (evaluates
+    // pre-demotion state only), so this guard has to match the *fixed* contract behavior, not
+    // the currently-deployed one (#809).
     const isLastOwner = recordData.owners.length === 1;
     const hasAdmins = recordData.administrators && recordData.administrators.length > 0;
+    const becomingAdmin = options?.demoteTo === 'administrator';
 
-    if (isLastOwner && !hasAdmins) {
-      throw new Error('Cannot remove the last owner when no administrators exist');
+    if (isLastOwner && !hasAdmins && !becomingAdmin) {
+      throw new Error(
+        'You are the only owner with no administrators on this record. Promote someone else to ' +
+          'owner or administrator first, or demote yourself to administrator instead of leaving entirely.'
+      );
     }
 
     // Rule 5: Subjects require at least sharer access — a full revoke (no options) must go
