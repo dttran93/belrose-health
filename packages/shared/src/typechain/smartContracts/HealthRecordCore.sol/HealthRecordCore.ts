@@ -207,7 +207,6 @@ export interface HealthRecordCoreInterface extends Interface {
       | "RecordDisputed"
       | "RecordHashAdded"
       | "RecordHashRetracted"
-      | "RecordReanchored"
       | "RecordUnanchored"
       | "RecordVerified"
       | "UnacceptedUpdateFlagRevoked"
@@ -400,7 +399,7 @@ export interface HealthRecordCoreInterface extends Interface {
   ): string;
   encodeFunctionData(
     functionFragment: "reanchorRecord",
-    values: [BytesLike, BytesLike]
+    values: [BytesLike, BytesLike, BigNumberish]
   ): string;
   encodeFunctionData(
     functionFragment: "recordIdForHash",
@@ -963,28 +962,6 @@ export namespace RecordHashRetractedEvent {
   export type LogDescription = TypedLogDescription<Event>;
 }
 
-export namespace RecordReanchoredEvent {
-  export type InputTuple = [
-    recordIdHash: BytesLike,
-    subjectIdHash: BytesLike,
-    timestamp: BigNumberish
-  ];
-  export type OutputTuple = [
-    recordIdHash: string,
-    subjectIdHash: string,
-    timestamp: bigint
-  ];
-  export interface OutputObject {
-    recordIdHash: string;
-    subjectIdHash: string;
-    timestamp: bigint;
-  }
-  export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>;
-  export type Filter = TypedDeferredTopicFilter<Event>;
-  export type Log = TypedEventLog<Event>;
-  export type LogDescription = TypedLogDescription<Event>;
-}
-
 export namespace RecordUnanchoredEvent {
   export type InputTuple = [
     recordIdHash: BytesLike,
@@ -1502,7 +1479,11 @@ export interface HealthRecordCore extends BaseContract {
   proxiableUUID: TypedContractMethod<[], [string], "view">;
 
   reanchorRecord: TypedContractMethod<
-    [recordIdHash: BytesLike, subjectIdHash: BytesLike],
+    [
+      recordIdHash: BytesLike,
+      subjectIdHash: BytesLike,
+      selfVerifyLevel: BigNumberish
+    ],
     [void],
     "nonpayable"
   >;
@@ -1928,7 +1909,11 @@ export interface HealthRecordCore extends BaseContract {
   getFunction(
     nameOrSignature: "reanchorRecord"
   ): TypedContractMethod<
-    [recordIdHash: BytesLike, subjectIdHash: BytesLike],
+    [
+      recordIdHash: BytesLike,
+      subjectIdHash: BytesLike,
+      selfVerifyLevel: BigNumberish
+    ],
     [void],
     "nonpayable"
   >;
@@ -2127,13 +2112,6 @@ export interface HealthRecordCore extends BaseContract {
     RecordHashRetractedEvent.OutputObject
   >;
   getEvent(
-    key: "RecordReanchored"
-  ): TypedContractEvent<
-    RecordReanchoredEvent.InputTuple,
-    RecordReanchoredEvent.OutputTuple,
-    RecordReanchoredEvent.OutputObject
-  >;
-  getEvent(
     key: "RecordUnanchored"
   ): TypedContractEvent<
     RecordUnanchoredEvent.InputTuple,
@@ -2281,17 +2259,6 @@ export interface HealthRecordCore extends BaseContract {
       RecordHashRetractedEvent.InputTuple,
       RecordHashRetractedEvent.OutputTuple,
       RecordHashRetractedEvent.OutputObject
-    >;
-
-    "RecordReanchored(bytes32,bytes32,uint256)": TypedContractEvent<
-      RecordReanchoredEvent.InputTuple,
-      RecordReanchoredEvent.OutputTuple,
-      RecordReanchoredEvent.OutputObject
-    >;
-    RecordReanchored: TypedContractEvent<
-      RecordReanchoredEvent.InputTuple,
-      RecordReanchoredEvent.OutputTuple,
-      RecordReanchoredEvent.OutputObject
     >;
 
     "RecordUnanchored(bytes32,bytes32,uint256)": TypedContractEvent<

@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest';
 import {
   decodeHealthRecordCoreAdminTransferredEventLog,
   decodeRecordAnchoredEventLog,
-  decodeRecordUnanchoredReanchoredEventLog,
+  decodeRecordUnanchoredEventLog,
   decodeRecordHashAddedEventLog,
   decodeRecordHashRetractedEventLog,
   decodeRecordVerifiedEventLog,
@@ -21,7 +21,7 @@ import {
   decodeMemberRoleManagerUpdatedEventLog,
   type RawHealthRecordCoreAdminTransferredEventLog,
   type RawRecordAnchoredEventLog,
-  type RawRecordUnanchoredReanchoredEventLog,
+  type RawRecordUnanchoredEventLog,
   type RawRecordHashAddedEventLog,
   type RawRecordHashRetractedEventLog,
   type RawRecordVerifiedEventLog,
@@ -113,9 +113,9 @@ describe('decodeRecordAnchoredEventLog', () => {
   });
 });
 
-function fakeRecordUnanchoredReanchoredLog(
-  overrides: Partial<RawRecordUnanchoredReanchoredEventLog> = {}
-): RawRecordUnanchoredReanchoredEventLog {
+function fakeRecordUnanchoredLog(
+  overrides: Partial<RawRecordUnanchoredEventLog> = {}
+): RawRecordUnanchoredEventLog {
   return {
     eventName: 'RecordUnanchored',
     transactionHash: '0xunanchortx1',
@@ -132,9 +132,9 @@ function fakeRecordUnanchoredReanchoredLog(
   };
 }
 
-describe('decodeRecordUnanchoredReanchoredEventLog', () => {
+describe('decodeRecordUnanchoredEventLog', () => {
   it('decodes a RecordUnanchored log', () => {
-    const decoded = decodeRecordUnanchoredReanchoredEventLog(fakeRecordUnanchoredReanchoredLog());
+    const decoded = decodeRecordUnanchoredEventLog(fakeRecordUnanchoredLog());
 
     expect(decoded).toEqual({
       eventName: 'RecordUnanchored',
@@ -149,14 +149,6 @@ describe('decodeRecordUnanchoredReanchoredEventLog', () => {
         subjectIdHash: '0xSubjectIdHash1',
       },
     });
-  });
-
-  it('decodes a RecordReanchored log — same shape, shared decoder', () => {
-    const decoded = decodeRecordUnanchoredReanchoredEventLog(
-      fakeRecordUnanchoredReanchoredLog({ eventName: 'RecordReanchored', transactionHash: '0xreanchortx1' })
-    );
-
-    expect(decoded).toMatchObject({ eventName: 'RecordReanchored', txHash: '0xreanchortx1' });
   });
 });
 

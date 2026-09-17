@@ -5,7 +5,8 @@
 // indexer covers. See that file's own header for the general registry pattern.
 //
 // HRC Slice 1 covers AdminTransferred only. HRC Slice 2 adds the subject-anchoring family
-// (RecordAnchored/RecordUnanchored/RecordReanchored). HRC Slice 3 adds the hash-versioning family
+// (RecordAnchored/RecordUnanchored — RecordReanchored was removed in #816; reanchorRecord now
+// emits RecordAnchored instead). HRC Slice 3 adds the hash-versioning family
 // (RecordHashAdded/RecordHashRetracted). HRC Slice 4 adds the verification family
 // (RecordVerified/VerificationRetracted/VerificationLevelModified). HRC Slice 5 adds the dispute
 // family (RecordDisputed/DisputeRetracted/DisputeModification). HRC Slice 6 adds the unaccepted
@@ -21,7 +22,7 @@ import type { ChainEventRegistryEntry, ChainIndexerContractConfig } from './chai
 import {
   decodeHealthRecordCoreAdminTransferredEventLog,
   decodeRecordAnchoredEventLog,
-  decodeRecordUnanchoredReanchoredEventLog,
+  decodeRecordUnanchoredEventLog,
   decodeRecordHashAddedEventLog,
   decodeRecordHashRetractedEventLog,
   decodeRecordVerifiedEventLog,
@@ -36,7 +37,7 @@ import {
   type HealthRecordCoreEventName,
   type RawHealthRecordCoreAdminTransferredEventLog,
   type RawRecordAnchoredEventLog,
-  type RawRecordUnanchoredReanchoredEventLog,
+  type RawRecordUnanchoredEventLog,
   type RawRecordHashAddedEventLog,
   type RawRecordHashRetractedEventLog,
   type RawRecordVerifiedEventLog,
@@ -53,7 +54,6 @@ import {
   reconcileHealthRecordCoreAdminTransferredEvent,
   reconcileRecordAnchoredEvent,
   reconcileRecordUnanchoredEvent,
-  reconcileRecordReanchoredEvent,
   reconcileRecordHashAddedEvent,
   reconcileRecordHashRetractedEvent,
   reconcileRecordVerifiedEvent,
@@ -96,17 +96,8 @@ export const HEALTH_RECORD_CORE_EVENT_REGISTRY: Record<
       recordIdHash: log.args.recordIdHash as string,
       subjectIdHash: log.args.subjectIdHash as string,
     }),
-    decode: log => decodeRecordUnanchoredReanchoredEventLog(log as RawRecordUnanchoredReanchoredEventLog),
+    decode: log => decodeRecordUnanchoredEventLog(log as RawRecordUnanchoredEventLog),
     reconcile: reconcileRecordUnanchoredEvent,
-  },
-  RecordReanchored: {
-    getFilter: contract => contract.filters.RecordReanchored(),
-    toRawArgs: log => ({
-      recordIdHash: log.args.recordIdHash as string,
-      subjectIdHash: log.args.subjectIdHash as string,
-    }),
-    decode: log => decodeRecordUnanchoredReanchoredEventLog(log as RawRecordUnanchoredReanchoredEventLog),
-    reconcile: reconcileRecordReanchoredEvent,
   },
   RecordHashAdded: {
     getFilter: contract => contract.filters.RecordHashAdded(),

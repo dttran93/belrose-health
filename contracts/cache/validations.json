@@ -253,6 +253,1646 @@
       "smartContracts/HealthRecordCore.sol:HealthRecordCore": {
         "src": "smartContracts\\HealthRecordCore.sol:43",
         "version": {
+          "withMetadata": "ce0ffcb0f4697f8c5f8d8a6c4fcc68be1998c0a85668b7acbbcb599fa5843f07",
+          "withoutMetadata": "6a6f3c44d053505654e8a455150d2b6b76a88890a85167f2f21fc4c3bbcabf3b",
+          "linkedWithoutMetadata": "6a6f3c44d053505654e8a455150d2b6b76a88890a85167f2f21fc4c3bbcabf3b"
+        },
+        "inherit": [
+          "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol:UUPSUpgradeable",
+          "@openzeppelin/contracts/interfaces/draft-IERC1822.sol:IERC1822Proxiable",
+          "@openzeppelin/contracts/proxy/utils/Initializable.sol:Initializable"
+        ],
+        "libraries": [],
+        "methods": [
+          "()",
+          "initialize(address)",
+          "transferAdmin(address)",
+          "setMemberRoleManager(address)",
+          "anchorRecord(bytes32,bytes32,bytes32,uint8)",
+          "unanchorRecord(bytes32,bytes32)",
+          "reanchorRecord(bytes32,bytes32,uint8)",
+          "addRecordHash(bytes32,bytes32)",
+          "retractRecordHash(bytes32,bytes32)",
+          "getRecordSubjects(bytes32)",
+          "getSubjectMedicalHistory(bytes32)",
+          "isSubject(bytes32,bytes32)",
+          "isActiveSubject(bytes32,bytes32)",
+          "getActiveRecordSubjects(bytes32)",
+          "getSubjectStats(bytes32)",
+          "getRecordVersionHistory(bytes32)",
+          "getRecordIdForHash(bytes32)",
+          "doesHashExist(bytes32)",
+          "getVersionCount(bytes32)",
+          "getTotalAnchoredRecords()",
+          "verifyRecord(bytes32,bytes32,uint8)",
+          "retractVerification(bytes32)",
+          "modifyVerificationLevel(bytes32,uint8)",
+          "disputeRecord(bytes32,bytes32,uint8,uint8,string)",
+          "retractDispute(bytes32)",
+          "modifyDispute(bytes32,uint8,uint8)",
+          "flagUnacceptedUpdate(bytes32,bytes32,bytes32,bytes32)",
+          "revokeUnacceptedFlag(bytes32,bytes32)",
+          "getVerifications(bytes32)",
+          "hasUserVerified(bytes32,bytes32)",
+          "getUserVerification(bytes32,bytes32)",
+          "getVerificationStats(bytes32)",
+          "getUserVerifications(bytes32)",
+          "getDisputes(bytes32)",
+          "hasUserDisputed(bytes32,bytes32)",
+          "getUserDispute(bytes32,bytes32)",
+          "getDisputeStats(bytes32)",
+          "getUserDisputes(bytes32)",
+          "getDisputesAgainstUser(bytes32)",
+          "getUnacceptedFlags(bytes32)",
+          "getUnacceptedFlag(bytes32,bytes32)",
+          "getActiveUnacceptedFlagCount(bytes32)",
+          "hasActiveUnacceptedFlags(bytes32)"
+        ],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [
+            {
+              "label": "memberRoleManager",
+              "offset": 0,
+              "slot": "0",
+              "type": "t_contract(MemberRoleManagerInterface)1550",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:48"
+            },
+            {
+              "label": "admin",
+              "offset": 0,
+              "slot": "1",
+              "type": "t_address",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:50"
+            },
+            {
+              "label": "recordSubjects",
+              "offset": 0,
+              "slot": "2",
+              "type": "t_mapping(t_bytes32,t_array(t_bytes32)dyn_storage)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:182"
+            },
+            {
+              "label": "isSubjectOfRecord",
+              "offset": 0,
+              "slot": "3",
+              "type": "t_mapping(t_bytes32,t_mapping(t_bytes32,t_bool))",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:185"
+            },
+            {
+              "label": "subjectMedicalHistory",
+              "offset": 0,
+              "slot": "4",
+              "type": "t_mapping(t_bytes32,t_array(t_bytes32)dyn_storage)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:188"
+            },
+            {
+              "label": "isSubjectActive",
+              "offset": 0,
+              "slot": "5",
+              "type": "t_mapping(t_bytes32,t_mapping(t_bytes32,t_bool))",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:191"
+            },
+            {
+              "label": "recordIdForHash",
+              "offset": 0,
+              "slot": "6",
+              "type": "t_mapping(t_bytes32,t_bytes32)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:194"
+            },
+            {
+              "label": "recordVersionHistory",
+              "offset": 0,
+              "slot": "7",
+              "type": "t_mapping(t_bytes32,t_array(t_bytes32)dyn_storage)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:197"
+            },
+            {
+              "label": "isHashActive",
+              "offset": 0,
+              "slot": "8",
+              "type": "t_mapping(t_bytes32,t_bool)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:200"
+            },
+            {
+              "label": "totalAnchoredRecords",
+              "offset": 0,
+              "slot": "9",
+              "type": "t_uint256",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:202"
+            },
+            {
+              "label": "verifications",
+              "offset": 0,
+              "slot": "10",
+              "type": "t_mapping(t_bytes32,t_array(t_struct(Verification)2809_storage)dyn_storage)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:634"
+            },
+            {
+              "label": "currentlyVerified",
+              "offset": 0,
+              "slot": "11",
+              "type": "t_mapping(t_bytes32,t_mapping(t_bytes32,t_bool))",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:635"
+            },
+            {
+              "label": "verificationIndex",
+              "offset": 0,
+              "slot": "12",
+              "type": "t_mapping(t_bytes32,t_mapping(t_bytes32,t_uint256))",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:636"
+            },
+            {
+              "label": "disputes",
+              "offset": 0,
+              "slot": "13",
+              "type": "t_mapping(t_bytes32,t_array(t_struct(Dispute)2826_storage)dyn_storage)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:639"
+            },
+            {
+              "label": "currentlyDisputed",
+              "offset": 0,
+              "slot": "14",
+              "type": "t_mapping(t_bytes32,t_mapping(t_bytes32,t_bool))",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:640"
+            },
+            {
+              "label": "disputeIndex",
+              "offset": 0,
+              "slot": "15",
+              "type": "t_mapping(t_bytes32,t_mapping(t_bytes32,t_uint256))",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:641"
+            },
+            {
+              "label": "unacceptedFlagsBySubject",
+              "offset": 0,
+              "slot": "16",
+              "type": "t_mapping(t_bytes32,t_array(t_struct(UnacceptedFlag)2837_storage)dyn_storage)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:644"
+            },
+            {
+              "label": "unacceptedFlagIndex",
+              "offset": 0,
+              "slot": "17",
+              "type": "t_mapping(t_bytes32,t_mapping(t_bytes32,t_uint256))",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:645"
+            },
+            {
+              "label": "activeUnacceptedFlagCount",
+              "offset": 0,
+              "slot": "18",
+              "type": "t_mapping(t_bytes32,t_uint256)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:646"
+            },
+            {
+              "label": "verificationsByUser",
+              "offset": 0,
+              "slot": "19",
+              "type": "t_mapping(t_bytes32,t_array(t_bytes32)dyn_storage)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:649"
+            },
+            {
+              "label": "disputesByUser",
+              "offset": 0,
+              "slot": "20",
+              "type": "t_mapping(t_bytes32,t_array(t_bytes32)dyn_storage)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:650"
+            },
+            {
+              "label": "totalVerifications",
+              "offset": 0,
+              "slot": "21",
+              "type": "t_uint256",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:652"
+            },
+            {
+              "label": "totalDisputes",
+              "offset": 0,
+              "slot": "22",
+              "type": "t_uint256",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:653"
+            },
+            {
+              "label": "totalUnacceptedFlags",
+              "offset": 0,
+              "slot": "23",
+              "type": "t_uint256",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:654"
+            },
+            {
+              "label": "__gap",
+              "offset": 0,
+              "slot": "24",
+              "type": "t_array(t_uint256)50_storage",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:1216"
+            }
+          ],
+          "types": {
+            "t_bool": {
+              "label": "bool",
+              "numberOfBytes": "1"
+            },
+            "t_struct(InitializableStorage)130_storage": {
+              "label": "struct Initializable.InitializableStorage",
+              "members": [
+                {
+                  "label": "_initialized",
+                  "type": "t_uint64",
+                  "offset": 0,
+                  "slot": "0"
+                },
+                {
+                  "label": "_initializing",
+                  "type": "t_bool",
+                  "offset": 8,
+                  "slot": "0"
+                }
+              ],
+              "numberOfBytes": "32"
+            },
+            "t_uint64": {
+              "label": "uint64",
+              "numberOfBytes": "8"
+            },
+            "t_address": {
+              "label": "address",
+              "numberOfBytes": "20"
+            },
+            "t_array(t_bytes32)dyn_storage": {
+              "label": "bytes32[]",
+              "numberOfBytes": "32"
+            },
+            "t_array(t_struct(Dispute)2826_storage)dyn_storage": {
+              "label": "struct HealthRecordCore.Dispute[]",
+              "numberOfBytes": "32"
+            },
+            "t_array(t_struct(UnacceptedFlag)2837_storage)dyn_storage": {
+              "label": "struct HealthRecordCore.UnacceptedFlag[]",
+              "numberOfBytes": "32"
+            },
+            "t_array(t_struct(Verification)2809_storage)dyn_storage": {
+              "label": "struct HealthRecordCore.Verification[]",
+              "numberOfBytes": "32"
+            },
+            "t_array(t_uint256)50_storage": {
+              "label": "uint256[50]",
+              "numberOfBytes": "1600"
+            },
+            "t_bytes32": {
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "t_contract(MemberRoleManagerInterface)1550": {
+              "label": "contract MemberRoleManagerInterface",
+              "numberOfBytes": "20"
+            },
+            "t_enum(DisputeCulpability)2797": {
+              "label": "enum HealthRecordCore.DisputeCulpability",
+              "members": [
+                "Unknown",
+                "NoFault",
+                "Systemic",
+                "Preventable",
+                "Reckless",
+                "Intentional"
+              ],
+              "numberOfBytes": "1"
+            },
+            "t_enum(DisputeSeverity)2790": {
+              "label": "enum HealthRecordCore.DisputeSeverity",
+              "members": [
+                "None",
+                "Negligible",
+                "Moderate",
+                "Major"
+              ],
+              "numberOfBytes": "1"
+            },
+            "t_enum(VerificationLevel)2785": {
+              "label": "enum HealthRecordCore.VerificationLevel",
+              "members": [
+                "None",
+                "Provenance",
+                "Content",
+                "Full"
+              ],
+              "numberOfBytes": "1"
+            },
+            "t_mapping(t_bytes32,t_array(t_bytes32)dyn_storage)": {
+              "label": "mapping(bytes32 => bytes32[])",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_bytes32,t_array(t_struct(Dispute)2826_storage)dyn_storage)": {
+              "label": "mapping(bytes32 => struct HealthRecordCore.Dispute[])",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_bytes32,t_array(t_struct(UnacceptedFlag)2837_storage)dyn_storage)": {
+              "label": "mapping(bytes32 => struct HealthRecordCore.UnacceptedFlag[])",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_bytes32,t_array(t_struct(Verification)2809_storage)dyn_storage)": {
+              "label": "mapping(bytes32 => struct HealthRecordCore.Verification[])",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_bytes32,t_bool)": {
+              "label": "mapping(bytes32 => bool)",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_bytes32,t_bytes32)": {
+              "label": "mapping(bytes32 => bytes32)",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_bytes32,t_mapping(t_bytes32,t_bool))": {
+              "label": "mapping(bytes32 => mapping(bytes32 => bool))",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_bytes32,t_mapping(t_bytes32,t_uint256))": {
+              "label": "mapping(bytes32 => mapping(bytes32 => uint256))",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_bytes32,t_uint256)": {
+              "label": "mapping(bytes32 => uint256)",
+              "numberOfBytes": "32"
+            },
+            "t_string_storage": {
+              "label": "string",
+              "numberOfBytes": "32"
+            },
+            "t_struct(Dispute)2826_storage": {
+              "label": "struct HealthRecordCore.Dispute",
+              "members": [
+                {
+                  "label": "disputerIdHash",
+                  "type": "t_bytes32",
+                  "offset": 0,
+                  "slot": "0"
+                },
+                {
+                  "label": "recordIdHash",
+                  "type": "t_bytes32",
+                  "offset": 0,
+                  "slot": "1"
+                },
+                {
+                  "label": "severity",
+                  "type": "t_enum(DisputeSeverity)2790",
+                  "offset": 0,
+                  "slot": "2"
+                },
+                {
+                  "label": "culpability",
+                  "type": "t_enum(DisputeCulpability)2797",
+                  "offset": 1,
+                  "slot": "2"
+                },
+                {
+                  "label": "notes",
+                  "type": "t_string_storage",
+                  "offset": 0,
+                  "slot": "3"
+                },
+                {
+                  "label": "createdAt",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "4"
+                },
+                {
+                  "label": "isActive",
+                  "type": "t_bool",
+                  "offset": 0,
+                  "slot": "5"
+                }
+              ],
+              "numberOfBytes": "192"
+            },
+            "t_struct(UnacceptedFlag)2837_storage": {
+              "label": "struct HealthRecordCore.UnacceptedFlag",
+              "members": [
+                {
+                  "label": "recordIdHash",
+                  "type": "t_bytes32",
+                  "offset": 0,
+                  "slot": "0"
+                },
+                {
+                  "label": "reporterIdHash",
+                  "type": "t_bytes32",
+                  "offset": 0,
+                  "slot": "1"
+                },
+                {
+                  "label": "recordHash",
+                  "type": "t_bytes32",
+                  "offset": 0,
+                  "slot": "2"
+                },
+                {
+                  "label": "createdAt",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "3"
+                },
+                {
+                  "label": "isActive",
+                  "type": "t_bool",
+                  "offset": 0,
+                  "slot": "4"
+                }
+              ],
+              "numberOfBytes": "160"
+            },
+            "t_struct(Verification)2809_storage": {
+              "label": "struct HealthRecordCore.Verification",
+              "members": [
+                {
+                  "label": "verifierIdHash",
+                  "type": "t_bytes32",
+                  "offset": 0,
+                  "slot": "0"
+                },
+                {
+                  "label": "recordIdHash",
+                  "type": "t_bytes32",
+                  "offset": 0,
+                  "slot": "1"
+                },
+                {
+                  "label": "level",
+                  "type": "t_enum(VerificationLevel)2785",
+                  "offset": 0,
+                  "slot": "2"
+                },
+                {
+                  "label": "createdAt",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "3"
+                },
+                {
+                  "label": "isActive",
+                  "type": "t_bool",
+                  "offset": 0,
+                  "slot": "4"
+                }
+              ],
+              "numberOfBytes": "160"
+            },
+            "t_uint256": {
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          },
+          "layoutVersion": "1.2",
+          "flat": true,
+          "namespaces": {
+            "erc7201:openzeppelin.storage.Initializable": [
+              {
+                "contract": "Initializable",
+                "label": "_initialized",
+                "type": "t_uint64",
+                "src": "@openzeppelin\\contracts\\proxy\\utils\\Initializable.sol:69",
+                "offset": 0,
+                "slot": "0"
+              },
+              {
+                "contract": "Initializable",
+                "label": "_initializing",
+                "type": "t_bool",
+                "src": "@openzeppelin\\contracts\\proxy\\utils\\Initializable.sol:73",
+                "offset": 8,
+                "slot": "0"
+              }
+            ]
+          }
+        },
+        "solcVersion": "0.8.24"
+      },
+      "smartContracts/HealthRecordCore.sol:MemberRoleManagerInterface": {
+        "src": "smartContracts\\HealthRecordCore.sol:11",
+        "inherit": [],
+        "libraries": [],
+        "methods": [
+          "isActiveMember(address)",
+          "isVerifiedMember(address)",
+          "hasActiveRole(bytes32,address)",
+          "hasRole(bytes32,address,string)",
+          "isOwnerOrAdmin(bytes32,address)",
+          "getUserForWallet(address)",
+          "isControllerOf(bytes32,bytes32)",
+          "extendTrusteeGrantsOnAnchor(bytes32,bytes32)",
+          "retractTrusteeGrantsOnUnanchor(bytes32,bytes32)"
+        ],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      }
+    },
+    {
+      "@openzeppelin/contracts/interfaces/IERC1967.sol:IERC1967": {
+        "src": "@openzeppelin\\contracts\\interfaces\\IERC1967.sol:9",
+        "inherit": [],
+        "libraries": [],
+        "methods": [],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      },
+      "@openzeppelin/contracts/interfaces/draft-IERC1822.sol:IERC1822Proxiable": {
+        "src": "@openzeppelin\\contracts\\interfaces\\draft-IERC1822.sol:10",
+        "inherit": [],
+        "libraries": [],
+        "methods": [
+          "proxiableUUID()"
+        ],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      },
+      "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol:ERC1967Utils": {
+        "src": "@openzeppelin\\contracts\\proxy\\ERC1967\\ERC1967Utils.sol:15",
+        "version": {
+          "withMetadata": "be848ccd8ae4d70487927aae70da0f0e7843881a8ad8fad3180e1355717c1f46",
+          "withoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157",
+          "linkedWithoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157"
+        },
+        "inherit": [],
+        "libraries": [
+          "@openzeppelin/contracts/utils/StorageSlot.sol:StorageSlot",
+          "@openzeppelin/contracts/utils/Address.sol:Address"
+        ],
+        "methods": [],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      },
+      "@openzeppelin/contracts/proxy/beacon/IBeacon.sol:IBeacon": {
+        "src": "@openzeppelin\\contracts\\proxy\\beacon\\IBeacon.sol:9",
+        "inherit": [],
+        "libraries": [],
+        "methods": [
+          "implementation()"
+        ],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      },
+      "@openzeppelin/contracts/proxy/utils/Initializable.sol:Initializable": {
+        "src": "@openzeppelin\\contracts\\proxy\\utils\\Initializable.sol:56",
+        "inherit": [],
+        "libraries": [],
+        "methods": [],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {
+            "t_bool": {
+              "label": "bool",
+              "numberOfBytes": "1"
+            },
+            "t_struct(InitializableStorage)130_storage": {
+              "label": "struct Initializable.InitializableStorage",
+              "members": [
+                {
+                  "label": "_initialized",
+                  "type": "t_uint64",
+                  "offset": 0,
+                  "slot": "0"
+                },
+                {
+                  "label": "_initializing",
+                  "type": "t_bool",
+                  "offset": 8,
+                  "slot": "0"
+                }
+              ],
+              "numberOfBytes": "32"
+            },
+            "t_uint64": {
+              "label": "uint64",
+              "numberOfBytes": "8"
+            }
+          },
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {
+            "erc7201:openzeppelin.storage.Initializable": [
+              {
+                "contract": "Initializable",
+                "label": "_initialized",
+                "type": "t_uint64",
+                "src": "@openzeppelin\\contracts\\proxy\\utils\\Initializable.sol:69",
+                "offset": 0,
+                "slot": "0"
+              },
+              {
+                "contract": "Initializable",
+                "label": "_initializing",
+                "type": "t_bool",
+                "src": "@openzeppelin\\contracts\\proxy\\utils\\Initializable.sol:73",
+                "offset": 8,
+                "slot": "0"
+              }
+            ]
+          }
+        },
+        "solcVersion": "0.8.24"
+      },
+      "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol:UUPSUpgradeable": {
+        "src": "@openzeppelin\\contracts\\proxy\\utils\\UUPSUpgradeable.sol:21",
+        "inherit": [
+          "@openzeppelin/contracts/interfaces/draft-IERC1822.sol:IERC1822Proxiable"
+        ],
+        "libraries": [
+          "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol:ERC1967Utils"
+        ],
+        "methods": [
+          "proxiableUUID()",
+          "upgradeToAndCall(address,bytes)"
+        ],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      },
+      "@openzeppelin/contracts/utils/Address.sol:Address": {
+        "src": "@openzeppelin\\contracts\\utils\\Address.sol:12",
+        "version": {
+          "withMetadata": "67a263d9acd53362bcb8d138a99da5fbb80d1832288c35c11fdf7f315a160312",
+          "withoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157",
+          "linkedWithoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157"
+        },
+        "inherit": [],
+        "libraries": [
+          "@openzeppelin/contracts/utils/LowLevelCall.sol:LowLevelCall",
+          "@openzeppelin/contracts/utils/Errors.sol:Errors"
+        ],
+        "methods": [],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      },
+      "@openzeppelin/contracts/utils/Errors.sol:Errors": {
+        "src": "@openzeppelin\\contracts\\utils\\Errors.sol:14",
+        "version": {
+          "withMetadata": "d74f701e995e16b65a9da58a5a422919a30f66949c24ef6f28655043ed3de353",
+          "withoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157",
+          "linkedWithoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157"
+        },
+        "inherit": [],
+        "libraries": [],
+        "methods": [],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      },
+      "@openzeppelin/contracts/utils/LowLevelCall.sol:LowLevelCall": {
+        "src": "@openzeppelin\\contracts\\utils\\LowLevelCall.sol:12",
+        "version": {
+          "withMetadata": "f33f95edf1ec95d0add368fb433dc4c35e9e5c3d6eb4d6e10696696fb96b5203",
+          "withoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157",
+          "linkedWithoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157"
+        },
+        "inherit": [],
+        "libraries": [],
+        "methods": [],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      },
+      "@openzeppelin/contracts/utils/StorageSlot.sol:StorageSlot": {
+        "src": "@openzeppelin\\contracts\\utils\\StorageSlot.sol:34",
+        "version": {
+          "withMetadata": "5746189d2153c8e87c3a895130da20ea499dcf4fc4361b582d48d4d3d3d027f5",
+          "withoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157",
+          "linkedWithoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157"
+        },
+        "inherit": [],
+        "libraries": [],
+        "methods": [],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      },
+      "smartContracts/HealthRecordCore.sol:HealthRecordCore": {
+        "src": "smartContracts\\HealthRecordCore.sol:43",
+        "version": {
+          "withMetadata": "459511c9877734126770276b8a028b041fbcd5bb1d0bc15727f4127cd5adce01",
+          "withoutMetadata": "a8d1e0f2d673987312c73954e10e86abf8f1008b762d3df39d05792a009de0d3",
+          "linkedWithoutMetadata": "a8d1e0f2d673987312c73954e10e86abf8f1008b762d3df39d05792a009de0d3"
+        },
+        "inherit": [
+          "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol:UUPSUpgradeable",
+          "@openzeppelin/contracts/interfaces/draft-IERC1822.sol:IERC1822Proxiable",
+          "@openzeppelin/contracts/proxy/utils/Initializable.sol:Initializable"
+        ],
+        "libraries": [],
+        "methods": [
+          "()",
+          "initialize(address)",
+          "transferAdmin(address)",
+          "setMemberRoleManager(address)",
+          "anchorRecord(bytes32,bytes32,bytes32,uint8)",
+          "unanchorRecord(bytes32,bytes32)",
+          "reanchorRecord(bytes32,bytes32)",
+          "addRecordHash(bytes32,bytes32)",
+          "retractRecordHash(bytes32,bytes32)",
+          "getRecordSubjects(bytes32)",
+          "getSubjectMedicalHistory(bytes32)",
+          "isSubject(bytes32,bytes32)",
+          "isActiveSubject(bytes32,bytes32)",
+          "getActiveRecordSubjects(bytes32)",
+          "getSubjectStats(bytes32)",
+          "getRecordVersionHistory(bytes32)",
+          "getRecordIdForHash(bytes32)",
+          "doesHashExist(bytes32)",
+          "getVersionCount(bytes32)",
+          "getTotalAnchoredRecords()",
+          "verifyRecord(bytes32,bytes32,uint8)",
+          "retractVerification(bytes32)",
+          "modifyVerificationLevel(bytes32,uint8)",
+          "disputeRecord(bytes32,bytes32,uint8,uint8,string)",
+          "retractDispute(bytes32)",
+          "modifyDispute(bytes32,uint8,uint8)",
+          "flagUnacceptedUpdate(bytes32,bytes32,bytes32,bytes32)",
+          "revokeUnacceptedFlag(bytes32,bytes32)",
+          "getVerifications(bytes32)",
+          "hasUserVerified(bytes32,bytes32)",
+          "getUserVerification(bytes32,bytes32)",
+          "getVerificationStats(bytes32)",
+          "getUserVerifications(bytes32)",
+          "getDisputes(bytes32)",
+          "hasUserDisputed(bytes32,bytes32)",
+          "getUserDispute(bytes32,bytes32)",
+          "getDisputeStats(bytes32)",
+          "getUserDisputes(bytes32)",
+          "getDisputesAgainstUser(bytes32)",
+          "getUnacceptedFlags(bytes32)",
+          "getUnacceptedFlag(bytes32,bytes32)",
+          "getActiveUnacceptedFlagCount(bytes32)",
+          "hasActiveUnacceptedFlags(bytes32)"
+        ],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [
+            {
+              "label": "memberRoleManager",
+              "offset": 0,
+              "slot": "0",
+              "type": "t_contract(MemberRoleManagerInterface)1550",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:48"
+            },
+            {
+              "label": "admin",
+              "offset": 0,
+              "slot": "1",
+              "type": "t_address",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:50"
+            },
+            {
+              "label": "recordSubjects",
+              "offset": 0,
+              "slot": "2",
+              "type": "t_mapping(t_bytes32,t_array(t_bytes32)dyn_storage)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:182"
+            },
+            {
+              "label": "isSubjectOfRecord",
+              "offset": 0,
+              "slot": "3",
+              "type": "t_mapping(t_bytes32,t_mapping(t_bytes32,t_bool))",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:185"
+            },
+            {
+              "label": "subjectMedicalHistory",
+              "offset": 0,
+              "slot": "4",
+              "type": "t_mapping(t_bytes32,t_array(t_bytes32)dyn_storage)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:188"
+            },
+            {
+              "label": "isSubjectActive",
+              "offset": 0,
+              "slot": "5",
+              "type": "t_mapping(t_bytes32,t_mapping(t_bytes32,t_bool))",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:191"
+            },
+            {
+              "label": "recordIdForHash",
+              "offset": 0,
+              "slot": "6",
+              "type": "t_mapping(t_bytes32,t_bytes32)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:194"
+            },
+            {
+              "label": "recordVersionHistory",
+              "offset": 0,
+              "slot": "7",
+              "type": "t_mapping(t_bytes32,t_array(t_bytes32)dyn_storage)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:197"
+            },
+            {
+              "label": "isHashActive",
+              "offset": 0,
+              "slot": "8",
+              "type": "t_mapping(t_bytes32,t_bool)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:200"
+            },
+            {
+              "label": "totalAnchoredRecords",
+              "offset": 0,
+              "slot": "9",
+              "type": "t_uint256",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:202"
+            },
+            {
+              "label": "verifications",
+              "offset": 0,
+              "slot": "10",
+              "type": "t_mapping(t_bytes32,t_array(t_struct(Verification)2792_storage)dyn_storage)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:626"
+            },
+            {
+              "label": "currentlyVerified",
+              "offset": 0,
+              "slot": "11",
+              "type": "t_mapping(t_bytes32,t_mapping(t_bytes32,t_bool))",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:627"
+            },
+            {
+              "label": "verificationIndex",
+              "offset": 0,
+              "slot": "12",
+              "type": "t_mapping(t_bytes32,t_mapping(t_bytes32,t_uint256))",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:628"
+            },
+            {
+              "label": "disputes",
+              "offset": 0,
+              "slot": "13",
+              "type": "t_mapping(t_bytes32,t_array(t_struct(Dispute)2809_storage)dyn_storage)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:631"
+            },
+            {
+              "label": "currentlyDisputed",
+              "offset": 0,
+              "slot": "14",
+              "type": "t_mapping(t_bytes32,t_mapping(t_bytes32,t_bool))",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:632"
+            },
+            {
+              "label": "disputeIndex",
+              "offset": 0,
+              "slot": "15",
+              "type": "t_mapping(t_bytes32,t_mapping(t_bytes32,t_uint256))",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:633"
+            },
+            {
+              "label": "unacceptedFlagsBySubject",
+              "offset": 0,
+              "slot": "16",
+              "type": "t_mapping(t_bytes32,t_array(t_struct(UnacceptedFlag)2820_storage)dyn_storage)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:636"
+            },
+            {
+              "label": "unacceptedFlagIndex",
+              "offset": 0,
+              "slot": "17",
+              "type": "t_mapping(t_bytes32,t_mapping(t_bytes32,t_uint256))",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:637"
+            },
+            {
+              "label": "activeUnacceptedFlagCount",
+              "offset": 0,
+              "slot": "18",
+              "type": "t_mapping(t_bytes32,t_uint256)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:638"
+            },
+            {
+              "label": "verificationsByUser",
+              "offset": 0,
+              "slot": "19",
+              "type": "t_mapping(t_bytes32,t_array(t_bytes32)dyn_storage)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:641"
+            },
+            {
+              "label": "disputesByUser",
+              "offset": 0,
+              "slot": "20",
+              "type": "t_mapping(t_bytes32,t_array(t_bytes32)dyn_storage)",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:642"
+            },
+            {
+              "label": "totalVerifications",
+              "offset": 0,
+              "slot": "21",
+              "type": "t_uint256",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:644"
+            },
+            {
+              "label": "totalDisputes",
+              "offset": 0,
+              "slot": "22",
+              "type": "t_uint256",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:645"
+            },
+            {
+              "label": "totalUnacceptedFlags",
+              "offset": 0,
+              "slot": "23",
+              "type": "t_uint256",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:646"
+            },
+            {
+              "label": "__gap",
+              "offset": 0,
+              "slot": "24",
+              "type": "t_array(t_uint256)50_storage",
+              "contract": "HealthRecordCore",
+              "src": "smartContracts\\HealthRecordCore.sol:1208"
+            }
+          ],
+          "types": {
+            "t_bool": {
+              "label": "bool",
+              "numberOfBytes": "1"
+            },
+            "t_struct(InitializableStorage)130_storage": {
+              "label": "struct Initializable.InitializableStorage",
+              "members": [
+                {
+                  "label": "_initialized",
+                  "type": "t_uint64",
+                  "offset": 0,
+                  "slot": "0"
+                },
+                {
+                  "label": "_initializing",
+                  "type": "t_bool",
+                  "offset": 8,
+                  "slot": "0"
+                }
+              ],
+              "numberOfBytes": "32"
+            },
+            "t_uint64": {
+              "label": "uint64",
+              "numberOfBytes": "8"
+            },
+            "t_address": {
+              "label": "address",
+              "numberOfBytes": "20"
+            },
+            "t_array(t_bytes32)dyn_storage": {
+              "label": "bytes32[]",
+              "numberOfBytes": "32"
+            },
+            "t_array(t_struct(Dispute)2809_storage)dyn_storage": {
+              "label": "struct HealthRecordCore.Dispute[]",
+              "numberOfBytes": "32"
+            },
+            "t_array(t_struct(UnacceptedFlag)2820_storage)dyn_storage": {
+              "label": "struct HealthRecordCore.UnacceptedFlag[]",
+              "numberOfBytes": "32"
+            },
+            "t_array(t_struct(Verification)2792_storage)dyn_storage": {
+              "label": "struct HealthRecordCore.Verification[]",
+              "numberOfBytes": "32"
+            },
+            "t_array(t_uint256)50_storage": {
+              "label": "uint256[50]",
+              "numberOfBytes": "1600"
+            },
+            "t_bytes32": {
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "t_contract(MemberRoleManagerInterface)1550": {
+              "label": "contract MemberRoleManagerInterface",
+              "numberOfBytes": "20"
+            },
+            "t_enum(DisputeCulpability)2780": {
+              "label": "enum HealthRecordCore.DisputeCulpability",
+              "members": [
+                "Unknown",
+                "NoFault",
+                "Systemic",
+                "Preventable",
+                "Reckless",
+                "Intentional"
+              ],
+              "numberOfBytes": "1"
+            },
+            "t_enum(DisputeSeverity)2773": {
+              "label": "enum HealthRecordCore.DisputeSeverity",
+              "members": [
+                "None",
+                "Negligible",
+                "Moderate",
+                "Major"
+              ],
+              "numberOfBytes": "1"
+            },
+            "t_enum(VerificationLevel)2768": {
+              "label": "enum HealthRecordCore.VerificationLevel",
+              "members": [
+                "None",
+                "Provenance",
+                "Content",
+                "Full"
+              ],
+              "numberOfBytes": "1"
+            },
+            "t_mapping(t_bytes32,t_array(t_bytes32)dyn_storage)": {
+              "label": "mapping(bytes32 => bytes32[])",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_bytes32,t_array(t_struct(Dispute)2809_storage)dyn_storage)": {
+              "label": "mapping(bytes32 => struct HealthRecordCore.Dispute[])",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_bytes32,t_array(t_struct(UnacceptedFlag)2820_storage)dyn_storage)": {
+              "label": "mapping(bytes32 => struct HealthRecordCore.UnacceptedFlag[])",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_bytes32,t_array(t_struct(Verification)2792_storage)dyn_storage)": {
+              "label": "mapping(bytes32 => struct HealthRecordCore.Verification[])",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_bytes32,t_bool)": {
+              "label": "mapping(bytes32 => bool)",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_bytes32,t_bytes32)": {
+              "label": "mapping(bytes32 => bytes32)",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_bytes32,t_mapping(t_bytes32,t_bool))": {
+              "label": "mapping(bytes32 => mapping(bytes32 => bool))",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_bytes32,t_mapping(t_bytes32,t_uint256))": {
+              "label": "mapping(bytes32 => mapping(bytes32 => uint256))",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_bytes32,t_uint256)": {
+              "label": "mapping(bytes32 => uint256)",
+              "numberOfBytes": "32"
+            },
+            "t_string_storage": {
+              "label": "string",
+              "numberOfBytes": "32"
+            },
+            "t_struct(Dispute)2809_storage": {
+              "label": "struct HealthRecordCore.Dispute",
+              "members": [
+                {
+                  "label": "disputerIdHash",
+                  "type": "t_bytes32",
+                  "offset": 0,
+                  "slot": "0"
+                },
+                {
+                  "label": "recordIdHash",
+                  "type": "t_bytes32",
+                  "offset": 0,
+                  "slot": "1"
+                },
+                {
+                  "label": "severity",
+                  "type": "t_enum(DisputeSeverity)2773",
+                  "offset": 0,
+                  "slot": "2"
+                },
+                {
+                  "label": "culpability",
+                  "type": "t_enum(DisputeCulpability)2780",
+                  "offset": 1,
+                  "slot": "2"
+                },
+                {
+                  "label": "notes",
+                  "type": "t_string_storage",
+                  "offset": 0,
+                  "slot": "3"
+                },
+                {
+                  "label": "createdAt",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "4"
+                },
+                {
+                  "label": "isActive",
+                  "type": "t_bool",
+                  "offset": 0,
+                  "slot": "5"
+                }
+              ],
+              "numberOfBytes": "192"
+            },
+            "t_struct(UnacceptedFlag)2820_storage": {
+              "label": "struct HealthRecordCore.UnacceptedFlag",
+              "members": [
+                {
+                  "label": "recordIdHash",
+                  "type": "t_bytes32",
+                  "offset": 0,
+                  "slot": "0"
+                },
+                {
+                  "label": "reporterIdHash",
+                  "type": "t_bytes32",
+                  "offset": 0,
+                  "slot": "1"
+                },
+                {
+                  "label": "recordHash",
+                  "type": "t_bytes32",
+                  "offset": 0,
+                  "slot": "2"
+                },
+                {
+                  "label": "createdAt",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "3"
+                },
+                {
+                  "label": "isActive",
+                  "type": "t_bool",
+                  "offset": 0,
+                  "slot": "4"
+                }
+              ],
+              "numberOfBytes": "160"
+            },
+            "t_struct(Verification)2792_storage": {
+              "label": "struct HealthRecordCore.Verification",
+              "members": [
+                {
+                  "label": "verifierIdHash",
+                  "type": "t_bytes32",
+                  "offset": 0,
+                  "slot": "0"
+                },
+                {
+                  "label": "recordIdHash",
+                  "type": "t_bytes32",
+                  "offset": 0,
+                  "slot": "1"
+                },
+                {
+                  "label": "level",
+                  "type": "t_enum(VerificationLevel)2768",
+                  "offset": 0,
+                  "slot": "2"
+                },
+                {
+                  "label": "createdAt",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "3"
+                },
+                {
+                  "label": "isActive",
+                  "type": "t_bool",
+                  "offset": 0,
+                  "slot": "4"
+                }
+              ],
+              "numberOfBytes": "160"
+            },
+            "t_uint256": {
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          },
+          "layoutVersion": "1.2",
+          "flat": true,
+          "namespaces": {
+            "erc7201:openzeppelin.storage.Initializable": [
+              {
+                "contract": "Initializable",
+                "label": "_initialized",
+                "type": "t_uint64",
+                "src": "@openzeppelin\\contracts\\proxy\\utils\\Initializable.sol:69",
+                "offset": 0,
+                "slot": "0"
+              },
+              {
+                "contract": "Initializable",
+                "label": "_initializing",
+                "type": "t_bool",
+                "src": "@openzeppelin\\contracts\\proxy\\utils\\Initializable.sol:73",
+                "offset": 8,
+                "slot": "0"
+              }
+            ]
+          }
+        },
+        "solcVersion": "0.8.24"
+      },
+      "smartContracts/HealthRecordCore.sol:MemberRoleManagerInterface": {
+        "src": "smartContracts\\HealthRecordCore.sol:11",
+        "inherit": [],
+        "libraries": [],
+        "methods": [
+          "isActiveMember(address)",
+          "isVerifiedMember(address)",
+          "hasActiveRole(bytes32,address)",
+          "hasRole(bytes32,address,string)",
+          "isOwnerOrAdmin(bytes32,address)",
+          "getUserForWallet(address)",
+          "isControllerOf(bytes32,bytes32)",
+          "extendTrusteeGrantsOnAnchor(bytes32,bytes32)",
+          "retractTrusteeGrantsOnUnanchor(bytes32,bytes32)"
+        ],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      }
+    },
+    {
+      "@openzeppelin/contracts/interfaces/IERC1967.sol:IERC1967": {
+        "src": "@openzeppelin\\contracts\\interfaces\\IERC1967.sol:9",
+        "inherit": [],
+        "libraries": [],
+        "methods": [],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      },
+      "@openzeppelin/contracts/interfaces/draft-IERC1822.sol:IERC1822Proxiable": {
+        "src": "@openzeppelin\\contracts\\interfaces\\draft-IERC1822.sol:10",
+        "inherit": [],
+        "libraries": [],
+        "methods": [
+          "proxiableUUID()"
+        ],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      },
+      "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol:ERC1967Utils": {
+        "src": "@openzeppelin\\contracts\\proxy\\ERC1967\\ERC1967Utils.sol:15",
+        "version": {
+          "withMetadata": "be848ccd8ae4d70487927aae70da0f0e7843881a8ad8fad3180e1355717c1f46",
+          "withoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157",
+          "linkedWithoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157"
+        },
+        "inherit": [],
+        "libraries": [
+          "@openzeppelin/contracts/utils/StorageSlot.sol:StorageSlot",
+          "@openzeppelin/contracts/utils/Address.sol:Address"
+        ],
+        "methods": [],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      },
+      "@openzeppelin/contracts/proxy/beacon/IBeacon.sol:IBeacon": {
+        "src": "@openzeppelin\\contracts\\proxy\\beacon\\IBeacon.sol:9",
+        "inherit": [],
+        "libraries": [],
+        "methods": [
+          "implementation()"
+        ],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      },
+      "@openzeppelin/contracts/proxy/utils/Initializable.sol:Initializable": {
+        "src": "@openzeppelin\\contracts\\proxy\\utils\\Initializable.sol:56",
+        "inherit": [],
+        "libraries": [],
+        "methods": [],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {
+            "t_bool": {
+              "label": "bool",
+              "numberOfBytes": "1"
+            },
+            "t_struct(InitializableStorage)130_storage": {
+              "label": "struct Initializable.InitializableStorage",
+              "members": [
+                {
+                  "label": "_initialized",
+                  "type": "t_uint64",
+                  "offset": 0,
+                  "slot": "0"
+                },
+                {
+                  "label": "_initializing",
+                  "type": "t_bool",
+                  "offset": 8,
+                  "slot": "0"
+                }
+              ],
+              "numberOfBytes": "32"
+            },
+            "t_uint64": {
+              "label": "uint64",
+              "numberOfBytes": "8"
+            }
+          },
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {
+            "erc7201:openzeppelin.storage.Initializable": [
+              {
+                "contract": "Initializable",
+                "label": "_initialized",
+                "type": "t_uint64",
+                "src": "@openzeppelin\\contracts\\proxy\\utils\\Initializable.sol:69",
+                "offset": 0,
+                "slot": "0"
+              },
+              {
+                "contract": "Initializable",
+                "label": "_initializing",
+                "type": "t_bool",
+                "src": "@openzeppelin\\contracts\\proxy\\utils\\Initializable.sol:73",
+                "offset": 8,
+                "slot": "0"
+              }
+            ]
+          }
+        },
+        "solcVersion": "0.8.24"
+      },
+      "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol:UUPSUpgradeable": {
+        "src": "@openzeppelin\\contracts\\proxy\\utils\\UUPSUpgradeable.sol:21",
+        "inherit": [
+          "@openzeppelin/contracts/interfaces/draft-IERC1822.sol:IERC1822Proxiable"
+        ],
+        "libraries": [
+          "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol:ERC1967Utils"
+        ],
+        "methods": [
+          "proxiableUUID()",
+          "upgradeToAndCall(address,bytes)"
+        ],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      },
+      "@openzeppelin/contracts/utils/Address.sol:Address": {
+        "src": "@openzeppelin\\contracts\\utils\\Address.sol:12",
+        "version": {
+          "withMetadata": "67a263d9acd53362bcb8d138a99da5fbb80d1832288c35c11fdf7f315a160312",
+          "withoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157",
+          "linkedWithoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157"
+        },
+        "inherit": [],
+        "libraries": [
+          "@openzeppelin/contracts/utils/LowLevelCall.sol:LowLevelCall",
+          "@openzeppelin/contracts/utils/Errors.sol:Errors"
+        ],
+        "methods": [],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      },
+      "@openzeppelin/contracts/utils/Errors.sol:Errors": {
+        "src": "@openzeppelin\\contracts\\utils\\Errors.sol:14",
+        "version": {
+          "withMetadata": "d74f701e995e16b65a9da58a5a422919a30f66949c24ef6f28655043ed3de353",
+          "withoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157",
+          "linkedWithoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157"
+        },
+        "inherit": [],
+        "libraries": [],
+        "methods": [],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      },
+      "@openzeppelin/contracts/utils/LowLevelCall.sol:LowLevelCall": {
+        "src": "@openzeppelin\\contracts\\utils\\LowLevelCall.sol:12",
+        "version": {
+          "withMetadata": "f33f95edf1ec95d0add368fb433dc4c35e9e5c3d6eb4d6e10696696fb96b5203",
+          "withoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157",
+          "linkedWithoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157"
+        },
+        "inherit": [],
+        "libraries": [],
+        "methods": [],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      },
+      "@openzeppelin/contracts/utils/StorageSlot.sol:StorageSlot": {
+        "src": "@openzeppelin\\contracts\\utils\\StorageSlot.sol:34",
+        "version": {
+          "withMetadata": "5746189d2153c8e87c3a895130da20ea499dcf4fc4361b582d48d4d3d3d027f5",
+          "withoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157",
+          "linkedWithoutMetadata": "95d40a2c1c3f26a6a79fd4d364874e56c7fd721151816483687512865903c157"
+        },
+        "inherit": [],
+        "libraries": [],
+        "methods": [],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.24"
+      },
+      "smartContracts/HealthRecordCore.sol:HealthRecordCore": {
+        "src": "smartContracts\\HealthRecordCore.sol:43",
+        "version": {
           "withMetadata": "82396aa72f96b79416fa94287d33f0dade6742c974fb5dae039ef6c4efb763f0",
           "withoutMetadata": "572300a5f3398063c9fb66af96a1874028603c3dc5b970296074b9ac1fc7dd3f",
           "linkedWithoutMetadata": "572300a5f3398063c9fb66af96a1874028603c3dc5b970296074b9ac1fc7dd3f"

@@ -163,12 +163,6 @@ contract HealthRecordCore is Initializable, UUPSUpgradeable {
     uint256 timestamp
   );
 
-  event RecordReanchored(
-    bytes32 indexed recordIdHash,
-    bytes32 indexed subjectIdHash,
-    uint256 timestamp
-  );
-
   event RecordHashAdded(
     bytes32 indexed recordIdHash,
     bytes32 indexed newHash,
@@ -293,11 +287,21 @@ contract HealthRecordCore is Initializable, UUPSUpgradeable {
 
   /**
    * @notice Reactivate a previously unanchored subject link
+   * @dev Emits RecordAnchored (not a separate event) — from the end-state's perspective a
+   * reanchor is indistinguishable from an anchor, so a distinct RecordReanchored event was
+   * redundant and never actually consumed by anything. recordHash is the record's current hash
+   * (last entry in recordVersionHistory) rather than a caller-supplied argument, since a reanchor
+   * never changes which hash the subject is confirming. Also mirrors anchorRecord's self-verify
+   * nudge — reanchoring is the same "this record is about me" signal as an initial anchor, so it
+   * gets the same treatment, including the same opt-out (selfVerifyLevel: 0 no-ops in
+   * _maybeSelfVerify, same as anchorRecord).
    * @param recordIdHash The record ID
+   * @param selfVerifyLevel Nudge param — see anchorRecord's own doc comment.
    */
   function reanchorRecord(
     bytes32 recordIdHash,
-    bytes32 subjectIdHash
+    bytes32 subjectIdHash,
+    uint8 selfVerifyLevel
   ) external onlyActiveMember onlyRecordParticipant(recordIdHash) {
     bytes32 resolvedSubject = _resolveSubject(subjectIdHash);
 
@@ -306,7 +310,12 @@ contract HealthRecordCore is Initializable, UUPSUpgradeable {
 
     isSubjectActive[recordIdHash][resolvedSubject] = true;
 
-    emit RecordReanchored(recordIdHash, resolvedSubject, block.timestamp);
+    bytes32[] storage versionHistory = recordVersionHistory[recordIdHash];
+    bytes32 currentHash = versionHistory[versionHistory.length - 1];
+    emit RecordAnchored(recordIdHash, currentHash, resolvedSubject, block.timestamp);
+
+    bytes32 callerIdHash = memberRoleManager.getUserForWallet(msg.sender);
+    _maybeSelfVerify(recordIdHash, currentHash, callerIdHash, selfVerifyLevel);
 
     memberRoleManager.extendTrusteeGrantsOnAnchor(resolvedSubject, recordIdHash);
   }

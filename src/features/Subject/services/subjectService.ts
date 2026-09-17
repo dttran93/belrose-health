@@ -39,6 +39,7 @@ import {
   Timestamp,
 } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
+import { id } from 'ethers';
 import * as Sentry from '@sentry/react';
 import { WalletService } from '@/features/BlockchainWallet/services/walletService';
 import {
@@ -170,6 +171,15 @@ export class SubjectService {
     // Fails before any write if the caller has no wallet linked.
     const userWalletAddress = await WalletService.requireUserWalletAddress(user.uid);
 
+    // Determine anchor vs reanchor (#820): isSubjectOfRecord is permanent once set on-chain, so a
+    // user who anchored then unanchored must call reanchorRecord — anchorRecord would always
+    // revert ("Record already anchored to this subject") for them, since it only checks whether
+    // they were EVER anchored, not their current active status. Checked directly against the
+    // chain rather than Firestore's subjectHistory: the original anchor's chain call could have
+    // failed even though Firestore shows it succeeded (Firestore-first, best-effort chain writes),
+    // so the chain is the only reliable source of truth for this specific state.
+    const isReanchor = await blockchainHealthRecordService.isSubject(recordId, id(user.uid));
+
     const db = getFirestore();
     const recordRef = doc(db, 'records', recordId);
     const historyRef = doc(
@@ -212,12 +222,12 @@ export class SubjectService {
     // subject addition already stands regardless of what happens here.
     const syncRef = await BlockchainSyncQueueService.startAttempt({
       contract: 'HealthRecordCore',
-      action: 'anchorRecord',
+      action: isReanchor ? 'reanchorRecord' : 'anchorRecord',
       userId: user.uid,
       userWalletAddress,
       permissionHistoryPath: historyRef.path,
       context: {
-        type: 'anchorRecord',
+        type: isReanchor ? 'reanchorRecord' : 'anchorRecord',
         recordId,
         recordHash: recordData.recordHash,
         subjectId: user.uid,
@@ -226,12 +236,10 @@ export class SubjectService {
 
     let txResult: { txHash: string; blockNumber: number } | null = null;
     try {
-      console.log('🔗 Anchoring subject on blockchain...');
-      const tx = await blockchainHealthRecordService.anchorRecord(
-        recordId,
-        recordData.recordHash,
-        selfVerifyLevel
-      );
+      console.log(isReanchor ? '🔗 Reanchoring subject on blockchain...' : '🔗 Anchoring subject on blockchain...');
+      const tx = isReanchor
+        ? await blockchainHealthRecordService.reanchorRecord(recordId, selfVerifyLevel)
+        : await blockchainHealthRecordService.anchorRecord(recordId, recordData.recordHash, selfVerifyLevel);
       txResult = tx;
 
       const blockchainRef = buildHealthRecordRef(tx.txHash, tx.blockNumber);
@@ -292,7 +300,9 @@ export class SubjectService {
     }
 
     // Step 5: Mirror the anchor tx's self-verify into Firestore (non-fatal)
-    // anchorRecord defaults selfVerifyLevel to Full when omitted, so mirror that same default.
+    // anchorRecord/reanchorRecord both default selfVerifyLevel to Full when omitted and both call
+    // _maybeSelfVerify identically on-chain (reanchoring is the same "this record is about me"
+    // signal as an initial anchor), so this mirror applies the same way regardless of isReanchor.
     const appliedVerifyLevel = selfVerifyLevel ?? VerificationLevel.Full;
     if (blockchainRef && appliedVerifyLevel !== VerificationLevel.None) {
       try {
@@ -358,6 +368,13 @@ export class SubjectService {
     // Fails before any write if the controller has no wallet linked.
     const userWalletAddress = await WalletService.requireUserWalletAddress(user.uid);
 
+    // Determine anchor vs reanchor (#820) — same reasoning as setSubjectAsSelf: isSubjectOfRecord
+    // is permanent once set on-chain, so a trustor who was anchored then unanchored (e.g. via
+    // rejectSubjectStatus, which removes them from Firestore's subjects[] but doesn't reset this)
+    // must be reanchored, not anchored again. The idempotent early-return above only catches a
+    // trustor CURRENTLY in subjects[] — a previously-removed one still needs this check.
+    const isReanchor = await blockchainHealthRecordService.isSubject(recordId, id(trustorId));
+
     const historyRef = doc(
       collection(db, 'records', recordId, 'subjectHistory'),
       buildSubjectHistoryDocId(trustorId)
@@ -412,12 +429,12 @@ export class SubjectService {
     // Step 2: Blockchain — best-effort, does not revert the Firestore write above.
     const syncRef = await BlockchainSyncQueueService.startAttempt({
       contract: 'HealthRecordCore',
-      action: 'anchorRecord',
+      action: isReanchor ? 'reanchorRecord' : 'anchorRecord',
       userId: user.uid,
       userWalletAddress,
       permissionHistoryPath: historyRef.path,
       context: {
-        type: 'anchorRecord',
+        type: isReanchor ? 'reanchorRecord' : 'anchorRecord',
         recordId,
         recordHash: recordData.recordHash,
         subjectId: trustorId,
@@ -426,12 +443,18 @@ export class SubjectService {
 
     let txResult: { txHash: string; blockNumber: number } | null = null;
     try {
-      const tx = await blockchainHealthRecordService.anchorRecordAsController(
-        recordId,
-        recordData.recordHash,
-        trustorId,
-        selfVerifyLevel
-      );
+      const tx = isReanchor
+        ? await blockchainHealthRecordService.reanchorRecordAsController(
+            recordId,
+            trustorId,
+            selfVerifyLevel
+          )
+        : await blockchainHealthRecordService.anchorRecordAsController(
+            recordId,
+            recordData.recordHash,
+            trustorId,
+            selfVerifyLevel
+          );
       txResult = tx;
 
       const blockchainRef = buildHealthRecordRef(tx.txHash, tx.blockNumber);
@@ -484,8 +507,9 @@ export class SubjectService {
     }
 
     // Step 5: Mirror the anchor tx's self-verify into Firestore (non-fatal)
-    // anchorRecordAsController defaults selfVerifyLevel to Full when omitted, and credits the
-    // controller (caller), not the trustor, as the verifier — matching the on-chain behavior.
+    // anchorRecordAsController/reanchorRecordAsController both default selfVerifyLevel to Full
+    // when omitted and both credit the controller (caller), not the trustor, as the verifier —
+    // matching the on-chain behavior identically for anchor and reanchor.
     const appliedVerifyLevel = selfVerifyLevel ?? VerificationLevel.Full;
     if (blockchainRef && appliedVerifyLevel !== VerificationLevel.None) {
       try {
@@ -697,6 +721,11 @@ export class SubjectService {
     // Fails before any write if the caller has no wallet linked.
     const userWalletAddress = await WalletService.requireUserWalletAddress(user.uid);
 
+    // Determine anchor vs reanchor (#820) — same reasoning as setSubjectAsSelf: a user who
+    // previously anchored then unanchored themselves must be reanchored, not anchored again, or
+    // the chain call always reverts.
+    const isReanchor = await blockchainHealthRecordService.isSubject(recordId, id(user.uid));
+
     // Validate + prepare the accept-transition write without performing it, so it can be
     // folded into the same atomic batch below.
     const acceptPrep = await SubjectConsentService.prepareAcceptConsent(recordId, user.uid);
@@ -743,12 +772,12 @@ export class SubjectService {
     // Step 2: Blockchain — best-effort, does not revert the Firestore write above.
     const syncRef = await BlockchainSyncQueueService.startAttempt({
       contract: 'HealthRecordCore',
-      action: 'anchorRecord',
+      action: isReanchor ? 'reanchorRecord' : 'anchorRecord',
       userId: user.uid,
       userWalletAddress,
       permissionHistoryPath: historyRef.path,
       context: {
-        type: 'anchorRecord',
+        type: isReanchor ? 'reanchorRecord' : 'anchorRecord',
         recordId,
         recordHash,
         subjectId: user.uid,
@@ -757,12 +786,10 @@ export class SubjectService {
 
     let txResult: { txHash: string; blockNumber: number } | null = null;
     try {
-      console.log('🔗 Anchoring subject on blockchain...');
-      const tx = await blockchainHealthRecordService.anchorRecord(
-        recordId,
-        recordHash,
-        selfVerifyLevel
-      );
+      console.log(isReanchor ? '🔗 Reanchoring subject on blockchain...' : '🔗 Anchoring subject on blockchain...');
+      const tx = isReanchor
+        ? await blockchainHealthRecordService.reanchorRecord(recordId, selfVerifyLevel)
+        : await blockchainHealthRecordService.anchorRecord(recordId, recordHash, selfVerifyLevel);
       txResult = tx;
 
       const blockchainRef = buildHealthRecordRef(tx.txHash, tx.blockNumber);

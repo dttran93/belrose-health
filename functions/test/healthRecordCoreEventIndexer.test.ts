@@ -8,7 +8,8 @@
 //
 // HRC Slice 1 covers AdminTransferred only — see healthRecordCoreEventDecoders.ts's header for
 // why it's the canary slice. HRC Slice 2 adds the subject-anchoring family
-// (RecordAnchored/RecordUnanchored/RecordReanchored). HRC Slice 3 adds the hash-versioning family
+// (RecordAnchored/RecordUnanchored — RecordReanchored was removed in #816; reanchorRecord now
+// emits RecordAnchored instead). HRC Slice 3 adds the hash-versioning family
 // (RecordHashAdded/RecordHashRetracted). HRC Slice 4 adds the verification family
 // (RecordVerified/VerificationRetracted/VerificationLevelModified). HRC Slice 5 adds the dispute
 // family (RecordDisputed/DisputeRetracted/DisputeModification). HRC Slice 6 (final slice) adds the
@@ -26,7 +27,6 @@ const { mockContract, connectMock } = vi.hoisted(() => {
       AdminTransferred: vi.fn(() => 'AdminTransferred-filter'),
       RecordAnchored: vi.fn(() => 'RecordAnchored-filter'),
       RecordUnanchored: vi.fn(() => 'RecordUnanchored-filter'),
-      RecordReanchored: vi.fn(() => 'RecordReanchored-filter'),
       RecordHashAdded: vi.fn(() => 'RecordHashAdded-filter'),
       RecordHashRetracted: vi.fn(() => 'RecordHashRetracted-filter'),
       RecordVerified: vi.fn(() => 'RecordVerified-filter'),
@@ -127,8 +127,7 @@ function fakeRecordAnchoredEventLog(overrides: {
   };
 }
 
-// Shared by RecordUnanchored/RecordReanchored — same {recordIdHash, subjectIdHash} shape.
-function fakeRecordUnanchoredReanchoredEventLog(overrides: {
+function fakeRecordUnanchoredEventLog(overrides: {
   transactionHash: string;
   blockNumber: number;
   index: number;
@@ -384,7 +383,6 @@ function configureQueryFilter(handlers: {
   adminTransferred?: (from: number, to: number) => unknown[];
   recordAnchored?: (from: number, to: number) => unknown[];
   recordUnanchored?: (from: number, to: number) => unknown[];
-  recordReanchored?: (from: number, to: number) => unknown[];
   recordHashAdded?: (from: number, to: number) => unknown[];
   recordHashRetracted?: (from: number, to: number) => unknown[];
   recordVerified?: (from: number, to: number) => unknown[];
@@ -405,8 +403,6 @@ function configureQueryFilter(handlers: {
         return (handlers.recordAnchored ?? (() => []))(from, to);
       case 'RecordUnanchored-filter':
         return (handlers.recordUnanchored ?? (() => []))(from, to);
-      case 'RecordReanchored-filter':
-        return (handlers.recordReanchored ?? (() => []))(from, to);
       case 'RecordHashAdded-filter':
         return (handlers.recordHashAdded ?? (() => []))(from, to);
       case 'RecordHashRetracted-filter':
@@ -551,7 +547,7 @@ describe('runChainEventIndexerCycle(HEALTH_RECORD_CORE_INDEXER_CONFIG) — Admin
   });
 });
 
-describe('runChainEventIndexerCycle(HEALTH_RECORD_CORE_INDEXER_CONFIG) — RecordAnchored/RecordUnanchored/RecordReanchored (HRC Slice 2)', () => {
+describe('runChainEventIndexerCycle(HEALTH_RECORD_CORE_INDEXER_CONFIG) — RecordAnchored/RecordUnanchored (HRC Slice 2)', () => {
   const recordIdHash = '0xRecordIdHash1';
   const subjectIdHash = '0xSubjectIdHash1';
 
@@ -630,7 +626,7 @@ describe('runChainEventIndexerCycle(HEALTH_RECORD_CORE_INDEXER_CONFIG) — Recor
     await seedCheckpoint(1999);
     configureQueryFilter({
       recordUnanchored: () => [
-        fakeRecordUnanchoredReanchoredEventLog({ transactionHash: '0xunanchortx1', blockNumber: 2005, index: 0, recordIdHash, subjectIdHash }),
+        fakeRecordUnanchoredEventLog({ transactionHash: '0xunanchortx1', blockNumber: 2005, index: 0, recordIdHash, subjectIdHash }),
       ],
     });
 
@@ -648,7 +644,7 @@ describe('runChainEventIndexerCycle(HEALTH_RECORD_CORE_INDEXER_CONFIG) — Recor
     await seedCheckpoint(1999);
     configureQueryFilter({
       recordUnanchored: () => [
-        fakeRecordUnanchoredReanchoredEventLog({ transactionHash: '0xunanchortx1', blockNumber: 2005, index: 0, recordIdHash, subjectIdHash }),
+        fakeRecordUnanchoredEventLog({ transactionHash: '0xunanchortx1', blockNumber: 2005, index: 0, recordIdHash, subjectIdHash }),
       ],
     });
 
@@ -662,42 +658,16 @@ describe('runChainEventIndexerCycle(HEALTH_RECORD_CORE_INDEXER_CONFIG) — Recor
     expect(cached).toMatchObject({ reconciliationStatus: 'legitimate_chain_only' });
   });
 
-  // RecordReanchored's match rule can never return matched: true today — no 'reanchored' value
-  // exists in Firestore's SubjectHistoryAction — so every occurrence falls through to
-  // classifyUnmatchedEvent. This documents that known gap at the full-cycle level, not just the
-  // pure match-rule level (see healthRecordCoreReconciliationRules.test.ts's own coverage).
-  it('classifies RecordReanchored as legitimate_chain_only — the match rule can never succeed today (known gap)', async () => {
-    await admin
-      .firestore()
-      .collection('records')
-      .doc('rec-1')
-      .collection('subjectHistory')
-      .doc('event-1')
-      .set({ recordIdHash, subjectIdHash, action: 'anchored', changedByIdHash: subjectIdHash });
-    await seedCheckpoint(1999);
-    configureQueryFilter({
-      recordReanchored: () => [
-        fakeRecordUnanchoredReanchoredEventLog({ transactionHash: '0xreanchortx1', blockNumber: 2005, index: 0, recordIdHash, subjectIdHash }),
-      ],
-    });
+  // reanchorRecord (#816) emits RecordAnchored, not a separate event — a reanchor landing here
+  // is indistinguishable from a first-time anchor, so it's covered by the RecordAnchored tests
+  // above already, matched or legitimate_chain_only the same way. No dedicated reanchor test.
 
-    await runChainEventIndexerCycle(
-      HEALTH_RECORD_CORE_INDEXER_CONFIG,
-      admin.firestore(),
-      makeMockProvider({ currentBlock: 2030, txFromByHash: { '0xreanchortx1': '0xSomeRealUserWallet' } })
-    );
-
-    const cached = await getCachedEvent('0xreanchortx1', 0);
-    expect(cached).toMatchObject({ eventName: 'RecordReanchored', reconciliationStatus: 'legitimate_chain_only' });
-  });
-
-  it('handles all fifteen HealthRecordCore event types found in the same chunk, advancing the checkpoint to the min toBlock across all fifteen filters', async () => {
+  it('handles all fourteen HealthRecordCore event types found in the same chunk, advancing the checkpoint to the min toBlock across all fourteen filters', async () => {
     await seedCheckpoint(1999);
     configureQueryFilter({
       adminTransferred: () => [fakeAdminTransferredEventLog({ transactionHash: '0xa', blockNumber: 2002, index: 0, oldAdmin: ADMIN_ADDRESS })],
       recordAnchored: () => [fakeRecordAnchoredEventLog({ transactionHash: '0xb', blockNumber: 2003, index: 0 })],
-      recordUnanchored: () => [fakeRecordUnanchoredReanchoredEventLog({ transactionHash: '0xc', blockNumber: 2004, index: 0 })],
-      recordReanchored: () => [fakeRecordUnanchoredReanchoredEventLog({ transactionHash: '0xd', blockNumber: 2005, index: 0 })],
+      recordUnanchored: () => [fakeRecordUnanchoredEventLog({ transactionHash: '0xc', blockNumber: 2004, index: 0 })],
       recordHashAdded: () => [fakeRecordHashAddedEventLog({ transactionHash: '0xe', blockNumber: 2006, index: 0 })],
       recordHashRetracted: () => [fakeRecordHashRetractedEventLog({ transactionHash: '0xf', blockNumber: 2007, index: 0 })],
       recordVerified: () => [fakeRecordVerifiedEventLog({ transactionHash: '0xg', blockNumber: 2008, index: 0 })],
@@ -713,13 +683,12 @@ describe('runChainEventIndexerCycle(HEALTH_RECORD_CORE_INDEXER_CONFIG) — Recor
 
     const result = await runChainEventIndexerCycle(HEALTH_RECORD_CORE_INDEXER_CONFIG, admin.firestore(), makeMockProvider({ currentBlock: 2030 })); // targetBlock 2010
 
-    expect(result.eventsFound).toBe(15);
-    expect(result.newlyCached).toBe(15);
+    expect(result.eventsFound).toBe(14);
+    expect(result.newlyCached).toBe(14);
     expect(await getCheckpointBlock()).toBe(2010);
     expect((await getCachedEvent('0xa', 0))?.eventName).toBe('AdminTransferred');
     expect((await getCachedEvent('0xb', 0))?.eventName).toBe('RecordAnchored');
     expect((await getCachedEvent('0xc', 0))?.eventName).toBe('RecordUnanchored');
-    expect((await getCachedEvent('0xd', 0))?.eventName).toBe('RecordReanchored');
     expect((await getCachedEvent('0xe', 0))?.eventName).toBe('RecordHashAdded');
     expect((await getCachedEvent('0xf', 0))?.eventName).toBe('RecordHashRetracted');
     expect((await getCachedEvent('0xg', 0))?.eventName).toBe('RecordVerified');

@@ -21,7 +21,11 @@ interface SubjectHistoryEntry {
 }
 
 /**
- * Shared query + predicate-matching shell for RecordAnchored/RecordUnanchored/RecordReanchored.
+ * Shared query + predicate-matching shell for RecordAnchored/RecordUnanchored. reanchorRecord
+ * (#816) emits RecordAnchored rather than a separate RecordReanchored event — a reanchor is
+ * indistinguishable from an anchor once you're only looking at end state — so
+ * findMatchingSubjectHistoryForAnchoredEvent below handles both cases already; there is no
+ * separate reanchor match rule.
  * subjectHistory (records/{recordId}/subjectHistory) already stores recordIdHash/subjectIdHash
  * directly on each entry (packages/shared/src/subject.ts's SubjectHistoryEvent), so both can be
  * filtered server-side via a collectionGroup query — no in-memory hash recomputation needed, just
@@ -78,23 +82,6 @@ export async function findMatchingSubjectHistoryForUnanchoredEvent(
   return findMatchingSubjectHistory(db, args.recordIdHash, args.subjectIdHash, entry => entry.action === 'unanchored');
 }
 
-/**
- * RecordReanchored match rule — deliberately built the same way as its Anchored/Unanchored
- * siblings even though it can never match today: SubjectHistoryAction (packages/shared/src/
- * subject.ts) has no 'reanchored' value, so reanchorRecord's Firestore counterpart (if one is ever
- * added) doesn't exist yet. This ships as a structurally correct rule that legitimately never
- * matches — same precedent as MemberRoleManager's findMatchingPermissionHistoryForRoleEvent
- * handling the initializeRecordRole bytes32(0) wrinkle — NOT worked around here. Known gap; a
- * Firestore/app-code fix (adding 'reanchored' to SubjectHistoryAction and writing it from
- * reanchorRecord's Firestore caller) is a separate ticket.
- */
-export async function findMatchingSubjectHistoryForReanchoredEvent(
-  db: Firestore,
-  args: { recordIdHash: string; subjectIdHash: string }
-): Promise<SubjectHistoryEventMatchResult> {
-  return findMatchingSubjectHistory(db, args.recordIdHash, args.subjectIdHash, entry => entry.action === 'reanchored');
-}
-
 // ============================================================================
 // RecordHashAdded / RecordHashRetracted (HRC Slice 3)
 // ============================================================================
@@ -142,8 +129,10 @@ export async function findMatchingRecordHashHistoryForAddedEvent(
  * RecordHashRetracted match rule — built correctly but structurally unmatchable today:
  * RecordHashHistoryAction (packages/shared/src/recordHash.ts) only has 'anchored'; there is no
  * 'retracted' value because retractRecordHash is never called from the frontend (per that file's
- * own doc comment). Ships anyway for the same reason findMatchingSubjectHistoryForReanchoredEvent
- * does. Known gap, separate ticket if the underlying app gap is ever worth closing.
+ * own doc comment). Ships anyway as a structurally correct rule that legitimately never matches —
+ * same precedent as MemberRoleManager's findMatchingPermissionHistoryForRoleEvent handling the
+ * initializeRecordRole bytes32(0) wrinkle. Known gap, separate ticket if the underlying app gap is
+ * ever worth closing.
  */
 export async function findMatchingRecordHashHistoryForRetractedEvent(
   db: Firestore,

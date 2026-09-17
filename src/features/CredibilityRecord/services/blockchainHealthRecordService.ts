@@ -224,12 +224,51 @@ export class blockchainHealthRecordService {
     return result;
   }
 
-  /** Reactivate a previously unanchored subject link */
-  static async reanchorRecord(recordId: string): Promise<TransactionResult> {
-    console.log('⛓️ Reanchoring record...', { recordId });
+  /**
+   * Reactivate a previously unanchored subject link.
+   *
+   * @param selfVerifyLevel Same self-verify nudge as anchorRecord — reanchoring is the same
+   *   "this record is about me" signal as an initial anchor. Defaults to Full; pass
+   *   VerificationLevel.None to opt out. Never blocks the reanchor even if the verify guard fails.
+   */
+  static async reanchorRecord(
+    recordId: string,
+    selfVerifyLevel: VerificationLevel = VerificationLevel.Full
+  ): Promise<TransactionResult> {
+    console.log('⛓️ Reanchoring record...', { recordId, selfVerifyLevel });
     const recordIdHash = id(recordId);
-    const result = await this.executeWrite('reanchorRecord', [recordIdHash, ethers.ZeroHash]);
+    const result = await this.executeWrite('reanchorRecord', [
+      recordIdHash,
+      ethers.ZeroHash,
+      selfVerifyLevel,
+    ]);
     console.log('✅ Record reanchored:', result.txHash);
+    return result;
+  }
+
+  /**
+   * Reactivate a previously unanchored subject link on behalf of a trustor, as their active
+   * controller trustee. Same isControllerOf() check as anchorRecordAsController — reanchorRecord's
+   * on-chain _resolveSubject already supports this, just needs the trustor's own hash instead of
+   * the zero-hash self-shorthand.
+   *
+   * @param selfVerifyLevel Same self-verify nudge as anchorRecordAsController — the CALLER
+   *   (controller) is credited as verifier, not the trustor.
+   */
+  static async reanchorRecordAsController(
+    recordId: string,
+    trustorId: string,
+    selfVerifyLevel: VerificationLevel = VerificationLevel.Full
+  ): Promise<TransactionResult> {
+    console.log('⛓️ Reanchoring record as controller...', { recordId, trustorId, selfVerifyLevel });
+    const recordIdHash = id(recordId);
+    const subjectIdHash = id(trustorId);
+    const result = await this.executeWrite('reanchorRecord', [
+      recordIdHash,
+      subjectIdHash,
+      selfVerifyLevel,
+    ]);
+    console.log('✅ Record reanchored as controller:', result.txHash);
     return result;
   }
 

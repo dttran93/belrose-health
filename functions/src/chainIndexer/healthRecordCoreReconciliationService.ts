@@ -10,7 +10,8 @@
 // unchanged here rather than reimplemented.
 //
 // HRC Slice 1 covers AdminTransferred only. HRC Slice 2 adds the subject-anchoring family
-// (RecordAnchored/RecordUnanchored/RecordReanchored). HRC Slice 3 adds the hash-versioning family
+// (RecordAnchored/RecordUnanchored — RecordReanchored was removed in #816; reanchorRecord now
+// emits RecordAnchored instead). HRC Slice 3 adds the hash-versioning family
 // (RecordHashAdded/RecordHashRetracted). HRC Slice 4 adds the verification family
 // (RecordVerified/VerificationRetracted/VerificationLevelModified). HRC Slice 5 adds the dispute
 // family (RecordDisputed/DisputeRetracted/DisputeModification). HRC Slice 6 adds the unaccepted
@@ -27,7 +28,6 @@ import { classifyUnmatchedEvent } from './memberRoleManagerReconciliationService
 import {
   findMatchingSubjectHistoryForAnchoredEvent,
   findMatchingSubjectHistoryForUnanchoredEvent,
-  findMatchingSubjectHistoryForReanchoredEvent,
   findMatchingRecordHashHistoryForAddedEvent,
   findMatchingRecordHashHistoryForRetractedEvent,
   findMatchingVerificationForVerifiedEvent,
@@ -77,10 +77,12 @@ export async function reconcileHealthRecordCoreAdminTransferredEvent(
  * Subject-anchoring reconcilers (HRC Slice 2). Same 4-bucket shape as MemberRoleManager's own
  * reconcilers; bucket 1 checks records/{recordId}/subjectHistory instead of a MemberRoleManager
  * collection — see healthRecordCoreReconciliationRules.ts's own comments for each match rule's
- * specific predicate. All three events are onlyActiveMember + onlyRecordParticipant with no
+ * specific predicate. Both events are onlyActiveMember + onlyRecordParticipant with no
  * admin-stand-in path (resolvedSubject — whether self or via a Controller trustee — is always a
- * genuine participant's identity), so legitimate_chain_only is reachable for all three, same
+ * genuine participant's identity), so legitimate_chain_only is reachable for both, same
  * reasoning already established for MemberRoleManager's RoleGranted/OwnershipVoluntarilyLeft.
+ * reanchorRecord (#816) emits RecordAnchored rather than its own event, so
+ * reconcileRecordAnchoredEvent below transparently covers reanchors too — no separate reconciler.
  */
 export async function reconcileRecordAnchoredEvent(
   db: Firestore,
@@ -110,32 +112,6 @@ export async function reconcileRecordUnanchoredEvent(
   const args = doc.args as { recordIdHash: string; subjectIdHash: string };
 
   const match = await findMatchingSubjectHistoryForUnanchoredEvent(db, args);
-  if (match.matched) {
-    return {
-      reconciliationStatus: 'matched',
-      matchedSyncQueueId: null,
-      matchedFirestoreRef: match.matchedFirestoreRef,
-      reconciledAt: Timestamp.now(),
-    };
-  }
-
-  return classifyUnmatchedEvent(db, provider, doc.blockchainRef.txHash);
-}
-
-/**
- * RecordReanchored reconciler. Otherwise identical in shape to its siblings above; its match rule
- * (findMatchingSubjectHistoryForReanchoredEvent) can never return matched: true today — no
- * Firestore action represents "reanchored" yet — so this will always fall through to
- * classifyUnmatchedEvent until that gap is separately closed. See that match rule's own comment.
- */
-export async function reconcileRecordReanchoredEvent(
-  db: Firestore,
-  provider: Provider,
-  doc: Pick<ChainEventCacheDoc, 'args' | 'blockchainRef'>
-): Promise<ReconciliationResult> {
-  const args = doc.args as { recordIdHash: string; subjectIdHash: string };
-
-  const match = await findMatchingSubjectHistoryForReanchoredEvent(db, args);
   if (match.matched) {
     return {
       reconciliationStatus: 'matched',

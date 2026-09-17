@@ -9,11 +9,13 @@
 // event, structurally identical in shape and purpose to MemberRoleManager's own AdminTransferred.
 // Ships first as the canary validating the indexer's multi-contract plumbing end-to-end on the
 // lowest-risk possible event, before the 13 remaining domain events (subject anchoring, hash
-// versioning, verification, dispute, unaccepted flags) are added in later slices. HRC Slice 2 adds
-// the subject-anchoring family (RecordAnchored/RecordUnanchored/RecordReanchored) — see
-// healthRecordCoreReconciliationRules.ts for the match-rule design, including the known
-// RecordReanchored gap (no Firestore action exists to represent it yet). HRC Slice 3 adds the
-// hash-versioning family (RecordHashAdded/RecordHashRetracted) — RecordHashRetracted has a
+// versioning, verification, dispute, unaccepted flags) are added in later slices. HRC Slice 2
+// originally added the subject-anchoring family as three events (RecordAnchored/RecordUnanchored/
+// RecordReanchored) — RecordReanchored was later removed from the contract entirely (#816):
+// reanchorRecord now emits RecordAnchored instead, since a reanchor is indistinguishable from an
+// anchor once you're only looking at end state. RecordAnchored/RecordUnanchored are the two
+// domain events that remain from that slice. HRC Slice 3 adds the hash-versioning family
+// (RecordHashAdded/RecordHashRetracted) — RecordHashRetracted has a
 // similar known gap (see healthRecordCoreReconciliationRules.ts). HRC Slice 4 adds the
 // verification family (RecordVerified/VerificationRetracted/VerificationLevelModified), matched
 // against the flat top-level `verifications` collection — recordIdHash is decoded here for
@@ -41,7 +43,6 @@ export type HealthRecordCoreEventName =
   | 'AdminTransferred'
   | 'RecordAnchored'
   | 'RecordUnanchored'
-  | 'RecordReanchored'
   | 'RecordHashAdded'
   | 'RecordHashRetracted'
   | 'RecordVerified'
@@ -156,13 +157,11 @@ export function decodeRecordAnchoredEventLog(log: RawRecordAnchoredEventLog): De
 }
 
 // ============================================================================
-// RecordUnanchored / RecordReanchored (HRC Slice 2)
+// RecordUnanchored (HRC Slice 2)
 // ============================================================================
 
-export type RecordUnanchoredReanchoredEventName = 'RecordUnanchored' | 'RecordReanchored';
-
-export interface RawRecordUnanchoredReanchoredEventLog {
-  eventName: RecordUnanchoredReanchoredEventName;
+export interface RawRecordUnanchoredEventLog {
+  eventName: 'RecordUnanchored';
   transactionHash: string;
   blockNumber: number;
   index: number;
@@ -175,8 +174,8 @@ export interface RawRecordUnanchoredReanchoredEventLog {
   };
 }
 
-export interface DecodedRecordUnanchoredReanchoredEvent {
-  eventName: RecordUnanchoredReanchoredEventName;
+export interface DecodedRecordUnanchoredEvent {
+  eventName: 'RecordUnanchored';
   txHash: string;
   blockNumber: number;
   logIndex: number;
@@ -189,9 +188,9 @@ export interface DecodedRecordUnanchoredReanchoredEvent {
   };
 }
 
-export function decodeRecordUnanchoredReanchoredEventLog(
-  log: RawRecordUnanchoredReanchoredEventLog
-): DecodedRecordUnanchoredReanchoredEvent {
+export function decodeRecordUnanchoredEventLog(
+  log: RawRecordUnanchoredEventLog
+): DecodedRecordUnanchoredEvent {
   return {
     eventName: log.eventName,
     txHash: log.transactionHash,

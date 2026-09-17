@@ -79,7 +79,7 @@ export const MEMBER_ROLE_MANAGER = {
 
 export const HEALTH_RECORD_CORE = {
   proxy: '0xE1012A0D698cced489C47189F9DC9372d6Fb104B',
-  implementation: '0x4f6C255F4B433692364e424e2BDeC78ADe7c10fd',
+  implementation: '0xb43a4ef301865a5644f1f998538d847b82109c43',
   deploymentBlock: 43657997,
 } as const;
 

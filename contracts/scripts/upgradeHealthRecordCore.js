@@ -37,9 +37,20 @@ async function main() {
   });
   await upgraded.waitForDeployment();
 
-  // Read implementation slot directly — OZ plugin may return cached (stale) address
-  const newRaw = await ethers.provider.getStorage(HEALTH_RECORD_CORE_PROXY, slot);
-  const newImplAddress = '0x' + newRaw.slice(-40);
+  // Poll until the storage slot reflects the new implementation — a single read right after
+  // waitForDeployment() can still return the OLD address (RPC node lag), same issue documented
+  // and worked around in upgradeMemberRoleManager.js. Confirmed live during the #816/#820 deploy:
+  // the immediate read returned the pre-upgrade address even though the upgrade had genuinely
+  // succeeded on-chain.
+  console.log('⏳ Waiting for RPC to reflect new implementation...');
+  let newImplAddress = '';
+  for (let i = 0; i < 10; i++) {
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    const newRaw = await ethers.provider.getStorage(HEALTH_RECORD_CORE_PROXY, slot);
+    newImplAddress = '0x' + newRaw.slice(-40);
+    console.log(`   Attempt ${i + 1}: ${newImplAddress}`);
+    if (newImplAddress.toLowerCase() !== oldImplAddress.toLowerCase()) break;
+  }
 
   console.log('✅ Proxy upgraded successfully!');
   console.log('📍 Proxy address (unchanged):', await upgraded.getAddress());
