@@ -68,7 +68,7 @@ export function buildBundlerURL(pimlicoApiKey: string) {
 
 export const MEMBER_ROLE_MANAGER = {
   proxy: '0x61CcF57C332D32c4d906ac64674BBA4E10CCB07B',
-  implementation: '0x88a7a3822c8033ae126c762a40c280e89024a1ac',
+  implementation: '0x91fab7fa67274a7f2d71280a7ecd09cece40efbc',
   deploymentBlock: 43657997,
 } as const;
 
