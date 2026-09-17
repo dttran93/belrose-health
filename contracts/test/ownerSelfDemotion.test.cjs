@@ -104,7 +104,7 @@ describe('Owner voluntarily demoting themselves', function () {
     expect(await memberRoleManager.hasActiveRole(recordIdHash, owner.address)).to.equal(false);
   });
 
-  it('still blocks the sole owner with no administrators from leaving or demoting', async function () {
+  it('still blocks the sole owner with no administrators from leaving or demoting to a non-administrator role (regression guard for #808)', async function () {
     const recordIdHash = ethers.id('record-last-owner');
 
     await memberRoleManager
@@ -118,6 +118,34 @@ describe('Owner voluntarily demoting themselves', function () {
     await expect(
       memberRoleManager.connect(owner).voluntarilyLeaveOwnership(recordIdHash, 'sharer')
     ).to.be.revertedWith('Cannot leave as last owner with no administrators');
+
+    await expect(
+      memberRoleManager.connect(owner).voluntarilyLeaveOwnership(recordIdHash, 'viewer')
+    ).to.be.revertedWith('Cannot leave as last owner with no administrators');
+  });
+
+  it('allows the sole owner with no administrators to demote themselves to administrator (#808)', async function () {
+    // Before the fix, this reverted: the precondition checked hasOtherOwners/hasAdmins BEFORE
+    // newRole is applied via _applyChangeRole, so it never credited the caller's own incoming
+    // administrator role — the sole owner had no way to demote themselves without an existing
+    // administrator already in place, even though becoming that administrator is exactly what
+    // this call does.
+    const recordIdHash = ethers.id('record-sole-owner-self-admin');
+
+    await memberRoleManager
+      .connect(admin)
+      .initializeRecordRole(recordIdHash, owner.address, 'owner');
+
+    await expect(
+      memberRoleManager.connect(owner).voluntarilyLeaveOwnership(recordIdHash, 'administrator')
+    )
+      .to.emit(memberRoleManager, 'RoleChanged')
+      .withArgs(recordIdHash, ownerIdHash, 'owner', 'administrator', ownerIdHash, anyValue);
+
+    expect(await memberRoleManager.hasRole(recordIdHash, owner.address, 'owner')).to.equal(false);
+    expect(await memberRoleManager.hasRole(recordIdHash, owner.address, 'administrator')).to.equal(
+      true
+    );
   });
 
   it('rejects passing "owner" as the replacement role', async function () {

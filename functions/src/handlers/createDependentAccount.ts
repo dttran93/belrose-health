@@ -9,6 +9,7 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
+import { randomUUID } from 'crypto';
 import { ethers } from 'ethers';
 import { MEMBER_ROLE_MANAGER, NETWORK } from '../_shared/';
 import { MemberRoleManager__factory } from '../_shared/typechain';
@@ -295,12 +296,40 @@ export const createDependentAccount = onCall(
       });
       console.log('✅ Wallet data saved to Firestore');
 
-      // ── Step 4: Active controller trustee relationship ─────────────────────
+      // ── Step 4: Active controller trustee relationship + trusteeHistory audit entries ──────
       // trustorId = dependent (account owner), trusteeId = guardian (account manager).
       // Written via Admin SDK to bypass the client Firestore rule that requires
       // new relationships to start as status:'pending' / isActive:false.
+      //
+      // The two trusteeHistory entries mirror prepareTrusteeHistoryEventData/
+      // buildTrusteeHistoryDocId (src/features/Trustee/services/writeTrusteeHistoryEvent.ts —
+      // a frontend module using the client SDK, so replicated inline here rather than imported)
+      // so findMatchingTrusteeHistoryForProposedEvent/ForAcceptedEvent
+      // (functions/src/chainIndexer/reconciliationRules.ts) pick these up the same way as every
+      // client-orchestrated trustee action. Without this, the TrusteeProposed/TrusteeAccepted
+      // events bootstrapDependentTrustee emits on-chain always classify as admin_untracked even
+      // though Firestore genuinely has the relationship recorded (belrose-health#810).
+      // blockchainRef is set directly (not null + backfilled later) since the confirmed receipt
+      // is already in hand at write time — unlike the client-orchestrated flow, there's no
+      // separate deferred chain call to wait on here.
       const relationshipId = `${dependentUid}_${guardianUid}`;
-      await db.collection('trusteeRelationships').doc(relationshipId).set({
+      const relationshipRef = db.collection('trusteeRelationships').doc(relationshipId);
+      const trusteeHistoryCollection = relationshipRef.collection('trusteeHistory');
+      const buildHistoryDocId = () => `${Date.now()}_${guardianUid}_${randomUUID().slice(0, 8)}`;
+      const baseHistoryEvent = {
+        relationshipId,
+        trustorId: dependentUid,
+        trustorIdHash: userIdHash,
+        trusteeId: guardianUid,
+        trusteeIdHash: guardianIdHash,
+        changedBy: guardianUid,
+        changedByIdHash: guardianIdHash,
+        changedAt: now,
+        blockchainRef: trusteeBlockchainRef,
+      };
+
+      const relationshipBatch = db.batch();
+      relationshipBatch.set(relationshipRef, {
         trustorId: dependentUid,
         trusteeId: guardianUid,
         trustLevel: 'controller',
@@ -317,7 +346,17 @@ export const createDependentAccount = onCall(
         revocationBlockchainRef: null,
         editBlockchainRef: null,
       });
-      console.log('✅ Controller trustee relationship created');
+      relationshipBatch.set(trusteeHistoryCollection.doc(buildHistoryDocId()), {
+        ...baseHistoryEvent,
+        action: 'propose',
+        trustLevel: 'controller',
+      });
+      relationshipBatch.set(trusteeHistoryCollection.doc(buildHistoryDocId()), {
+        ...baseHistoryEvent,
+        action: 'accept',
+      });
+      await relationshipBatch.commit();
+      console.log('✅ Controller trustee relationship + trusteeHistory entries created');
 
       return { uid: dependentUid, walletAddress: wallet.address, smartAccountAddress };
     } catch (err) {

@@ -734,9 +734,15 @@ contract MemberRoleManager is Initializable, UUPSUpgradeable, MemberRoleManagerI
    * way to acquire a new role for themselves once they've lost the owner role (grantRole
    * requires an active role to call, and changeRole refuses to touch an owner at all), so the
    * demotion has to happen in this same transaction, not as a separate follow-up call.
+   * @dev The last-owner precondition credits the caller's own incoming role: a sole owner with
+   * no administrators may still demote themselves to "administrator" (newRole is applied via
+   * _applyChangeRole AFTER this check, so without this credit the caller's own about-to-exist
+   * administrator role would never count, and this exact case would always revert).
    * @param recordIdHash The record ID Hash
    * @param newRole Lesser role to take instead of leaving entirely ("administrator", "sharer",
-   * or "viewer"). Pass an empty string to leave with no replacement role.
+   * or "viewer"). Pass an empty string to leave with no replacement role. A sole owner with no
+   * other administrators must pass "administrator" here — passing an empty string (or any other
+   * role) still reverts, since that would leave the record with no owner and no administrator.
    */
   function voluntarilyLeaveOwnership(
     bytes32 recordIdHash,
@@ -749,8 +755,12 @@ contract MemberRoleManager is Initializable, UUPSUpgradeable, MemberRoleManagerI
 
     bool hasOtherOwners = ownersByRecord[recordIdHash].length > 1;
     bool hasAdmins = adminsByRecord[recordIdHash].length > 0;
+    bool becomingAdmin = keccak256(bytes(newRole)) == keccak256(bytes("administrator"));
 
-    require(hasOtherOwners || hasAdmins, "Cannot leave as last owner with no administrators");
+    require(
+      hasOtherOwners || hasAdmins || becomingAdmin,
+      "Cannot leave as last owner with no administrators"
+    );
 
     if (bytes(newRole).length > 0) {
       require(_isValidRole(newRole), "Invalid role string");

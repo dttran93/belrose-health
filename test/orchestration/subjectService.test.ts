@@ -29,6 +29,9 @@ const { mockCurrentUser, walletMocks, healthRecordMocks, trusteeMocks, verificat
       anchorRecord: vi.fn(),
       anchorRecordAsController: vi.fn(),
       unanchorRecord: vi.fn(),
+      reanchorRecord: vi.fn(),
+      reanchorRecordAsController: vi.fn(),
+      isSubject: vi.fn(),
     },
     trusteeMocks: {
       grantAccessForNewRecord: vi.fn(),
@@ -87,6 +90,14 @@ describe('SubjectService (orchestration)', () => {
     healthRecordMocks.anchorRecordAsController.mockResolvedValue({ txHash: '0xabc2', blockNumber: 2 });
     walletMocks.requireUserWalletAddress.mockResolvedValue('0xWallet');
     healthRecordMocks.unanchorRecord.mockResolvedValue({ txHash: '0xdef', blockNumber: 3 });
+    healthRecordMocks.reanchorRecord.mockResolvedValue({ txHash: '0xreanchor', blockNumber: 4 });
+    healthRecordMocks.reanchorRecordAsController.mockResolvedValue({
+      txHash: '0xreanchor2',
+      blockNumber: 5,
+    });
+    // Default: never previously anchored on-chain, so every anchor path below takes the
+    // anchorRecord branch unless a test explicitly opts into the reanchor branch.
+    healthRecordMocks.isSubject.mockResolvedValue(false);
     trusteeMocks.grantAccessForNewRecord.mockResolvedValue(undefined);
     trusteeMocks.revokeAccessForRemovedRecord.mockResolvedValue(undefined);
     verificationMocks.createVerification.mockResolvedValue(undefined);
@@ -196,6 +207,26 @@ describe('SubjectService (orchestration)', () => {
       const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
       expect(syncDocs.size).toBe(1);
       expect(syncDocs.docs[0]!.data()).toMatchObject({ status: 'confirmed', action: 'anchorRecord' });
+    });
+
+    it('reanchors instead of anchoring when the subject was previously anchored on-chain (#820)', async () => {
+      await seedRecord(db, RECORD_ID, { owners: [OWNER] });
+      await setDoc(doc(db, 'records', RECORD_ID), { recordHash: '0xhash' }, { merge: true });
+      setCaller(OWNER);
+      healthRecordMocks.isSubject.mockResolvedValue(true);
+
+      const result = await SubjectService.setSubjectAsSelf(RECORD_ID);
+
+      expect(result.blockchainAnchored).toBe(true);
+      expect(healthRecordMocks.reanchorRecord).toHaveBeenCalledWith(RECORD_ID, undefined);
+      expect(healthRecordMocks.anchorRecord).not.toHaveBeenCalled();
+      // reanchorRecord now self-verifies on-chain too (same as anchorRecord) — the mirror runs
+      // the same way regardless of anchor vs reanchor.
+      expect(verificationMocks.recordSelfVerification).toHaveBeenCalled();
+
+      const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+      expect(syncDocs.size).toBe(1);
+      expect(syncDocs.docs[0]!.data()).toMatchObject({ status: 'confirmed', action: 'reanchorRecord' });
     });
 
     it('does not call recordSelfVerification when selfVerifyLevel is None', async () => {
@@ -381,6 +412,25 @@ describe('SubjectService (orchestration)', () => {
       await expect(
         SubjectService.anchorSubjectAsController(RECORD_ID, TRUSTOR)
       ).resolves.toBeUndefined();
+    });
+
+    it('reanchors instead of anchoring when the trustor was previously anchored on-chain (#820)', async () => {
+      await seedRecord(db, RECORD_ID, { owners: [OWNER] });
+      await setDoc(doc(db, 'records', RECORD_ID), { recordHash: '0xhash' }, { merge: true });
+      setCaller(OWNER);
+      healthRecordMocks.isSubject.mockResolvedValue(true);
+
+      await SubjectService.anchorSubjectAsController(RECORD_ID, TRUSTOR);
+
+      expect(healthRecordMocks.reanchorRecordAsController).toHaveBeenCalledWith(RECORD_ID, TRUSTOR, undefined);
+      expect(healthRecordMocks.anchorRecordAsController).not.toHaveBeenCalled();
+      // reanchorRecordAsController now self-verifies on-chain too (same as
+      // anchorRecordAsController) — the mirror runs the same way regardless of anchor vs reanchor.
+      expect(verificationMocks.recordSelfVerification).toHaveBeenCalled();
+
+      const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+      expect(syncDocs.size).toBe(1);
+      expect(syncDocs.docs[0]!.data()).toMatchObject({ status: 'confirmed', action: 'reanchorRecord' });
     });
 
     it('keeps the Firestore addition when the blockchain anchor call rejects, and logs it for reconciliation', async () => {
@@ -719,6 +769,28 @@ describe('SubjectService (orchestration)', () => {
       expect(consentSnap.data()?.status).toBe('pending');
       const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
       expect(recordSnap.data()?.subjects).toEqual([]);
+    });
+
+    it('reanchors instead of anchoring when the subject was previously anchored on-chain (#820)', async () => {
+      await seedRecord(db, RECORD_ID, { owners: [OWNER] });
+      await setDoc(doc(db, 'records', RECORD_ID), { recordHash: '0xhash' }, { merge: true });
+      await setDoc(doc(db, 'subjectConsentRequests', getConsentRequestId(RECORD_ID, SUBJECT)), {
+        recordId: RECORD_ID,
+        subjectId: SUBJECT,
+        status: 'pending',
+      });
+      setCaller(SUBJECT);
+      healthRecordMocks.isSubject.mockResolvedValue(true);
+
+      const result = await SubjectService.acceptSubjectRequest(RECORD_ID);
+      expect(result).toEqual({ success: true });
+
+      expect(healthRecordMocks.reanchorRecord).toHaveBeenCalledWith(RECORD_ID, undefined);
+      expect(healthRecordMocks.anchorRecord).not.toHaveBeenCalled();
+
+      const syncDocs = await getDocs(collection(db, 'blockchainSyncQueue'));
+      expect(syncDocs.size).toBe(1);
+      expect(syncDocs.docs[0]!.data()).toMatchObject({ status: 'confirmed', action: 'reanchorRecord' });
     });
 
     it('keeps the Firestore accept + subject addition when the blockchain anchor call rejects, and logs it for reconciliation', async () => {

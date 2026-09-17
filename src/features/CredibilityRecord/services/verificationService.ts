@@ -270,6 +270,7 @@ export async function createVerification(
       await setDoc(docRef, {
         recordHash,
         recordId,
+        recordIdHash: id(recordId),
         verifierId,
         verifierIdHash: id(verifierId),
         level,
@@ -397,6 +398,7 @@ export async function recordSelfVerification(
     await setDoc(docRef, {
       recordHash,
       recordId,
+      recordIdHash: id(recordId),
       verifierId,
       verifierIdHash: id(verifierId),
       level,

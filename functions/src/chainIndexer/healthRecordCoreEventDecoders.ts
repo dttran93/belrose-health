@@ -9,11 +9,13 @@
 // event, structurally identical in shape and purpose to MemberRoleManager's own AdminTransferred.
 // Ships first as the canary validating the indexer's multi-contract plumbing end-to-end on the
 // lowest-risk possible event, before the 13 remaining domain events (subject anchoring, hash
-// versioning, verification, dispute, unaccepted flags) are added in later slices. HRC Slice 2 adds
-// the subject-anchoring family (RecordAnchored/RecordUnanchored/RecordReanchored) — see
-// healthRecordCoreReconciliationRules.ts for the match-rule design, including the known
-// RecordReanchored gap (no Firestore action exists to represent it yet). HRC Slice 3 adds the
-// hash-versioning family (RecordHashAdded/RecordHashRetracted) — RecordHashRetracted has a
+// versioning, verification, dispute, unaccepted flags) are added in later slices. HRC Slice 2
+// originally added the subject-anchoring family as three events (RecordAnchored/RecordUnanchored/
+// RecordReanchored) — RecordReanchored was later removed from the contract entirely (#816):
+// reanchorRecord now emits RecordAnchored instead, since a reanchor is indistinguishable from an
+// anchor once you're only looking at end state. RecordAnchored/RecordUnanchored are the two
+// domain events that remain from that slice. HRC Slice 3 adds the hash-versioning family
+// (RecordHashAdded/RecordHashRetracted) — RecordHashRetracted has a
 // similar known gap (see healthRecordCoreReconciliationRules.ts). HRC Slice 4 adds the
 // verification family (RecordVerified/VerificationRetracted/VerificationLevelModified), matched
 // against the flat top-level `verifications` collection — recordIdHash is decoded here for
@@ -27,9 +29,13 @@
 // the whole contract: functions/src/handlers/unacceptedFlags.ts writes subjectIdHash/recordIdHash/
 // reporterIdHash all as real hashes directly, zero recomputation and zero exclusions needed.
 //
-// Not in scope for this indexer at all: setMemberRoleManager(address) (onlyAdmin) updates a
-// cross-contract pointer but emits no event whatsoever — a contract-level blind spot this indexer
-// cannot detect or work around. UUPS's inherited `Upgraded` proxy event also isn't a custom
+// HRC Slice 7 adds MemberRoleManagerUpdated — setMemberRoleManager(address) (onlyAdmin) previously
+// updated its cross-contract pointer with no event at all, a contract-level blind spot; the
+// contract was fixed to emit this event, mirroring MemberRoleManager.sol's own
+// HealthRecordCoreUpdated exactly. This closes out every event now declared on
+// HealthRecordCore.sol.
+//
+// Still not in scope for this indexer: UUPS's inherited `Upgraded` proxy event isn't a custom
 // `event` declared in HealthRecordCore.sol — same out-of-scope status as MemberRoleManager's own
 // proxy machinery.
 
@@ -37,7 +43,6 @@ export type HealthRecordCoreEventName =
   | 'AdminTransferred'
   | 'RecordAnchored'
   | 'RecordUnanchored'
-  | 'RecordReanchored'
   | 'RecordHashAdded'
   | 'RecordHashRetracted'
   | 'RecordVerified'
@@ -47,7 +52,8 @@ export type HealthRecordCoreEventName =
   | 'DisputeRetracted'
   | 'DisputeModification'
   | 'UnacceptedUpdateFlagged'
-  | 'UnacceptedUpdateFlagRevoked';
+  | 'UnacceptedUpdateFlagRevoked'
+  | 'MemberRoleManagerUpdated';
 
 // ============================================================================
 // AdminTransferred (HRC Slice 1)
@@ -151,13 +157,11 @@ export function decodeRecordAnchoredEventLog(log: RawRecordAnchoredEventLog): De
 }
 
 // ============================================================================
-// RecordUnanchored / RecordReanchored (HRC Slice 2)
+// RecordUnanchored (HRC Slice 2)
 // ============================================================================
 
-export type RecordUnanchoredReanchoredEventName = 'RecordUnanchored' | 'RecordReanchored';
-
-export interface RawRecordUnanchoredReanchoredEventLog {
-  eventName: RecordUnanchoredReanchoredEventName;
+export interface RawRecordUnanchoredEventLog {
+  eventName: 'RecordUnanchored';
   transactionHash: string;
   blockNumber: number;
   index: number;
@@ -170,8 +174,8 @@ export interface RawRecordUnanchoredReanchoredEventLog {
   };
 }
 
-export interface DecodedRecordUnanchoredReanchoredEvent {
-  eventName: RecordUnanchoredReanchoredEventName;
+export interface DecodedRecordUnanchoredEvent {
+  eventName: 'RecordUnanchored';
   txHash: string;
   blockNumber: number;
   logIndex: number;
@@ -184,9 +188,9 @@ export interface DecodedRecordUnanchoredReanchoredEvent {
   };
 }
 
-export function decodeRecordUnanchoredReanchoredEventLog(
-  log: RawRecordUnanchoredReanchoredEventLog
-): DecodedRecordUnanchoredReanchoredEvent {
+export function decodeRecordUnanchoredEventLog(
+  log: RawRecordUnanchoredEventLog
+): DecodedRecordUnanchoredEvent {
   return {
     eventName: log.eventName,
     txHash: log.transactionHash,
@@ -748,6 +752,53 @@ export function decodeUnacceptedUpdateFlagRevokedEventLog(
       subjectIdHash: log.args.subjectIdHash,
       recordIdHash: log.args.recordIdHash,
       reporterIdHash: log.args.reporterIdHash,
+    },
+  };
+}
+
+// ============================================================================
+// MemberRoleManagerUpdated (HRC Slice 7)
+// ============================================================================
+
+export interface RawMemberRoleManagerUpdatedEventLog {
+  eventName: 'MemberRoleManagerUpdated';
+  transactionHash: string;
+  blockNumber: number;
+  index: number;
+  contractAddress: string;
+  chainId: number;
+  args: {
+    newAddress: string;
+    timestamp: bigint | number;
+  };
+}
+
+export interface DecodedMemberRoleManagerUpdatedEvent {
+  eventName: 'MemberRoleManagerUpdated';
+  txHash: string;
+  blockNumber: number;
+  logIndex: number;
+  contractAddress: string;
+  chainId: number;
+  blockTimestampSeconds: number;
+  args: {
+    newAddress: string;
+  };
+}
+
+export function decodeMemberRoleManagerUpdatedEventLog(
+  log: RawMemberRoleManagerUpdatedEventLog
+): DecodedMemberRoleManagerUpdatedEvent {
+  return {
+    eventName: log.eventName,
+    txHash: log.transactionHash,
+    blockNumber: log.blockNumber,
+    logIndex: log.index,
+    contractAddress: log.contractAddress,
+    chainId: log.chainId,
+    blockTimestampSeconds: Number(log.args.timestamp),
+    args: {
+      newAddress: log.args.newAddress,
     },
   };
 }

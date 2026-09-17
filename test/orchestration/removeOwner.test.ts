@@ -208,10 +208,36 @@ describe('PermissionsService.removeOwner (orchestration)', () => {
     setCaller(OWNER);
 
     await expect(PermissionsService.removeOwner(RECORD_ID, OWNER)).rejects.toThrow(
-      'Cannot remove the last owner when no administrators exist'
+      'You are the only owner with no administrators on this record'
     );
 
     expect(BlockchainRoleManagerService.voluntarilyLeaveOwnership).not.toHaveBeenCalled();
+  });
+
+  it('regression (#809): allows the sole owner with no administrators to demote themselves to administrator instead of leaving entirely', async () => {
+    // Rule 4 must credit the caller's own incoming role — demoteTo: 'administrator' fills the
+    // very administrator slot the guard would otherwise complain is missing. This mirrors the
+    // fix to voluntarilyLeaveOwnership's on-chain precondition (#808), which has the same bug.
+    await seedRecord(db, RECORD_ID, { owners: [OWNER] });
+    setCaller(OWNER);
+
+    vi.mocked(BlockchainRoleManagerService.voluntarilyLeaveOwnership).mockResolvedValue({
+      txHash: '0xsole-owner-demote',
+      blockNumber: 20,
+    });
+
+    await PermissionsService.removeOwner(RECORD_ID, OWNER, undefined, {
+      demoteTo: 'administrator',
+    });
+
+    expect(BlockchainRoleManagerService.voluntarilyLeaveOwnership).toHaveBeenCalledWith(
+      RECORD_ID,
+      'administrator'
+    );
+
+    const recordSnap = await getDoc(doc(db, 'records', RECORD_ID));
+    expect(recordSnap.data()?.owners).toEqual([]);
+    expect(recordSnap.data()?.administrators).toEqual([OWNER]);
   });
 
   it('regression: refuses to demote a subject-owner straight to viewer (subjects require at least sharer access)', async () => {

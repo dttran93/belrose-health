@@ -10,7 +10,6 @@ import type { Firestore } from 'firebase-admin/firestore';
 import {
   findMatchingSubjectHistoryForAnchoredEvent,
   findMatchingSubjectHistoryForUnanchoredEvent,
-  findMatchingSubjectHistoryForReanchoredEvent,
   findMatchingRecordHashHistoryForAddedEvent,
   findMatchingRecordHashHistoryForRetractedEvent,
   findMatchingVerificationForVerifiedEvent,
@@ -151,36 +150,8 @@ describe('subject history match rules', () => {
     });
   });
 
-  describe('findMatchingSubjectHistoryForReanchoredEvent', () => {
-    it('never matches today — no "reanchored" action value exists in SubjectHistoryAction (known gap)', async () => {
-      const db = fakeFirestore(
-        {},
-        {
-          subjectHistory: [
-            { id: 'event-1', path: 'p', data: { recordIdHash, subjectIdHash, action: 'anchored' } },
-            { id: 'event-2', path: 'p2', data: { recordIdHash, subjectIdHash, action: 'unanchored' } },
-          ],
-        }
-      );
-
-      await expect(findMatchingSubjectHistoryForReanchoredEvent(db, { recordIdHash, subjectIdHash })).resolves.toEqual({
-        matched: false,
-        matchedFirestoreRef: null,
-      });
-    });
-
-    it('would match if a "reanchored" entry existed — the rule itself is structurally correct', async () => {
-      const db = fakeFirestore(
-        {},
-        { subjectHistory: [{ id: 'event-1', path: 'records/rec-1/subjectHistory/event-1', data: { recordIdHash, subjectIdHash, action: 'reanchored' } }] }
-      );
-
-      await expect(findMatchingSubjectHistoryForReanchoredEvent(db, { recordIdHash, subjectIdHash })).resolves.toEqual({
-        matched: true,
-        matchedFirestoreRef: 'records/rec-1/subjectHistory/event-1',
-      });
-    });
-  });
+  // reanchorRecord (#816) emits RecordAnchored, not a separate event, so a reanchor is covered
+  // by findMatchingSubjectHistoryForAnchoredEvent's own tests above — no dedicated reanchor rule.
 });
 
 describe('record hash history match rules', () => {

@@ -11,7 +11,7 @@
  * or revert the Firestore write, matching SubjectService's pattern.
  */
 
-import { ethers } from 'ethers';
+import { ethers, id } from 'ethers';
 import {
   getFirestore,
   collection,
@@ -386,8 +386,6 @@ export async function createDispute(
     }
   }
 
-  const disputerIdHash = ethers.keccak256(ethers.toUtf8Bytes(disputerId));
-
   // Encrypt notes if provided
   let encryptedNotes: EncryptedField | null = null;
   let notesHash = '';
@@ -441,8 +439,9 @@ export async function createDispute(
       await setDoc(docRef, {
         recordHash,
         recordId,
+        recordIdHash: id(recordId),
         disputerId,
-        disputerIdHash,
+        disputerIdHash: id(disputerId),
         severity,
         culpability,
         encryptedNotes,
@@ -467,7 +466,13 @@ export async function createDispute(
 
   // Step 2: Update credibility score — reflects immediately off the Firestore write,
   // independent of blockchain confirmation timing.
-  await onDisputeCreated(recordId, recordHash, severity, culpability, normalizedCredibilityAtCreation);
+  await onDisputeCreated(
+    recordId,
+    recordHash,
+    severity,
+    culpability,
+    normalizedCredibilityAtCreation
+  );
   console.log('✅ Dispute created successfully');
 
   // Step 3: Blockchain — best-effort, does not revert the Firestore write above. Failure is
