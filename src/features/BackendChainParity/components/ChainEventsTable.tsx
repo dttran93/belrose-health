@@ -179,12 +179,18 @@ export const ChainEventsTable: React.FC<ChainEventsTableProps> = ({ items, searc
       }
       for (const [contract, result] of failed) {
         if (isCycleError(result)) {
-          toast.error(`${contract} indexer run failed: ${result.error}`);
+          // Toasts truncate/aren't clickable — some backend errors (e.g. Firestore's
+          // "query requires an index") include a URL that's only useful if you can click it, so
+          // log the full message to the console too (browsers auto-linkify URLs there).
+          console.error(`${contract} indexer run failed:`, result.error);
+          toast.error(`${contract} indexer run failed — see browser console for the full error.`);
         }
       }
     },
     onError: (error: unknown) => {
-      toast.error(error instanceof Error ? error.message : 'Indexer run failed');
+      const message = error instanceof Error ? error.message : 'Indexer run failed';
+      console.error('Indexer run failed:', message);
+      toast.error(`${message.length > 120 ? 'Indexer run failed — see browser console for the full error.' : message}`);
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['backend-chain-parity', 'chain-events'] });

@@ -164,6 +164,14 @@
       ]
     },
     {
+      "collectionGroup": "subjectHistory",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "recordIdHash", "order": "ASCENDING" },
+        { "fieldPath": "subjectIdHash", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "providers_england",
       "queryScope": "COLLECTION",
       "fields": [
