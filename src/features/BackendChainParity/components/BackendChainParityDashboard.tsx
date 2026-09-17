@@ -59,13 +59,23 @@ const BackendChainParityDashboard: React.FC = () => {
   const statusFilter = (searchParams.get('status') ?? 'all') as IntegrityStatus | 'all';
 
   function setActiveTab(tab: TabId) {
-    setSearchParams(prev => { prev.set('tab', tab); prev.delete('search'); return prev; });
+    setSearchParams(prev => {
+      prev.set('tab', tab);
+      prev.delete('search');
+      return prev;
+    });
   }
   function setSearchQuery(q: string) {
-    setSearchParams(prev => { q ? prev.set('search', q) : prev.delete('search'); return prev; });
+    setSearchParams(prev => {
+      q ? prev.set('search', q) : prev.delete('search');
+      return prev;
+    });
   }
   function setStatusFilter(s: IntegrityStatus | 'all') {
-    setSearchParams(prev => { s !== 'all' ? prev.set('status', s) : prev.delete('status'); return prev; });
+    setSearchParams(prev => {
+      s !== 'all' ? prev.set('status', s) : prev.delete('status');
+      return prev;
+    });
   }
 
   const queryClient = useQueryClient();
@@ -209,7 +219,7 @@ const BackendChainParityDashboard: React.FC = () => {
       </div>
 
       {/* Search + Filter Bar (hidden on summary tab) */}
-      {activeTab !== 'summary' && !['trustees', 'role-events'].includes(activeTab) && (
+      {activeTab !== 'summary' && (
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="bg-white rounded-xl border border-gray-200 p-3 flex flex-col sm:flex-row gap-3">
             <div className="flex-1 relative">
