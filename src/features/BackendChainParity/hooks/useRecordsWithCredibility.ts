@@ -19,7 +19,7 @@ export interface RecordsWithCredibility {
   hashesEverAnchored: Set<string>;
 }
 
-async function fetchRecordsWithCredibility(): Promise<RecordsWithCredibility> {
+export async function fetchRecordsWithCredibility(): Promise<RecordsWithCredibility> {
   const [recordsSnap, verSnap, dispSnap, hashHistorySnap] = await Promise.all([
     getDocs(collection(db, 'records')),
     getDocs(collection(db, 'verifications')),
