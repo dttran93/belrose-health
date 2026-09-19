@@ -1,13 +1,18 @@
 // src/features/BackendChainParity/components/SyncQueueTable.tsx
 
 import React, { useState } from 'react';
-import { Loader2, RotateCw } from 'lucide-react';
+import { Loader2, RotateCw, MessageSquare, CheckCircle2 } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { toast } from 'sonner';
-import type { SyncQueueRecord } from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
+import {
+  BlockchainSyncQueueService,
+  type SyncQueueRecord,
+  type SyncQueueReviewStatus,
+} from '@/features/BlockchainWallet/services/blockchainSyncQueueService';
 import { decodeRevertReason } from '@belrose/shared';
 import { formatTimestamp } from '@/utils/dataFormattingUtils';
+import { useAuth } from '@/features/Auth/hooks/useAuth';
 import { IntegrityTable, type IntegrityTableColumn } from './ui/IntegrityTable';
 import { DetailSection } from './ui/DetailSection';
 
@@ -36,11 +41,19 @@ interface RetryResult {
 
 type QueueStatusFilter = 'all' | 'pending' | 'confirmed' | 'failed';
 
+// Chain outcome only — see SyncQueueReviewStatus (blockchainSyncQueueService.ts) for why human
+// triage is deliberately a separate axis, not folded in here. 'resolved' used to appear in this
+// map even though nothing ever wrote status: 'resolved' — dead code from before that axis existed
+// as its own field; removed now that reviewStatus is the real thing to render.
 const STATUS_STYLE: Record<string, string> = {
   confirmed: 'bg-green-100 text-green-700',
-  resolved: 'bg-green-100 text-green-700',
   pending: 'bg-amber-100 text-amber-700',
   failed: 'bg-red-100 text-red-700',
+};
+
+const REVIEW_STATUS_STYLE: Record<SyncQueueReviewStatus, string> = {
+  resolved: 'bg-green-100 text-green-700',
+  unreviewed: 'bg-gray-100 text-gray-500',
 };
 
 interface SyncQueueTableProps {
@@ -59,6 +72,30 @@ const columns: IntegrityTableColumn<SyncQueueRecord>[] = [
         {item.status ?? '—'}
       </span>
     ),
+  },
+  {
+    // Human triage — deliberately separate from Status above (chain outcome). See
+    // SyncQueueReviewStatus's own doc comment for why these two axes never merge.
+    header: 'Review',
+    cell: item => {
+      const reviewStatus = item.reviewStatus ?? 'unreviewed';
+      const noteCount = item.reviewNotes?.length ?? 0;
+      return (
+        <span className="inline-flex items-center gap-1">
+          <span
+            className={`px-2 py-0.5 rounded text-xs font-medium ${REVIEW_STATUS_STYLE[reviewStatus]}`}
+          >
+            {reviewStatus}
+          </span>
+          {noteCount > 0 && (
+            <span className="inline-flex items-center gap-0.5 text-xs text-gray-400">
+              <MessageSquare className="w-3 h-3" />
+              {noteCount}
+            </span>
+          )}
+        </span>
+      );
+    },
   },
   {
     header: 'Contract',
@@ -111,7 +148,41 @@ export const SyncQueueTable: React.FC<SyncQueueTableProps> = ({
   onClearSearch,
 }) => {
   const [statusFilter, setStatusFilter] = useState<QueueStatusFilter>('all');
+  // Draft note text per row, keyed by doc id — several rows can be expanded/mid-draft at once.
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
+  const { user } = useAuth();
   const queryClient = useQueryClient();
+
+  const invalidateSyncQueue = () =>
+    queryClient.invalidateQueries({ queryKey: ['backend-chain-parity', 'sync-queue'] });
+
+  const addNoteMutation = useMutation({
+    mutationFn: async ({ docId, text }: { docId: string; text: string }) => {
+      if (!user) throw new Error('Not authenticated');
+      await BlockchainSyncQueueService.addReviewNote(docId, text, user.uid);
+    },
+    onSuccess: (_data, { docId }) => {
+      setNoteDrafts(prev => ({ ...prev, [docId]: '' }));
+    },
+    onError: (error: unknown) => {
+      toast.error(error instanceof Error ? error.message : 'Failed to add note');
+    },
+    onSettled: invalidateSyncQueue,
+  });
+
+  const reviewStatusMutation = useMutation({
+    mutationFn: async ({
+      docId,
+      reviewStatus,
+    }: {
+      docId: string;
+      reviewStatus: 'unreviewed' | 'resolved';
+    }) => BlockchainSyncQueueService.setReviewStatus(docId, reviewStatus),
+    onError: (error: unknown) => {
+      toast.error(error instanceof Error ? error.message : 'Failed to update review status');
+    },
+    onSettled: invalidateSyncQueue,
+  });
 
   const retryMutation = useMutation({
     mutationFn: async (docId: string) => {
@@ -126,7 +197,10 @@ export const SyncQueueTable: React.FC<SyncQueueTableProps> = ({
       toast.success(
         data.outcome === 'tx-confirmed'
           ? 'Transaction confirmed on-chain'
-          : 'Already completed on-chain — marked resolved'
+          : // "resolved" here would now read as if it set reviewStatus, which this doesn't touch —
+            // this only reflects that the underlying chain state was already correct (status
+            // flipped to 'confirmed' server-side); worded to avoid that ambiguity.
+            'Already completed on-chain — status updated to confirmed'
       );
     },
     onError: (error: unknown) => {
@@ -140,14 +214,13 @@ export const SyncQueueTable: React.FC<SyncQueueTableProps> = ({
   const counts = {
     all: items.length,
     pending: items.filter(i => i.status === 'pending').length,
-    confirmed: items.filter(i => i.status === 'confirmed' || i.status === 'resolved').length,
+    confirmed: items.filter(i => i.status === 'confirmed').length,
     failed: items.filter(i => i.status === 'failed').length,
   };
 
   const filtered = items.filter(item => {
     if (statusFilter === 'pending' && item.status !== 'pending') return false;
-    if (statusFilter === 'confirmed' && item.status !== 'confirmed' && item.status !== 'resolved')
-      return false;
+    if (statusFilter === 'confirmed' && item.status !== 'confirmed') return false;
     if (statusFilter === 'failed' && item.status !== 'failed') return false;
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
@@ -197,9 +270,7 @@ export const SyncQueueTable: React.FC<SyncQueueTableProps> = ({
               <div className="flex flex-col gap-4">
                 {decodedReason && (
                   <div>
-                    <p className="text-xs font-medium text-gray-500 mb-1">
-                      Decoded Revert Reason
-                    </p>
+                    <p className="text-xs font-medium text-gray-500 mb-1">Decoded Revert Reason</p>
                     <div className="px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm font-medium">
                       {decodedReason}
                     </div>
@@ -266,6 +337,82 @@ export const SyncQueueTable: React.FC<SyncQueueTableProps> = ({
                     </button>
                   </div>
                 )}
+
+                <div className="pt-3 border-t border-gray-100">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-xs font-medium text-gray-500">Review &amp; Notes</p>
+                    <button
+                      onClick={() =>
+                        reviewStatusMutation.mutate({
+                          docId: item.id,
+                          reviewStatus:
+                            item.reviewStatus === 'resolved' ? 'unreviewed' : 'resolved',
+                        })
+                      }
+                      disabled={
+                        reviewStatusMutation.isPending &&
+                        reviewStatusMutation.variables?.docId === item.id
+                      }
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                        item.reviewStatus === 'resolved'
+                          ? 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          : 'bg-green-600 text-white hover:bg-green-700'
+                      }`}
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      {item.reviewStatus === 'resolved' ? 'Reopen' : 'Mark Resolved'}
+                    </button>
+                  </div>
+
+                  {item.reviewNotes && item.reviewNotes.length > 0 && (
+                    <div className="flex flex-col gap-2 mb-3">
+                      {item.reviewNotes.map((note, i) => (
+                        <div
+                          key={i}
+                          className="text-xs bg-white border border-gray-200 rounded-lg p-2"
+                        >
+                          <p className="text-gray-700 whitespace-pre-wrap break-words">
+                            {note.text}
+                          </p>
+                          <p className="text-gray-400 mt-1">
+                            {note.by} · {formatTimestamp(note.at)}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex gap-2">
+                    <textarea
+                      value={noteDrafts[item.id] ?? ''}
+                      onChange={e =>
+                        setNoteDrafts(prev => ({ ...prev, [item.id]: e.target.value }))
+                      }
+                      placeholder="e.g. confirmed transient RPC blip, no code change needed"
+                      rows={2}
+                      className="flex-1 px-2 py-1.5 text-xs bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                    />
+                    <button
+                      onClick={() => {
+                        const text = (noteDrafts[item.id] ?? '').trim();
+                        if (!text) return;
+                        addNoteMutation.mutate({ docId: item.id, text });
+                      }}
+                      disabled={
+                        !(noteDrafts[item.id] ?? '').trim() ||
+                        (addNoteMutation.isPending && addNoteMutation.variables?.docId === item.id)
+                      }
+                      className="self-start inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-700 text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {addNoteMutation.isPending && addNoteMutation.variables?.docId === item.id ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <MessageSquare className="w-3.5 h-3.5" />
+                      )}
+                      Add Note
+                    </button>
+                  </div>
+                </div>
               </div>
             </DetailSection>
           );
