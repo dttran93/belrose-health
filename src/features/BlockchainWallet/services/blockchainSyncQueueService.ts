@@ -50,6 +50,8 @@ import {
   serverTimestamp,
   getFirestore,
   DocumentReference,
+  arrayUnion,
+  Timestamp,
 } from 'firebase/firestore';
 
 // chainId/contractAddress are known before a chain call is ever attempted (they're static
@@ -174,6 +176,25 @@ export interface BlockchainSyncAttempt extends Omit<BaseSyncFailure, 'error'> {
   permissionHistoryPath?: string | string[];
 }
 
+// Human triage of a failed (or otherwise noteworthy) entry — deliberately a SEPARATE axis from
+// `status`. `status` reflects actual chain outcome (pending/confirmed/failed) and drives real
+// behavior elsewhere (the dashboard's retry-button visibility and failed-count tallies key off
+// `status === 'failed'`) — it must never be overloaded to also carry "an admin looked into this."
+// A `reviewStatus: 'resolved'` entry can still have `status: 'failed'` forever (e.g. "confirmed
+// this was a one-off RPC blip, no code change needed, not worth retrying") without that silently
+// disappearing from failure counts or losing its retry affordance.
+export type SyncQueueReviewStatus = 'unreviewed' | 'resolved';
+
+// Append-only, mirroring this codebase's other audit trails (wrappedKeys' history[], trustee
+// history, etc.) rather than a single overwritable comment — preserves who-said-what-when across
+// multiple people investigating the same entry over time. `at` is a client Timestamp, not
+// serverTimestamp() — Firestore doesn't allow sentinel values inside arrayUnion() array elements.
+export interface SyncQueueReviewNote {
+  text: string;
+  by: string; // uid of the admin who wrote it
+  at: TimestampLike;
+}
+
 // Shape of a blockchainSyncQueue document as read from Firestore — extends the write type
 // (either a failure-only legacy entry or a startAttempt-opened entry) with the fields added
 // at write time.
@@ -190,6 +211,9 @@ export type SyncQueueRecord = (BlockchainSyncFailure | BlockchainSyncAttempt) & 
   txHash?: string;
   blockNumber?: number;
   error?: string;
+  // Human triage — absent means unreviewed (no migration needed for existing entries).
+  reviewStatus?: SyncQueueReviewStatus;
+  reviewNotes?: SyncQueueReviewNote[];
 };
 
 // Produces a user-facing error message from a caught error — prefers a decoded
@@ -266,5 +290,25 @@ export class BlockchainSyncQueueService {
     } catch (updateError) {
       console.error('❌ Failed to record blockchain sync attempt failure:', updateError);
     }
+  }
+
+  /**
+   * Append a triage note to a queue entry — e.g. "confirmed transient RPC blip, no code change
+   * needed" or "this is a real bug, see #123". Direct client write (firestore.rules already
+   * allows platform admins to update blockchainSyncQueue docs); no Cloud Function needed since
+   * this never touches the chain.
+   */
+  static async addReviewNote(docId: string, text: string, adminUid: string): Promise<void> {
+    const db = getFirestore();
+    const note: SyncQueueReviewNote = { text, by: adminUid, at: Timestamp.now() };
+    await updateDoc(doc(db, 'blockchainSyncQueue', docId), {
+      reviewNotes: arrayUnion(note),
+    });
+  }
+
+  /** Flip an entry's human-triage status. Independent of `status` — see SyncQueueReviewStatus. */
+  static async setReviewStatus(docId: string, reviewStatus: SyncQueueReviewStatus): Promise<void> {
+    const db = getFirestore();
+    await updateDoc(doc(db, 'blockchainSyncQueue', docId), { reviewStatus });
   }
 }

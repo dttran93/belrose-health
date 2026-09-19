@@ -32,7 +32,7 @@ const StatCard: React.FC<StatCardProps> = ({ title, value, icon, colorClass, sub
   </div>
 );
 
-function mergeSummaries(...summaries: (ParitySummary | undefined)[]): ParitySummary {
+export function mergeSummaries(...summaries: (ParitySummary | undefined)[]): ParitySummary {
   const defined = summaries.filter((s): s is ParitySummary => s !== undefined);
   return defined.reduce(
     (acc, s) => ({
@@ -45,7 +45,16 @@ function mergeSummaries(...summaries: (ParitySummary | undefined)[]): ParitySumm
       notApplicable: acc.notApplicable + s.notApplicable,
       failed: acc.failed + s.failed,
     }),
-    { total: 0, synced: 0, mismatch: 0, missing: 0, chainOnly: 0, pending: 0, notApplicable: 0, failed: 0 }
+    {
+      total: 0,
+      synced: 0,
+      mismatch: 0,
+      missing: 0,
+      chainOnly: 0,
+      pending: 0,
+      notApplicable: 0,
+      failed: 0,
+    }
   );
 }
 
